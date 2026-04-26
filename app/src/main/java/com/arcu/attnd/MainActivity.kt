@@ -4,12 +4,14 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -19,6 +21,7 @@ import androidx.navigation.NavType
 import androidx.navigation.compose.*
 import androidx.navigation.navArgument
 import com.arcu.attnd.data.AppNotification
+import com.arcu.attnd.data.Event
 import com.arcu.attnd.data.EventLocation
 import com.arcu.attnd.data.NetworkModule
 import com.arcu.attnd.ui.screens.*
@@ -46,17 +49,18 @@ sealed class Screen(val route: String, val label: String, val icon: androidx.com
     object LocationDetail : Screen("location_detail/{id}", "Detail")
     object Flyer : Screen("flyer", "Flyer", Icons.Default.Info)
     object Notifications : Screen("notifications", "Notifications", Icons.Default.Notifications)
+    object Options : Screen("options", "Options", Icons.Default.Settings)
 }
 
 @Composable
 fun MainNavigation() {
     val navController = rememberNavController()
-    var currentEventId by remember { mutableStateOf<Int?>(null) }
+    var currentEvent by remember { mutableStateOf<Event?>(null) }
 
     NavHost(navController = navController, startDestination = Screen.Launch.route) {
         composable(Screen.Launch.route) {
-            LaunchScreen(onEventSelected = { id ->
-                currentEventId = id
+            LaunchScreen(onEventSelected = { event ->
+                currentEvent = event
                 navController.navigate(Screen.Map.route) {
                     popUpTo(Screen.Launch.route) { inclusive = true }
                 }
@@ -66,18 +70,15 @@ fun MainNavigation() {
         composable(Screen.Map.route) {
             var locations by remember { mutableStateOf<List<EventLocation>>(emptyList()) }
             val cameraPositionState = rememberCameraPositionState {
-                position = CameraPosition.fromLatLngZoom(LatLng(32.754695, -97.331605), 15f)
+                val initialPos = currentEvent?.let { LatLng(it.latitude, it.longitude) } ?: LatLng(32.754695, -97.331605)
+                position = CameraPosition.fromLatLngZoom(initialPos, 15f)
             }
 
-            LaunchedEffect(currentEventId) {
-                currentEventId?.let { id ->
+            LaunchedEffect(currentEvent?.id) {
+                currentEvent?.id?.let { id ->
                     try {
                         val response = NetworkModule.api.getLocations(id)
                         locations = response.results
-                        if (locations.isNotEmpty()) {
-                            val firstLoc = LatLng(locations[0].latitude, locations[0].longitude)
-                            cameraPositionState.position = CameraPosition.fromLatLngZoom(firstLoc, 15f)
-                        }
                     } catch (_: Exception) {
                         // Ignore
                     }
@@ -85,9 +86,10 @@ fun MainNavigation() {
             }
 
             AppScaffold(navController) { innerPadding ->
-                Surface(modifier = Modifier.padding(innerPadding)) {
+                Surface(modifier = Modifier.fillMaxSize()) {
                     MainMapScreen(
                         locations = locations,
+                        contentPadding = innerPadding,
                         cameraPositionState = cameraPositionState
                     )
                 }
@@ -99,8 +101,8 @@ fun MainNavigation() {
             var isLoading by remember { mutableStateOf(true) }
             var error by remember { mutableStateOf<String?>(null) }
 
-            LaunchedEffect(currentEventId) {
-                currentEventId?.let { id ->
+            LaunchedEffect(currentEvent?.id) {
+                currentEvent?.id?.let { id ->
                     try {
                         val response = NetworkModule.api.getLocations(id)
                         locations = response.results
@@ -141,7 +143,7 @@ fun MainNavigation() {
         composable(Screen.Flyer.route) {
             AppScaffold(navController) { innerPadding ->
                 Surface(modifier = Modifier.padding(innerPadding)) {
-                    FlyerScreen(null)
+                    FlyerScreen(currentEvent?.flyerUrl)
                 }
             }
         }
@@ -151,8 +153,8 @@ fun MainNavigation() {
             var isLoading by remember { mutableStateOf(true) }
             var error by remember { mutableStateOf<String?>(null) }
 
-            LaunchedEffect(currentEventId) {
-                currentEventId?.let { id ->
+            LaunchedEffect(currentEvent?.id) {
+                currentEvent?.id?.let { id ->
                     try {
                         val response = NetworkModule.api.getNotifications(id)
                         notifications = response.results
@@ -174,6 +176,21 @@ fun MainNavigation() {
                 }
             }
         }
+
+        composable(Screen.Options.route) {
+            AppScaffold(navController) { innerPadding ->
+                Surface(modifier = Modifier.padding(innerPadding)) {
+                    OptionsScreen(
+                        onLeaveEvent = {
+                            currentEvent = null
+                            navController.navigate(Screen.Launch.route) {
+                                popUpTo(navController.graph.id) { inclusive = true }
+                            }
+                        }
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -186,7 +203,8 @@ fun AppScaffold(
         Screen.Map,
         Screen.Locations,
         Screen.Flyer,
-        Screen.Notifications
+        Screen.Notifications,
+        Screen.Options
     )
     Scaffold(
         bottomBar = {

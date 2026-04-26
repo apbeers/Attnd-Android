@@ -1,7 +1,6 @@
-package com.arcu.attnd
+package com.arcu.attnd.unit
 
 import org.junit.Test
-
 import org.junit.Assert.*
 
 /**

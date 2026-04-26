@@ -1,9 +1,11 @@
 package com.arcu.attnd.ui.screens
 
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
 import com.arcu.attnd.data.EventLocation
 import com.arcu.attnd.ui.theme.AttndTheme
 import com.google.maps.android.compose.*
@@ -13,6 +15,7 @@ import com.google.android.gms.maps.model.LatLng
 @Composable
 fun MainMapScreen(
     locations: List<EventLocation>,
+    contentPadding: PaddingValues = PaddingValues(0.dp),
     cameraPositionState: CameraPositionState = rememberCameraPositionState {
         position = CameraPosition.fromLatLngZoom(LatLng(32.754695, -97.331605), 15f)
     }
@@ -20,6 +23,7 @@ fun MainMapScreen(
     GoogleMap(
         modifier = Modifier.fillMaxSize(),
         cameraPositionState = cameraPositionState,
+        contentPadding = contentPadding,
         properties = MapProperties(isMyLocationEnabled = false),
         uiSettings = MapUiSettings(myLocationButtonEnabled = false)
     ) {

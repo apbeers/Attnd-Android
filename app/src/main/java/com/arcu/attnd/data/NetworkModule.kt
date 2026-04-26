@@ -13,6 +13,7 @@ object NetworkModule {
     private val authInterceptor = Interceptor { chain ->
         val request = chain.request().newBuilder()
             .addHeader("Authorization", "Bearer ${BuildConfig.ATTND_API_KEY}")
+            .addHeader("User-Agent", "Attnd-Android")
             .build()
         chain.proceed(request)
     }

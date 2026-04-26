@@ -1,5 +1,6 @@
-package com.arcu.attnd.util
+package com.arcu.attnd.unit
 
+import com.arcu.attnd.util.FormatUtils
 import org.junit.Assert.assertEquals
 import org.junit.Test
 

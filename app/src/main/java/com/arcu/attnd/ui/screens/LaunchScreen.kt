@@ -7,12 +7,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import com.arcu.attnd.data.Event
+import com.arcu.attnd.data.NetworkModule
 import com.arcu.attnd.ui.theme.AttndTheme
 import kotlinx.coroutines.launch
 
 @Composable
 fun LaunchScreen(
-    onEventSelected: (Int) -> Unit
+    onEventSelected: (Event) -> Unit
 ) {
     var eventCode by remember { mutableStateOf("") }
     var isSearching by remember { mutableStateOf(false) }
@@ -69,10 +71,14 @@ fun LaunchScreen(
                 isSearching = true
                 errorMessage = null
                 scope.launch {
-                    // API Call logic here (NetworkModule.api.lookupEvent(eventCode))
-                    // In a real app this would move to a ViewModel
-                    onEventSelected(1)
-                    isSearching = false
+                    try {
+                        val event = NetworkModule.api.lookupEvent(eventCode)
+                        onEventSelected(event)
+                    } catch (_: Exception) {
+                        errorMessage = "Event not found or network error."
+                    } finally {
+                        isSearching = false
+                    }
                 }
             },
             modifier = Modifier.fillMaxWidth(),
