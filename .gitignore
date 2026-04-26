@@ -15,3 +15,7 @@
 local.properties
 .env
 .claude/
+signing.properties
+*.jks
+*.keystore
+app/release/app-release.aab
