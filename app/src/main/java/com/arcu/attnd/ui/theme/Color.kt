@@ -2,6 +2,9 @@ package com.arcu.attnd.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
+// Default Brand Color: R 61 G 37 B 129
+val AttndPrimary = Color(0xFF3D2581)
+
 val Purple80 = Color(0xFFD0BCFF)
 val PurpleGrey80 = Color(0xFFCCC2DC)
 val Pink80 = Color(0xFFEFB8C8)
