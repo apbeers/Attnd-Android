@@ -15,6 +15,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavType
@@ -24,6 +25,7 @@ import com.arcu.attnd.data.AppNotification
 import com.arcu.attnd.data.Event
 import com.arcu.attnd.data.EventLocation
 import com.arcu.attnd.data.NetworkModule
+import com.arcu.attnd.data.prefs.DevicePrefs
 import com.arcu.attnd.ui.screens.*
 import com.arcu.attnd.ui.theme.AttndTheme
 import com.google.android.gms.maps.model.CameraPosition
@@ -54,17 +56,24 @@ sealed class Screen(val route: String, val label: String, val icon: androidx.com
 
 @Composable
 fun MainNavigation() {
+    val context = LocalContext.current
+    val devicePrefs = remember { DevicePrefs(context) }
+    val deviceId = remember { devicePrefs.getDeviceId() }
+    
     val navController = rememberNavController()
     var currentEvent by remember { mutableStateOf<Event?>(null) }
 
     NavHost(navController = navController, startDestination = Screen.Launch.route) {
         composable(Screen.Launch.route) {
-            LaunchScreen(onEventSelected = { event ->
-                currentEvent = event
-                navController.navigate(Screen.Map.route) {
-                    popUpTo(Screen.Launch.route) { inclusive = true }
+            LaunchScreen(
+                deviceId = deviceId,
+                onEventJoined = { event ->
+                    currentEvent = event
+                    navController.navigate(Screen.Map.route) {
+                        popUpTo(Screen.Launch.route) { inclusive = true }
+                    }
                 }
-            })
+            )
         }
         
         composable(Screen.Map.route) {
@@ -79,9 +88,7 @@ fun MainNavigation() {
                     try {
                         val response = NetworkModule.api.getLocations(id)
                         locations = response.results
-                    } catch (_: Exception) {
-                        // Ignore
-                    }
+                    } catch (_: Exception) {}
                 }
             }
 
@@ -135,7 +142,7 @@ fun MainNavigation() {
             val id = backStackEntry.arguments?.getInt("id") ?: 0
             AppScaffold(navController) { innerPadding ->
                 Surface(modifier = Modifier.padding(innerPadding)) {
-                    LocationDetailScreen(id)
+                    LocationDetailScreen(currentEvent?.id ?: 0, id)
                 }
             }
         }
@@ -181,10 +188,14 @@ fun MainNavigation() {
             AppScaffold(navController) { innerPadding ->
                 Surface(modifier = Modifier.padding(innerPadding)) {
                     OptionsScreen(
+                        eventId = currentEvent?.id ?: 0,
+                        deviceId = deviceId,
                         onLeaveEvent = {
                             currentEvent = null
                             navController.navigate(Screen.Launch.route) {
-                                popUpTo(navController.graph.id) { inclusive = true }
+                                popUpTo(navController.graph.findStartDestination().id) {
+                                    inclusive = true
+                                }
                             }
                         }
                     )

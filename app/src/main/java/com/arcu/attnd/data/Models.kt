@@ -55,3 +55,11 @@ data class AppNotification(
     @SerializedName("send_time") val sendTime: String,
     val sent: Boolean
 )
+
+data class JoinRequest(
+    val platform: String = "android"
+)
+
+data class StatusResponse(
+    val status: String
+)

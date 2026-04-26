@@ -6,14 +6,19 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import com.arcu.attnd.data.NetworkModule
 import com.arcu.attnd.ui.theme.AttndTheme
+import kotlinx.coroutines.launch
 
 @Composable
 fun OptionsScreen(
+    eventId: Int,
+    deviceId: String,
     onLeaveEvent: () -> Unit
 ) {
     var pushEnabled by remember { mutableStateOf(true) }
     var locationEnabled by remember { mutableStateOf(true) }
+    val scope = rememberCoroutineScope()
 
     Column(
         modifier = Modifier
@@ -31,7 +36,18 @@ fun OptionsScreen(
             trailingContent = {
                 Switch(
                     checked = pushEnabled,
-                    onCheckedChange = { pushEnabled = it }
+                    onCheckedChange = { checked ->
+                        pushEnabled = checked
+                        scope.launch {
+                            try {
+                                if (checked) {
+                                    NetworkModule.api.subscribePush(deviceId)
+                                } else {
+                                    NetworkModule.api.unsubscribePush(deviceId)
+                                }
+                            } catch (_: Exception) {}
+                        }
+                    }
                 )
             }
         )
@@ -50,7 +66,14 @@ fun OptionsScreen(
         Spacer(modifier = Modifier.weight(1f))
 
         Button(
-            onClick = onLeaveEvent,
+            onClick = {
+                scope.launch {
+                    try {
+                        NetworkModule.api.leaveEvent(eventId, deviceId)
+                    } catch (_: Exception) {}
+                    onLeaveEvent()
+                }
+            },
             modifier = Modifier.fillMaxWidth(),
             colors = ButtonDefaults.buttonColors(
                 containerColor = MaterialTheme.colorScheme.error
@@ -65,6 +88,6 @@ fun OptionsScreen(
 @Composable
 fun OptionsScreenPreview() {
     AttndTheme {
-        OptionsScreen(onLeaveEvent = {})
+        OptionsScreen(eventId = 1, deviceId = "test", onLeaveEvent = {})
     }
 }

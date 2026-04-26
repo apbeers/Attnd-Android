@@ -8,13 +8,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.arcu.attnd.data.Event
+import com.arcu.attnd.data.JoinRequest
 import com.arcu.attnd.data.NetworkModule
 import com.arcu.attnd.ui.theme.AttndTheme
 import kotlinx.coroutines.launch
 
 @Composable
 fun LaunchScreen(
-    onEventSelected: (Event) -> Unit
+    deviceId: String,
+    onEventJoined: (Event) -> Unit
 ) {
     var eventCode by remember { mutableStateOf("") }
     var isSearching by remember { mutableStateOf(false) }
@@ -73,9 +75,11 @@ fun LaunchScreen(
                 scope.launch {
                     try {
                         val event = NetworkModule.api.lookupEvent(eventCode)
-                        onEventSelected(event)
-                    } catch (_: Exception) {
-                        errorMessage = "Event not found or network error."
+                        // Join the event as per API.md
+                        NetworkModule.api.joinEvent(event.id, deviceId, JoinRequest())
+                        onEventJoined(event)
+                    } catch (e: Exception) {
+                        errorMessage = "Event not found or network error: ${e.message}"
                     } finally {
                         isSearching = false
                     }
@@ -97,6 +101,6 @@ fun LaunchScreen(
 @Composable
 fun LaunchScreenPreview() {
     AttndTheme {
-        LaunchScreen(onEventSelected = {})
+        LaunchScreen(deviceId = "test-id", onEventJoined = {})
     }
 }

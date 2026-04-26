@@ -11,6 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.arcu.attnd.data.EventLocation
+import com.arcu.attnd.data.NetworkModule
 import com.arcu.attnd.ui.theme.AttndTheme
 
 @Composable
@@ -40,40 +41,53 @@ fun LocationsScreen(
     }
 }
 
-@Preview(showBackground = true)
 @Composable
-fun LocationsScreenPreview() {
-    val dummyLocations = listOf(
-        EventLocation(1, "Main Stage", "Live Music", "The big stage", null, null, 0.0, 0.0, "123 Main St"),
-        EventLocation(2, "Food Court", "Tacos & More", "Eat here", null, null, 0.0, 0.0, "123 Main St"),
-        EventLocation(3, "Entrance", "Tickets & Info", "Start here", null, null, 0.0, 0.0, "123 Main St")
-    )
-    AttndTheme {
-        LocationsScreen(
-            locations = dummyLocations,
-            isLoading = false,
-            error = null,
-            onLocationClick = {}
-        )
-    }
-}
-
-@Composable
-fun LocationDetailScreen(locationId: Int) {
+fun LocationDetailScreen(eventId: Int, locationId: Int) {
+    var location by remember { mutableStateOf<EventLocation?>(null) }
     var isLoading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(locationId) {
-        isLoading = false
+        try {
+            location = NetworkModule.api.getLocationDetails(eventId, locationId)
+        } catch (e: Exception) {
+            error = e.message
+        } finally {
+            isLoading = false
+        }
     }
 
     Column(modifier = Modifier.padding(16.dp)) {
         if (isLoading) {
             CircularProgressIndicator()
+        } else if (error != null) {
+            Text("Error loading details: $error", color = MaterialTheme.colorScheme.error)
         } else {
-            Text("Location Detail", style = MaterialTheme.typography.headlineMedium)
-            Spacer(modifier = Modifier.height(16.dp))
-            Text("Details about location $locationId would be fetched here.")
+            location?.let {
+                Text(it.name, style = MaterialTheme.typography.headlineMedium)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(it.address, style = MaterialTheme.typography.bodyMedium)
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(it.description, style = MaterialTheme.typography.bodyLarge)
+                
+                it.website?.let { url ->
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text("Website: $url", color = MaterialTheme.colorScheme.primary)
+                }
+            }
         }
+    }
+}
+
+@Preview(showBackground = true)
+@Composable
+fun LocationsScreenPreview() {
+    val dummyLocations = listOf(
+        EventLocation(1, "Main Stage", "Live Music", "The big stage", null, null, 0.0, 0.0, "123 Main St"),
+        EventLocation(2, "Food Court", "Tacos & More", "Eat here", null, null, 0.0, 0.0, "123 Main St")
+    )
+    AttndTheme {
+        LocationsScreen(dummyLocations, false, null) {}
     }
 }
 
@@ -81,6 +95,6 @@ fun LocationDetailScreen(locationId: Int) {
 @Composable
 fun LocationDetailScreenPreview() {
     AttndTheme {
-        LocationDetailScreen(locationId = 42)
+        LocationDetailScreen(eventId = 1, locationId = 42)
     }
 }
