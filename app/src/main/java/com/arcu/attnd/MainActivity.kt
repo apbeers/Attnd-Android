@@ -18,8 +18,14 @@ import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavType
 import androidx.navigation.compose.*
 import androidx.navigation.navArgument
+import com.arcu.attnd.data.AppNotification
+import com.arcu.attnd.data.EventLocation
+import com.arcu.attnd.data.NetworkModule
 import com.arcu.attnd.ui.screens.*
 import com.arcu.attnd.ui.theme.AttndTheme
+import com.google.android.gms.maps.model.CameraPosition
+import com.google.android.gms.maps.model.LatLng
+import com.google.maps.android.compose.rememberCameraPositionState
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -58,19 +64,64 @@ fun MainNavigation() {
         }
         
         composable(Screen.Map.route) {
+            var locations by remember { mutableStateOf<List<EventLocation>>(emptyList()) }
+            val cameraPositionState = rememberCameraPositionState {
+                position = CameraPosition.fromLatLngZoom(LatLng(32.754695, -97.331605), 15f)
+            }
+
+            LaunchedEffect(currentEventId) {
+                currentEventId?.let { id ->
+                    try {
+                        val response = NetworkModule.api.getLocations(id)
+                        locations = response.results
+                        if (locations.isNotEmpty()) {
+                            val firstLoc = LatLng(locations[0].latitude, locations[0].longitude)
+                            cameraPositionState.position = CameraPosition.fromLatLngZoom(firstLoc, 15f)
+                        }
+                    } catch (_: Exception) {
+                        // Ignore
+                    }
+                }
+            }
+
             AppScaffold(navController) { innerPadding ->
                 Surface(modifier = Modifier.padding(innerPadding)) {
-                    MainMapScreen(currentEventId ?: 0)
+                    MainMapScreen(
+                        locations = locations,
+                        cameraPositionState = cameraPositionState
+                    )
                 }
             }
         }
         
         composable(Screen.Locations.route) {
+            var locations by remember { mutableStateOf<List<EventLocation>>(emptyList()) }
+            var isLoading by remember { mutableStateOf(true) }
+            var error by remember { mutableStateOf<String?>(null) }
+
+            LaunchedEffect(currentEventId) {
+                currentEventId?.let { id ->
+                    try {
+                        val response = NetworkModule.api.getLocations(id)
+                        locations = response.results
+                    } catch (e: Exception) {
+                        error = e.message
+                    } finally {
+                        isLoading = false
+                    }
+                }
+            }
+
             AppScaffold(navController) { innerPadding ->
                 Surface(modifier = Modifier.padding(innerPadding)) {
-                    LocationsScreen(currentEventId ?: 0, onLocationClick = { locId ->
-                        navController.navigate("location_detail/$locId")
-                    })
+                    LocationsScreen(
+                        locations = locations,
+                        isLoading = isLoading,
+                        error = error,
+                        onLocationClick = { locId ->
+                            navController.navigate("location_detail/$locId")
+                        }
+                    )
                 }
             }
         }
@@ -90,15 +141,36 @@ fun MainNavigation() {
         composable(Screen.Flyer.route) {
             AppScaffold(navController) { innerPadding ->
                 Surface(modifier = Modifier.padding(innerPadding)) {
-                    FlyerScreen(null) // Mocking null for now
+                    FlyerScreen(null)
                 }
             }
         }
 
         composable(Screen.Notifications.route) {
+            var notifications by remember { mutableStateOf<List<AppNotification>>(emptyList()) }
+            var isLoading by remember { mutableStateOf(true) }
+            var error by remember { mutableStateOf<String?>(null) }
+
+            LaunchedEffect(currentEventId) {
+                currentEventId?.let { id ->
+                    try {
+                        val response = NetworkModule.api.getNotifications(id)
+                        notifications = response.results
+                    } catch (e: Exception) {
+                        error = e.message
+                    } finally {
+                        isLoading = false
+                    }
+                }
+            }
+
             AppScaffold(navController) { innerPadding ->
                 Surface(modifier = Modifier.padding(innerPadding)) {
-                    NotificationsScreen(currentEventId ?: 0)
+                    NotificationsScreen(
+                        notifications = notifications,
+                        isLoading = isLoading,
+                        error = error
+                    )
                 }
             }
         }

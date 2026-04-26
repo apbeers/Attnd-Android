@@ -19,6 +19,9 @@ android {
         vectorDrawables {
             useSupportLibrary true
         }
+
+        def attndApiKey = project.findProperty("ATTND_API_KEY") ?: ""
+        buildConfigField "String", "ATTND_API_KEY", "\"$attndApiKey\""
     }
 
     signingConfigs {
@@ -49,6 +52,7 @@ android {
     }
     buildFeatures {
         compose true
+        buildConfig true
     }
     packaging {
         resources {
