@@ -19,3 +19,4 @@ signing.properties
 *.jks
 *.keystore
 app/release/app-release.aab
+cleanup_locks.command

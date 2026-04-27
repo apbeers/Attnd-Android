@@ -4,7 +4,18 @@ rm -f .git/index.lock
 git config user.email "apbeers@icloud.com"
 git config user.name "Andrew"
 git add -A
-git commit -m "Add integration tests + GitHub Actions Android CI
+git commit -m "Add my location button to map + implement Android nearby events
+
+- MainMapScreen: FAB with MyLocation icon, permission request on tap,
+  FusedLocationProvider zoom, MapProperties(isMyLocationEnabled)
+- LaunchScreen: implemented Find Nearby Events with real location permission,
+  FusedLocationProvider, getNearbyEvents API call, clickable event cards
+- OptionsScreen: location toggle lifted to MainActivity, permission
+  request when toggling on from denied state
+- MainActivity: locationEnabled hoisted, wired to all three screens
+
+Previously committed (integration tests + CI):
+Add integration tests + GitHub Actions Android CI
 
 Integration tests (app/src/test/.../integration/AttndApiTest.kt):
 - 25 tests hitting live attnd.app API using fixture data

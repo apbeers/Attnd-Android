@@ -64,6 +64,7 @@ fun MainNavigation() {
     
     val navController = rememberNavController()
     var currentEvent by remember { mutableStateOf<Event?>(null) }
+    var locationEnabled by remember { mutableStateOf(false) }
 
     NavHost(navController = navController, startDestination = Screen.Launch.route) {
         composable(Screen.Launch.route) {
@@ -74,7 +75,8 @@ fun MainNavigation() {
                     navController.navigate(Screen.Map.route) {
                         popUpTo(Screen.Launch.route) { inclusive = true }
                     }
-                }
+                },
+                onLocationEnabled = { locationEnabled = true }
             )
         }
         
@@ -98,6 +100,8 @@ fun MainNavigation() {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     MainMapScreen(
                         locations = locations,
+                        locationEnabled = locationEnabled,
+                        onLocationEnabled = { locationEnabled = true },
                         contentPadding = innerPadding,
                         cameraPositionState = cameraPositionState
                     )
@@ -192,6 +196,8 @@ fun MainNavigation() {
                     OptionsScreen(
                         eventId = currentEvent?.id ?: 0,
                         deviceId = deviceId,
+                        locationEnabled = locationEnabled,
+                        onLocationChanged = { locationEnabled = it },
                         onLeaveEvent = {
                             currentEvent = null
                             navController.navigate(Screen.Launch.route) {
