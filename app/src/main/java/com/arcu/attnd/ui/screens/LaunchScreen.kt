@@ -26,6 +26,8 @@ import com.arcu.attnd.ui.theme.AttndTheme
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import com.google.android.gms.location.LocationServices
+import retrofit2.HttpException
+import java.io.IOException
 
 @SuppressLint("MissingPermission")
 @Composable
@@ -128,8 +130,16 @@ fun LaunchScreen(
                         val event = NetworkModule.api.lookupEvent(eventCode)
                         NetworkModule.api.joinEvent(event.id, deviceId, JoinRequest())
                         onEventJoined(event)
+                    } catch (e: HttpException) {
+                        errorMessage = when (e.code()) {
+                            401 -> "Authentication failed (401). API key may not be configured."
+                            404 -> "Event \"${eventCode}\" not found. Check the code and try again."
+                            else -> "Server error (${e.code()}). Please try again."
+                        }
+                    } catch (e: IOException) {
+                        errorMessage = "Network error. Check your connection and try again."
                     } catch (e: Exception) {
-                        errorMessage = "Event not found. Check the code and try again."
+                        errorMessage = "Unexpected error: ${e.javaClass.simpleName}"
                     } finally {
                         isSearching = false
                     }
