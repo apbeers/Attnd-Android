@@ -15,4 +15,16 @@ class DevicePrefs(context: Context) {
         }
         return id
     }
+
+    fun saveEventCode(code: String) {
+        prefs.edit { putString("event_code", code) }
+    }
+
+    fun getEventCode(): String? {
+        return prefs.getString("event_code", null)
+    }
+
+    fun clearEventCode() {
+        prefs.edit { remove("event_code") }
+    }
 }

@@ -8,12 +8,13 @@ import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 
 object NetworkModule {
-    private const val BASE_URL = "https://attnd.app/api/v1/events/"
+    private const val BASE_URL = "https://attnd.app/"
 
     private val authInterceptor = Interceptor { chain ->
         val request = chain.request().newBuilder()
             .addHeader("Authorization", "Bearer ${BuildConfig.ATTND_API_KEY}")
-            .addHeader("User-Agent", "Attnd-Android")
+            .addHeader("Accept", "application/json")
+            .addHeader("X-Requested-With", "com.arcu.attnd")
             .build()
         chain.proceed(request)
     }

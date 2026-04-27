@@ -5,14 +5,11 @@ import android.annotation.SuppressLint
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MyLocation
-import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.Icon
+import androidx.compose.material.icons.filled.Place
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -34,16 +31,34 @@ import kotlinx.coroutines.tasks.await
 @Composable
 fun MainMapScreen(
     locations: List<EventLocation>,
+    eventCenter: LatLng,
+    recenterTrigger: Int = 0,
+    onLocationClick: (Int) -> Unit = {},
     locationEnabled: Boolean = false,
     onLocationEnabled: () -> Unit = {},
     contentPadding: PaddingValues = PaddingValues(0.dp),
     cameraPositionState: CameraPositionState = rememberCameraPositionState {
-        position = CameraPosition.fromLatLngZoom(LatLng(32.754695, -97.331605), 15f)
+        position = CameraPosition.fromLatLngZoom(eventCenter, 15f)
     }
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val fusedClient = remember { LocationServices.getFusedLocationProviderClient(context) }
+
+    fun animateToEventCenter() {
+        scope.launch {
+            cameraPositionState.animate(
+                CameraUpdateFactory.newLatLngZoom(eventCenter, 15f)
+            )
+        }
+    }
+
+    // React to external recenter triggers (e.g. from bottom nav)
+    LaunchedEffect(recenterTrigger) {
+        if (recenterTrigger > 0) {
+            animateToEventCenter()
+        }
+    }
 
     fun zoomToUserLocation() {
         scope.launch {
@@ -98,7 +113,10 @@ fun MainMapScreen(
             cameraPositionState = cameraPositionState,
             contentPadding = contentPadding,
             properties = MapProperties(isMyLocationEnabled = locationEnabled),
-            uiSettings = MapUiSettings(myLocationButtonEnabled = false)
+            uiSettings = MapUiSettings(
+                myLocationButtonEnabled = false,
+                zoomControlsEnabled = false
+            )
         ) {
             locations.forEach { location ->
                 Marker(
@@ -106,21 +124,38 @@ fun MainMapScreen(
                         position = LatLng(location.latitude, location.longitude)
                     ),
                     title = location.name,
-                    snippet = location.snippet
+                    snippet = location.snippet,
+                    onInfoWindowClick = {
+                        onLocationClick(location.id)
+                    }
                 )
             }
         }
 
-        FloatingActionButton(
-            onClick = onMyLocationTap,
+        Column(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(
                     bottom = contentPadding.calculateBottomPadding() + 16.dp,
                     end = 16.dp
-                )
+                ),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Icon(Icons.Default.MyLocation, contentDescription = "My Location")
+            // Re-center to Event FAB
+            FloatingActionButton(
+                onClick = { animateToEventCenter() },
+                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+            ) {
+                Icon(Icons.Default.Place, contentDescription = "Event Center")
+            }
+
+            // My Location FAB
+            FloatingActionButton(
+                onClick = onMyLocationTap
+            ) {
+                Icon(Icons.Default.MyLocation, contentDescription = "My Location")
+            }
         }
     }
 }
@@ -133,6 +168,9 @@ fun MainMapScreenPreview() {
         EventLocation(2, "Food Court", "Tacos & More", "Eat here", null, null, 32.754600, -97.331500, "123 Main St")
     )
     AttndTheme {
-        MainMapScreen(locations = dummyLocations)
+        MainMapScreen(
+            locations = dummyLocations,
+            eventCenter = LatLng(32.754695, -97.331605)
+        )
     }
 }

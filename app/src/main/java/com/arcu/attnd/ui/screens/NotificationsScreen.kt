@@ -11,6 +11,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.arcu.attnd.data.AppNotification
 import com.arcu.attnd.ui.theme.AttndTheme
+import com.arcu.attnd.util.FormatUtils
 
 @Composable
 fun NotificationsScreen(
@@ -24,11 +25,24 @@ fun NotificationsScreen(
         } else if (error != null) {
             Text(text = "Error: $error", modifier = Modifier.align(Alignment.Center), color = MaterialTheme.colorScheme.error)
         } else {
+            val sortedNotifications = remember(notifications) {
+                notifications.sortedByDescending { it.sendTime }
+            }
             LazyColumn(modifier = Modifier.fillMaxSize()) {
-                items(notifications) { notification ->
+                items(sortedNotifications) { notification ->
                     ListItem(
                         headlineContent = { Text(notification.title) },
-                        supportingContent = { Text(notification.body) }
+                        supportingContent = { 
+                            Column {
+                                Text(notification.body)
+                                Text(
+                                    text = FormatUtils.formatNotificationTime(notification.sendTime),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.outline,
+                                    modifier = Modifier.padding(top = 4.dp)
+                                )
+                            }
+                        }
                     )
                     HorizontalDivider()
                 }

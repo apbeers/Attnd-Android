@@ -22,8 +22,8 @@ import kotlinx.coroutines.launch
 fun OptionsScreen(
     eventId: Int,
     deviceId: String,
-    locationEnabled: Boolean = false,
-    onLocationChanged: (Boolean) -> Unit = {},
+    locationEnabled: Boolean,
+    onLocationChanged: (Boolean) -> Unit,
     onLeaveEvent: () -> Unit
 ) {
     var pushEnabled by remember { mutableStateOf(true) }
@@ -36,6 +36,7 @@ fun OptionsScreen(
         val granted = perms[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
                 perms[Manifest.permission.ACCESS_COARSE_LOCATION] == true
         if (granted) onLocationChanged(true)
+        else onLocationChanged(false)
     }
 
     Column(
@@ -122,6 +123,12 @@ fun OptionsScreen(
 @Composable
 fun OptionsScreenPreview() {
     AttndTheme {
-        OptionsScreen(eventId = 1, deviceId = "test", onLeaveEvent = {})
+        OptionsScreen(
+            eventId = 1,
+            deviceId = "test",
+            locationEnabled = true,
+            onLocationChanged = {},
+            onLeaveEvent = {}
+        )
     }
 }

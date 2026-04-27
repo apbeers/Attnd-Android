@@ -5,6 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -22,10 +23,7 @@ import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavType
 import androidx.navigation.compose.*
 import androidx.navigation.navArgument
-import com.arcu.attnd.data.AppNotification
-import com.arcu.attnd.data.Event
-import com.arcu.attnd.data.EventLocation
-import com.arcu.attnd.data.NetworkModule
+import com.arcu.attnd.data.*
 import com.arcu.attnd.data.prefs.DevicePrefs
 import com.arcu.attnd.ui.screens.*
 import com.arcu.attnd.ui.theme.AttndTheme
@@ -44,6 +42,11 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+    }
 }
 
 sealed class Screen(val route: String, val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector? = null) {
@@ -59,32 +62,92 @@ sealed class Screen(val route: String, val label: String, val icon: androidx.com
 @Composable
 fun MainNavigation() {
     val context = LocalContext.current
+    val activity = context as? MainActivity
     val devicePrefs = remember { DevicePrefs(context) }
     val deviceId = remember { devicePrefs.getDeviceId() }
     
     val navController = rememberNavController()
     var currentEvent by remember { mutableStateOf<Event?>(null) }
+    var recenterTrigger by remember { mutableStateOf(0) }
     var locationEnabled by remember { mutableStateOf(false) }
+    var isLoadingInitialEvent by remember { mutableStateOf(true) }
+    var initialRoute by remember { mutableStateOf(Screen.Launch.route) }
 
-    NavHost(navController = navController, startDestination = Screen.Launch.route) {
+    val handleEventJoin: suspend (String) -> Boolean = { code ->
+        try {
+            val event = NetworkModule.api.lookupEvent(code)
+            val joinResult = NetworkModule.api.joinEvent(event.id, deviceId, JoinRequest())
+            if (joinResult.status == "ok") {
+                devicePrefs.saveEventCode(event.eventCode)
+                currentEvent = event
+                true
+            } else {
+                false
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    // On start: Check for stored event code and try to join
+    LaunchedEffect(Unit) {
+        val storedCode = devicePrefs.getEventCode()
+        if (storedCode != null) {
+            if (handleEventJoin(storedCode)) {
+                initialRoute = Screen.Map.route
+            } else {
+                devicePrefs.clearEventCode()
+            }
+        }
+        isLoadingInitialEvent = false
+    }
+
+    // Listen for deep links
+    LaunchedEffect(activity?.intent) {
+        val intent = activity?.intent
+        if (intent?.action == android.content.Intent.ACTION_VIEW) {
+            val data = intent.data
+            if (data?.host == "attnd.app" && data.pathSegments.getOrNull(0) == "join") {
+                val code = data.pathSegments.getOrNull(1)
+                if (code != null) {
+                    if (handleEventJoin(code)) {
+                        navController.navigate(Screen.Map.route) {
+                            popUpTo(Screen.Launch.route) { inclusive = true }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (isLoadingInitialEvent) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
+            CircularProgressIndicator()
+        }
+        return
+    }
+
+    NavHost(navController = navController, startDestination = initialRoute) {
         composable(Screen.Launch.route) {
             LaunchScreen(
                 deviceId = deviceId,
                 onEventJoined = { event ->
+                    devicePrefs.saveEventCode(event.eventCode)
                     currentEvent = event
                     navController.navigate(Screen.Map.route) {
                         popUpTo(Screen.Launch.route) { inclusive = true }
                     }
-                },
-                onLocationEnabled = { locationEnabled = true }
+                }
             )
         }
         
         composable(Screen.Map.route) {
             var locations by remember { mutableStateOf<List<EventLocation>>(emptyList()) }
+            val eventCenter = remember(currentEvent) {
+                currentEvent?.let { LatLng(it.latitude, it.longitude) } ?: LatLng(0.0, 0.0)
+            }
             val cameraPositionState = rememberCameraPositionState {
-                val initialPos = currentEvent?.let { LatLng(it.latitude, it.longitude) } ?: LatLng(32.754695, -97.331605)
-                position = CameraPosition.fromLatLngZoom(initialPos, 15f)
+                position = CameraPosition.fromLatLngZoom(eventCenter, 15f)
             }
 
             LaunchedEffect(currentEvent?.id) {
@@ -96,14 +159,26 @@ fun MainNavigation() {
                 }
             }
 
-            AppScaffold(navController) { innerPadding ->
+            AppScaffold(
+                navController = navController,
+                onTabReselected = { screen ->
+                    if (screen == Screen.Map) {
+                        recenterTrigger++
+                    }
+                }
+            ) { innerPadding ->
                 Surface(modifier = Modifier.fillMaxSize()) {
                     MainMapScreen(
                         locations = locations,
+                        eventCenter = eventCenter,
+                        recenterTrigger = recenterTrigger,
                         locationEnabled = locationEnabled,
                         onLocationEnabled = { locationEnabled = true },
                         contentPadding = innerPadding,
-                        cameraPositionState = cameraPositionState
+                        cameraPositionState = cameraPositionState,
+                        onLocationClick = { locId ->
+                            navController.navigate("location_detail/$locId")
+                        }
                     )
                 }
             }
@@ -199,6 +274,7 @@ fun MainNavigation() {
                         locationEnabled = locationEnabled,
                         onLocationChanged = { locationEnabled = it },
                         onLeaveEvent = {
+                            devicePrefs.clearEventCode()
                             currentEvent = null
                             navController.navigate(Screen.Launch.route) {
                                 popUpTo(navController.graph.findStartDestination().id) {
@@ -216,6 +292,7 @@ fun MainNavigation() {
 @Composable
 fun AppScaffold(
     navController: androidx.navigation.NavHostController,
+    onTabReselected: (Screen) -> Unit = {},
     content: @Composable (androidx.compose.foundation.layout.PaddingValues) -> Unit
 ) {
     val items = listOf(
@@ -231,17 +308,22 @@ fun AppScaffold(
                 val navBackStackEntry by navController.currentBackStackEntryAsState()
                 val currentDestination = navBackStackEntry?.destination
                 items.forEach { screen ->
+                    val isSelected = currentDestination?.hierarchy?.any { it.route == screen.route } == true
                     NavigationBarItem(
                         icon = { Icon(screen.icon!!, contentDescription = null) },
                         label = { Text(screen.label) },
-                        selected = currentDestination?.hierarchy?.any { it.route == screen.route } == true,
+                        selected = isSelected,
                         onClick = {
-                            navController.navigate(screen.route) {
-                                popUpTo(navController.graph.findStartDestination().id) {
-                                    saveState = true
+                            if (isSelected) {
+                                onTabReselected(screen)
+                            } else {
+                                navController.navigate(screen.route) {
+                                    popUpTo(navController.graph.findStartDestination().id) {
+                                        saveState = true
+                                    }
+                                    launchSingleTop = true
+                                    restoreState = true
                                 }
-                                launchSingleTop = true
-                                restoreState = true
                             }
                         }
                     )
