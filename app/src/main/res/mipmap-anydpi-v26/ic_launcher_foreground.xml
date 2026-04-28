@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- The adaptive icon canvas is 108dp.
+         The 'safe zone' is the center 66dp.
+         Setting our logo to 64dp and centering it ensures it fits entirely within the mask. -->
+    <item
+        android:drawable="@drawable/attnd_logo"
+        android:gravity="center"
+        android:width="64dp"
+        android:height="64dp" />
+</layer-list>

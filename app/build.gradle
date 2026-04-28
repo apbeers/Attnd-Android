@@ -10,7 +10,7 @@ android {
 
     defaultConfig {
         applicationId = "com.arcu.attnd"
-        minSdk = 24
+        minSdk = 33
         targetSdk = 37
 
         def versionPropsFile = rootProject.file('version.properties')
