@@ -27,4 +27,3 @@ git push origin develop
 
 echo ""
 echo "✅ Done! Build version incremented and changes pushed to develop."
-echo "You can now open a PR to main to trigger the CI pipeline."
