@@ -1,15 +1,22 @@
 package com.arcu.attnd.ui.screens
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Place
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
 import com.arcu.attnd.data.EventLocation
 import com.arcu.attnd.data.NetworkModule
 import com.arcu.attnd.ui.theme.AttndTheme
@@ -32,6 +39,32 @@ fun LocationsScreen(
                     ListItem(
                         headlineContent = { Text(location.name) },
                         supportingContent = { Text(location.snippet) },
+                        leadingContent = {
+                            if (location.imageUrl != null) {
+                                AsyncImage(
+                                    model = location.imageUrl,
+                                    contentDescription = null,
+                                    modifier = Modifier
+                                        .size(56.dp)
+                                        .clip(RoundedCornerShape(8.dp)),
+                                    contentScale = ContentScale.Crop
+                                )
+                            } else {
+                                Box(
+                                    modifier = Modifier
+                                        .size(56.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        Icons.Default.Place,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        },
                         modifier = Modifier.clickable { onLocationClick(location.id) }
                     )
                     HorizontalDivider()
@@ -64,6 +97,19 @@ fun LocationDetailScreen(eventId: Int, locationId: Int) {
             Text("Error loading details: $error", color = MaterialTheme.colorScheme.error)
         } else {
             location?.let {
+                if (it.imageUrl != null) {
+                    AsyncImage(
+                        model = it.imageUrl,
+                        contentDescription = null,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(200.dp)
+                            .clip(RoundedCornerShape(12.dp)),
+                        contentScale = ContentScale.Crop
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
+
                 Text(it.name, style = MaterialTheme.typography.headlineMedium)
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(it.address, style = MaterialTheme.typography.bodyMedium)

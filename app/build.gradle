@@ -12,8 +12,16 @@ android {
         applicationId "com.arcu.attnd"
         minSdk 24
         targetSdk 37
-        versionCode 1
-        versionName "1.0"
+
+        def versionPropsFile = rootProject.file('version.properties')
+        def versionProps = new Properties()
+        if (versionPropsFile.exists()) {
+            versionProps.load(new FileInputStream(versionPropsFile))
+        }
+        def code = versionProps['VERSION_CODE']?.toInteger() ?: 1
+
+        versionCode code
+        versionName "1.0.$code"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

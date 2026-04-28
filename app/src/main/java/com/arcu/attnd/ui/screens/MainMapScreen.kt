@@ -5,6 +5,7 @@ import android.annotation.SuppressLint
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MyLocation
@@ -17,12 +18,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import com.arcu.attnd.R
 import com.arcu.attnd.data.EventLocation
 import com.arcu.attnd.ui.theme.AttndTheme
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.model.CameraPosition
 import com.google.android.gms.maps.model.LatLng
+import com.google.android.gms.maps.model.MapStyleOptions
 import com.google.maps.android.compose.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
@@ -43,7 +46,16 @@ fun MainMapScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val isDarkTheme = isSystemInDarkTheme()
     val fusedClient = remember { LocationServices.getFusedLocationProviderClient(context) }
+
+    val mapStyleOptions = remember(isDarkTheme) {
+        if (isDarkTheme) {
+            MapStyleOptions.loadRawResourceStyle(context, R.raw.map_style_dark)
+        } else {
+            null
+        }
+    }
 
     fun animateToEventCenter() {
         scope.launch {
@@ -112,7 +124,10 @@ fun MainMapScreen(
             modifier = Modifier.fillMaxSize(),
             cameraPositionState = cameraPositionState,
             contentPadding = contentPadding,
-            properties = MapProperties(isMyLocationEnabled = locationEnabled),
+            properties = MapProperties(
+                isMyLocationEnabled = locationEnabled,
+                mapStyleOptions = mapStyleOptions
+            ),
             uiSettings = MapUiSettings(
                 myLocationButtonEnabled = false,
                 zoomControlsEnabled = false
