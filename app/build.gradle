@@ -5,13 +5,13 @@ plugins {
 }
 
 android {
-    namespace 'com.arcu.attnd'
-    compileSdk 37
+    namespace = 'com.arcu.attnd'
+    compileSdk = 37
 
     defaultConfig {
-        applicationId "com.arcu.attnd"
-        minSdk 24
-        targetSdk 37
+        applicationId = "com.arcu.attnd"
+        minSdk = 24
+        targetSdk = 37
 
         def versionPropsFile = rootProject.file('version.properties')
         def versionProps = new Properties()
@@ -20,12 +20,12 @@ android {
         }
         def code = versionProps['VERSION_CODE']?.toInteger() ?: 1
 
-        versionCode code
-        versionName "1.0.$code"
+        versionCode = code
+        versionName = "1.0.$code"
 
-        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
-            useSupportLibrary true
+            useSupportLibrary = true
         }
 
         buildConfigField "String", "ATTND_API_KEY", "\"ce23b0d41e71285582fb42cebf48d416b4161c12f9b29825a99f9a4b34368ade\""
@@ -48,19 +48,19 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.getByName("release")
-            minifyEnabled true
-            shrinkResources true
+            minifyEnabled = true
+            shrinkResources = true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_21
-        targetCompatibility JavaVersion.VERSION_21
-        coreLibraryDesugaringEnabled true
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
+        coreLibraryDesugaringEnabled = true
     }
     buildFeatures {
-        compose true
-        buildConfig true
+        compose = true
+        buildConfig = true
     }
     packaging {
         resources {
