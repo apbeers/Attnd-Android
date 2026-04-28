@@ -39,4 +39,12 @@ object FormatUtils {
             "Just now"
         }
     }
+
+    /**
+     * Returns the minutes elapsed since the given timestamp.
+     */
+    fun getMinutesElapsed(timestamp: Long): Long {
+        val now = System.currentTimeMillis()
+        return (now - timestamp) / 1000 / 60
+    }
 }

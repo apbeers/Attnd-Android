@@ -30,6 +30,7 @@ import com.arcu.attnd.ui.theme.AttndTheme
 import com.google.android.gms.maps.model.CameraPosition
 import com.google.android.gms.maps.model.LatLng
 import com.google.maps.android.compose.rememberCameraPositionState
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -239,19 +240,31 @@ fun MainNavigation() {
         composable(Screen.Notifications.route) {
             var notifications by remember { mutableStateOf<List<AppNotification>>(emptyList()) }
             var isLoading by remember { mutableStateOf(true) }
+            var isRefreshing by remember { mutableStateOf(false) }
             var error by remember { mutableStateOf<String?>(null) }
+            var lastRefreshedAt by remember { mutableStateOf<Long?>(null) }
+            val scope = rememberCoroutineScope()
 
-            LaunchedEffect(currentEvent?.id) {
-                currentEvent?.id?.let { id ->
+            fun fetchNotifications(refresh: Boolean = false) {
+                val eventId = currentEvent?.id ?: return
+                if (refresh) isRefreshing = true else isLoading = true
+                scope.launch {
                     try {
-                        val response = NetworkModule.api.getNotifications(id)
+                        val response = NetworkModule.api.getNotifications(eventId)
                         notifications = response.results
+                        lastRefreshedAt = System.currentTimeMillis()
+                        error = null
                     } catch (e: Exception) {
                         error = e.message
                     } finally {
                         isLoading = false
+                        isRefreshing = false
                     }
                 }
+            }
+
+            LaunchedEffect(currentEvent?.id) {
+                fetchNotifications()
             }
 
             AppScaffold(navController) { innerPadding ->
@@ -259,7 +272,10 @@ fun MainNavigation() {
                     NotificationsScreen(
                         notifications = notifications,
                         isLoading = isLoading,
-                        error = error
+                        isRefreshing = isRefreshing,
+                        error = error,
+                        onRefresh = { fetchNotifications(refresh = true) },
+                        lastRefreshedAt = lastRefreshedAt
                     )
                 }
             }
