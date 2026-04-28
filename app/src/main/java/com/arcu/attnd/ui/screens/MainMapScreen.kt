@@ -135,9 +135,9 @@ fun MainMapScreen(
         ) {
             locations.forEach { location ->
                 Marker(
-                    state = rememberMarkerState(
-                        position = LatLng(location.latitude, location.longitude)
-                    ),
+                    state = remember(location.id) {
+                        MarkerState(position = LatLng(location.latitude, location.longitude))
+                    },
                     title = location.name,
                     snippet = location.snippet,
                     onInfoWindowClick = {
