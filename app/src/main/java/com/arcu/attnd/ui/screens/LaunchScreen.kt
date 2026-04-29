@@ -176,10 +176,11 @@ fun LaunchScreen(
     if (showScanner) {
         QRScannerDialog(
             onDismiss = { showScanner = false },
-        ) { code ->
-            showScanner = false
-            joinEvent(code)
-        }
+            onCodeScanned = { code ->
+                showScanner = false
+                joinEvent(code)
+            }
+        )
     }
 
     Column(
