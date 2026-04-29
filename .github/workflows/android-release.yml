@@ -1,6 +1,7 @@
 name: Android Release
 
 # This workflow builds a signed release AAB and uploads it to the Google Play Internal track.
+# It is split into two stages: Build and Publish.
 # It runs only when manually triggered from the Actions tab.
 
 on:
@@ -11,10 +12,10 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  release:
-    name: Build & Upload to Google Play
+  build:
+    name: Build Release AAB
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
 
     steps:
       - name: Checkout Code
@@ -66,19 +67,39 @@ jobs:
       - name: Build Release AAB
         run: ./gradlew bundleRelease --no-daemon
 
-      # ── Upload ───────────────────────────────────────────────────────────────
+      # ── Store Artifact ───────────────────────────────────────────────────────
 
-      - name: Upload to Google Play (Internal track)
-        uses: r0adkll/upload-google-play@v1
+      - name: Upload AAB Artifact
+        uses: actions/upload-artifact@v4
         with:
-          serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
-          packageName: com.arcu.attnd
-          releaseFiles: app/build/outputs/bundle/release/app-release.aab
-          tracks: internal
-          status: completed
+          name: release-bundle
+          path: app/build/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
+          retention-days: 1
 
       # ── Cleanup ──────────────────────────────────────────────────────────────
 
       - name: Remove sensitive files
         if: always()
         run: rm -f keystore.jks signing.properties local.properties
+
+  publish:
+    name: Publish to Google Play
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Download AAB Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-bundle
+
+      - name: Upload to Google Play (Internal track)
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: com.arcu.attnd
+          releaseFiles: app-release.aab
+          tracks: internal
+          status: completed
