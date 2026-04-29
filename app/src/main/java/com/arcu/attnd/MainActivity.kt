@@ -69,8 +69,8 @@ fun MainNavigation() {
     
     val navController = rememberNavController()
     var currentEvent by remember { mutableStateOf<Event?>(null) }
-    var recenterTrigger by remember { mutableStateOf(0) }
-    var locationEnabled by remember { mutableStateOf(false) }
+    var recenterTrigger by remember { mutableIntStateOf(0) }
+    var locationEnabled by remember { mutableStateOf(value = false) }
     var isLoadingInitialEvent by remember { mutableStateOf(true) }
     var initialRoute by remember { mutableStateOf(Screen.Launch.route) }
 
@@ -90,10 +90,8 @@ fun MainNavigation() {
         }
     }
 
-    // On start: Check for stored event code and try to join
     LaunchedEffect(Unit) {
-        val storedCode = devicePrefs.getEventCode()
-        if (storedCode != null) {
+        devicePrefs.getEventCode()?.let { storedCode ->
             if (handleEventJoin(storedCode)) {
                 initialRoute = Screen.Map.route
             } else {
@@ -108,7 +106,7 @@ fun MainNavigation() {
         val intent = activity?.intent
         if (intent?.action == android.content.Intent.ACTION_VIEW) {
             val data = intent.data
-            if (data?.host == "attnd.app" && data.pathSegments.getOrNull(0) == "join") {
+            if ((data?.host == "attnd.app") && (data.pathSegments.getOrNull(0) == "join")) {
                 val code = data.pathSegments.getOrNull(1)
                 if (code != null) {
                     if (handleEventJoin(code)) {

@@ -88,10 +88,10 @@ fun MainMapScreen(
     }
 
     val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
+        ActivityResultContracts.RequestMultiplePermissions(),
     ) { perms ->
-        val granted = perms[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
-                perms[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+        val granted = (perms[Manifest.permission.ACCESS_FINE_LOCATION] == true) ||
+                (perms[Manifest.permission.ACCESS_COARSE_LOCATION] == true)
         if (granted) {
             onLocationEnabled()
             zoomToUserLocation()

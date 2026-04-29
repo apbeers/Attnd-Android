@@ -24,19 +24,18 @@ fun OptionsScreen(
     deviceId: String,
     locationEnabled: Boolean,
     onLocationChanged: (Boolean) -> Unit,
-    onLeaveEvent: () -> Unit
+    onLeaveEvent: () -> Unit,
 ) {
-    var pushEnabled by remember { mutableStateOf(true) }
+    var pushEnabled by remember { mutableStateOf(value = true) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
     val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
+        ActivityResultContracts.RequestMultiplePermissions(),
     ) { perms ->
-        val granted = perms[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
-                perms[Manifest.permission.ACCESS_COARSE_LOCATION] == true
-        if (granted) onLocationChanged(true)
-        else onLocationChanged(false)
+        val granted = (perms[Manifest.permission.ACCESS_FINE_LOCATION] == true) ||
+                (perms[Manifest.permission.ACCESS_COARSE_LOCATION] == true)
+        onLocationChanged(granted)
     }
 
     Column(

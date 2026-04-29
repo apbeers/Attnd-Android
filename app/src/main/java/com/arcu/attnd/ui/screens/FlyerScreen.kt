@@ -16,7 +16,7 @@ fun FlyerScreen(flyerUrl: String?) {
             AsyncImage(
                 model = flyerUrl,
                 contentDescription = "Event Flyer",
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier.fillMaxSize(),
             )
         } else {
             Text("No Flyer Available")

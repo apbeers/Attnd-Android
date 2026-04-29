@@ -13,7 +13,7 @@ object FormatUtils {
         return when {
             miles < 0.1 -> "Very close"
             miles < 1.0 -> String.format(Locale.US, "%.1f miles", miles)
-            else -> "${Math.round(miles)} miles"
+            else -> "${kotlin.math.round(miles).toLong()} miles"
         }
     }
 
@@ -21,8 +21,8 @@ object FormatUtils {
         return when {
             hours < 0 -> "Ended"
             hours < 1 -> "Starting soon"
-            hours < 24 -> "${Math.round(hours)}h left"
-            else -> "${Math.round(hours / 24)}d left"
+            hours < 24 -> "${kotlin.math.round(hours).toLong()}h left"
+            else -> "${kotlin.math.round(hours / 24).toLong()}d left"
         }
     }
 
@@ -38,13 +38,5 @@ object FormatUtils {
         } catch (_: Exception) {
             "Just now"
         }
-    }
-
-    /**
-     * Returns the minutes elapsed since the given timestamp.
-     */
-    fun getMinutesElapsed(timestamp: Long): Long {
-        val now = System.currentTimeMillis()
-        return (now - timestamp) / 1000 / 60
     }
 }

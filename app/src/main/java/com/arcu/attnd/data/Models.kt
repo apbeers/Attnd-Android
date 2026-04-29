@@ -4,7 +4,7 @@ import com.google.gson.annotations.SerializedName
 
 data class EventResponse(
     val count: Int,
-    val results: List<NearbyEvent>
+    val results: List<NearbyEvent>,
 )
 
 data class NearbyEvent(

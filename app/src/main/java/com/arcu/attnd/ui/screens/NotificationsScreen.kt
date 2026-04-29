@@ -26,7 +26,7 @@ fun NotificationsScreen(
     isRefreshing: Boolean,
     error: String?,
     onRefresh: () -> Unit,
-    lastRefreshedAt: Long?
+    lastRefreshedAt: Long?,
 ) {
     val state = rememberPullToRefreshState()
     var currentTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -41,7 +41,7 @@ fun NotificationsScreen(
     
     // Logic for "minutes since last refreshed" header
     val showRefreshHeader = remember(lastRefreshedAt, currentTime) {
-        lastRefreshedAt?.let { (currentTime - it) / 1000 / 60 >= 5 } ?: false
+        lastRefreshedAt?.let { (((currentTime - it) / 1000) / 60) >= 5 } ?: false
     }
     val minutesElapsed = remember(lastRefreshedAt, currentTime) {
         lastRefreshedAt?.let { (currentTime - it) / 1000 / 60 } ?: 0L
@@ -120,8 +120,8 @@ fun NotificationsScreen(
 @Composable
 fun NotificationsScreenPreview() {
     val dummyNotifications = listOf(
-        AppNotification(1, "Gate B is now open", "Head to Gate B for faster entry.", "2026-06-15T17:45:00+00:00", true),
-        AppNotification(2, "Welcome to the Fair!", "Enjoy the art and food.", "2026-06-15T17:00:00+00:00", true)
+        AppNotification(1, "Gate B is now open", "Head to Gate B for faster entry.", "2026-06-15T17:45:00+00:00", sent = true),
+        AppNotification(2, "Welcome to the Fair!", "Enjoy the art and food.", "2026-06-15T17:00:00+00:00", sent = true)
     )
     AttndTheme {
         NotificationsScreen(

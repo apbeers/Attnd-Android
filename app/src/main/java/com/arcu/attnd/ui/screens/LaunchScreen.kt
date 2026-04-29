@@ -59,7 +59,7 @@ fun LaunchScreen(
     val fusedClient = remember { LocationServices.getFusedLocationProviderClient(context) }
 
     var eventCode by remember { mutableStateOf("") }
-    var isSearching by remember { mutableStateOf(false) }
+    var isSearching by remember { mutableStateOf(value = false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var isLoadingNearby by remember { mutableStateOf(false) }
     var nearbyEvents by remember { mutableStateOf<List<NearbyEvent>>(emptyList()) }
@@ -114,7 +114,8 @@ fun LaunchScreen(
     // Auto-load nearby events if permission is already granted
     LaunchedEffect(Unit) {
         val fineGranted = ContextCompat.checkSelfPermission(
-            context, Manifest.permission.ACCESS_FINE_LOCATION
+            context,
+            Manifest.permission.ACCESS_FINE_LOCATION,
         ) == PackageManager.PERMISSION_GRANTED
         val coarseGranted = ContextCompat.checkSelfPermission(
             context, Manifest.permission.ACCESS_COARSE_LOCATION
@@ -127,10 +128,10 @@ fun LaunchScreen(
     }
 
     val locationPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
+        ActivityResultContracts.RequestMultiplePermissions(),
     ) { perms ->
-        val granted = perms[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
-                perms[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+        val granted = (perms[Manifest.permission.ACCESS_FINE_LOCATION] == true) ||
+                (perms[Manifest.permission.ACCESS_COARSE_LOCATION] == true)
         if (granted) {
             onLocationEnabled()
             loadNearbyEvents()
@@ -151,7 +152,8 @@ fun LaunchScreen(
 
     val onFindNearbyTapped = {
         val fineGranted = ContextCompat.checkSelfPermission(
-            context, Manifest.permission.ACCESS_FINE_LOCATION
+            context,
+            Manifest.permission.ACCESS_FINE_LOCATION,
         ) == PackageManager.PERMISSION_GRANTED
         val coarseGranted = ContextCompat.checkSelfPermission(
             context, Manifest.permission.ACCESS_COARSE_LOCATION
@@ -173,11 +175,10 @@ fun LaunchScreen(
     if (showScanner) {
         QRScannerDialog(
             onDismiss = { showScanner = false },
-            onCodeScanned = { code ->
-                showScanner = false
-                joinEvent(code)
-            }
-        )
+        ) { code ->
+            showScanner = false
+            joinEvent(code)
+        }
     }
 
     Column(
@@ -360,8 +361,9 @@ fun QRScannerView(onCodeScanned: (String) -> Unit) {
     AndroidView(
         factory = { ctx ->
             val previewView = PreviewView(ctx)
-            cameraProviderFuture.addListener({
-                val cameraProvider = cameraProviderFuture.get()
+            cameraProviderFuture.addListener(
+                {
+                    val cameraProvider = cameraProviderFuture.get()
                 
                 val preview = Preview.Builder().build().also {
                     it.surfaceProvider = previewView.surfaceProvider

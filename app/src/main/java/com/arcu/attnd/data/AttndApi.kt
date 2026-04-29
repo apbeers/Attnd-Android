@@ -10,7 +10,7 @@ interface AttndApi {
     @GET("api/v1/events/nearby_events/{lat}/{lng}/")
     suspend fun getNearbyEvents(
         @Path("lat") lat: Double,
-        @Path("lng") lng: Double
+        @Path("lng") lng: Double,
     ): EventResponse
 
     @GET("api/v1/events/lookup/")
