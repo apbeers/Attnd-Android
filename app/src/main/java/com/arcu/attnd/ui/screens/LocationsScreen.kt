@@ -90,6 +90,19 @@ fun LocationDetailScreen(eventId: Int, locationId: Int) {
         }
     }
 
+    LocationDetailContent(
+        location = location,
+        isLoading = isLoading,
+        error = error
+    )
+}
+
+@Composable
+fun LocationDetailContent(
+    location: EventLocation?,
+    isLoading: Boolean,
+    error: String?
+) {
     Column(modifier = Modifier.padding(16.dp)) {
         if (isLoading) {
             CircularProgressIndicator()
@@ -115,7 +128,7 @@ fun LocationDetailScreen(eventId: Int, locationId: Int) {
                 Text(it.address, style = MaterialTheme.typography.bodyMedium)
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(it.description, style = MaterialTheme.typography.bodyLarge)
-                
+
                 it.website?.let { url ->
                     Spacer(modifier = Modifier.height(16.dp))
                     Text("Website: $url", color = MaterialTheme.colorScheme.primary)
@@ -140,7 +153,16 @@ fun LocationsScreenPreview() {
 @Preview(showBackground = true)
 @Composable
 fun LocationDetailScreenPreview() {
+    val dummyLocation = EventLocation(
+        1, "Main Stage", "Live Music",
+        "The big stage where all the magic happens.",
+        "https://example.com", null, 0.0, 0.0, "123 Main St"
+    )
     AttndTheme {
-        LocationDetailScreen(eventId = 1, locationId = 42)
+        LocationDetailContent(
+            location = dummyLocation,
+            isLoading = false,
+            error = null
+        )
     }
 }

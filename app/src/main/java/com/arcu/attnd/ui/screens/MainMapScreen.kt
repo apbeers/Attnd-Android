@@ -5,6 +5,7 @@ import android.annotation.SuppressLint
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
@@ -120,30 +121,53 @@ fun MainMapScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        GoogleMap(
-            modifier = Modifier.fillMaxSize(),
-            cameraPositionState = cameraPositionState,
-            contentPadding = contentPadding,
-            properties = MapProperties(
-                isMyLocationEnabled = locationEnabled,
-                mapStyleOptions = mapStyleOptions
-            ),
-            uiSettings = MapUiSettings(
-                myLocationButtonEnabled = false,
-                zoomControlsEnabled = false
-            )
-        ) {
-            locations.forEach { location ->
-                Marker(
-                    state = remember(location.id) {
-                        MarkerState(position = LatLng(location.latitude, location.longitude))
-                    },
-                    title = location.name,
-                    snippet = location.snippet,
-                    onInfoWindowClick = {
-                        onLocationClick(location.id)
-                    }
+        if (androidx.compose.ui.platform.LocalInspectionMode.current) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        Icons.Default.Place,
+                        contentDescription = null,
+                        modifier = Modifier.size(48.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        "Map Preview Placeholder",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        } else {
+            GoogleMap(
+                modifier = Modifier.fillMaxSize(),
+                cameraPositionState = cameraPositionState,
+                contentPadding = contentPadding,
+                properties = MapProperties(
+                    isMyLocationEnabled = locationEnabled,
+                    mapStyleOptions = mapStyleOptions
+                ),
+                uiSettings = MapUiSettings(
+                    myLocationButtonEnabled = false,
+                    zoomControlsEnabled = false
                 )
+            ) {
+                locations.forEach { location ->
+                    Marker(
+                        state = remember(location.id) {
+                            MarkerState(position = LatLng(location.latitude, location.longitude))
+                        },
+                        title = location.name,
+                        snippet = location.snippet,
+                        onInfoWindowClick = {
+                            onLocationClick(location.id)
+                        }
+                    )
+                }
             }
         }
 

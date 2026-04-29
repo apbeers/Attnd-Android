@@ -14,6 +14,7 @@ import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -355,8 +356,23 @@ fun QRScannerDialog(onDismiss: () -> Unit, onCodeScanned: (String) -> Unit) {
 fun QRScannerView(onCodeScanned: (String) -> Unit) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    
+    if (androidx.compose.ui.platform.LocalInspectionMode.current) {
+        // Preview mode placeholder
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center
+        ) {
+            Text("Camera Preview Placeholder")
+        }
+        return
+    }
+
     val cameraProviderFuture = remember { ProcessCameraProvider.getInstance(context) }
     val executor = remember { Executors.newSingleThreadExecutor() }
+// ...
 
     AndroidView(
         factory = { ctx ->
@@ -435,5 +451,13 @@ fun QRScannerView(onCodeScanned: (String) -> Unit) {
 fun LaunchScreenPreview() {
     AttndTheme {
         LaunchScreen(deviceId = "test-id", onEventJoined = {})
+    }
+}
+
+@ComposePreview(showBackground = true)
+@Composable
+fun QRScannerDialogPreview() {
+    AttndTheme {
+        QRScannerDialog(onDismiss = {}, onCodeScanned = {})
     }
 }

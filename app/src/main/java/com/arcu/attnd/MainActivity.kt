@@ -23,6 +23,8 @@ import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavType
 import androidx.navigation.compose.*
 import androidx.navigation.navArgument
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.navigation.compose.rememberNavController
 import com.arcu.attnd.data.*
 import com.arcu.attnd.data.prefs.DevicePrefs
 import com.arcu.attnd.ui.screens.*
@@ -318,33 +320,54 @@ fun AppScaffold(
     )
     Scaffold(
         bottomBar = {
-            NavigationBar {
-                val navBackStackEntry by navController.currentBackStackEntryAsState()
-                val currentDestination = navBackStackEntry?.destination
-                items.forEach { screen ->
-                    val isSelected = currentDestination?.hierarchy?.any { it.route == screen.route } == true
-                    NavigationBarItem(
-                        icon = { Icon(screen.icon!!, contentDescription = null) },
-                        label = { Text(screen.label) },
-                        selected = isSelected,
-                        onClick = {
-                            if (isSelected) {
-                                onTabReselected(screen)
-                            } else {
-                                navController.navigate(screen.route) {
-                                    popUpTo(navController.graph.findStartDestination().id) {
-                                        saveState = true
-                                    }
-                                    launchSingleTop = true
-                                    restoreState = true
-                                }
-                            }
-                        }
-                    )
-                }
-            }
+            BottomNavigationBar(navController, items, onTabReselected)
         }
     ) { innerPadding ->
         content(innerPadding)
+    }
+}
+
+@Composable
+private fun BottomNavigationBar(
+    navController: androidx.navigation.NavHostController,
+    items: List<Screen>,
+    onTabReselected: (Screen) -> Unit
+) {
+    NavigationBar {
+        val navBackStackEntry by navController.currentBackStackEntryAsState()
+        val currentDestination = navBackStackEntry?.destination
+        items.forEach { screen ->
+            val isSelected = currentDestination?.hierarchy?.any { it.route == screen.route } == true
+            NavigationBarItem(
+                icon = { Icon(screen.icon!!, contentDescription = null) },
+                label = { Text(screen.label) },
+                selected = isSelected,
+                onClick = {
+                    if (isSelected) {
+                        onTabReselected(screen)
+                    } else {
+                        navController.navigate(screen.route) {
+                            popUpTo(navController.graph.findStartDestination().id) {
+                                saveState = true
+                            }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    }
+                }
+            )
+        }
+    }
+}
+
+@Preview(showBackground = true)
+@Composable
+fun AppScaffoldPreview() {
+    AttndTheme {
+        AppScaffold(navController = rememberNavController()) { innerPadding ->
+            Box(modifier = Modifier.padding(innerPadding)) {
+                Text("Content Area")
+            }
+        }
     }
 }
