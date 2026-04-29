@@ -29,6 +29,7 @@ android {
         }
 
         buildConfigField "String", "ATTND_API_KEY", "\"ce23b0d41e71285582fb42cebf48d416b4161c12f9b29825a99f9a4b34368ade\""
+        buildConfigField "String", "MAPS_API_KEY", "\"AIzaSyD5d9fk5-uONbun8VkOGHDIRGcJ_Pvqczc\""
     }
 
     signingConfigs {
