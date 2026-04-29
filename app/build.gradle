@@ -28,6 +28,8 @@ android {
             useSupportLibrary = true
         }
 
+        resConfigs "en"
+
         Properties localProperties = new Properties()
         def localPropertiesFile = rootProject.file('local.properties')
         if (localPropertiesFile.exists()) {
@@ -51,11 +53,19 @@ android {
                 storePassword = props.getProperty("STORE_PASSWORD")
                 keyAlias = props.getProperty("KEY_ALIAS")
                 keyPassword = props.getProperty("KEY_PASSWORD")
+
+                v2SigningEnabled true
+                v3SigningEnabled true
+                v4SigningEnabled true
             }
         }
     }
 
     buildTypes {
+        debug {
+            applicationIdSuffix ".debug"
+            versionNameSuffix "-debug"
+        }
         release {
             signingConfig = signingConfigs.getByName("release")
             minifyEnabled = true
@@ -84,6 +94,18 @@ android {
     packaging {
         resources {
             excludes += '/META-INF/{AL2.0,LGPL2.1}'
+        }
+    }
+
+    bundle {
+        language {
+            enableSplit = true
+        }
+        density {
+            enableSplit = true
+        }
+        abi {
+            enableSplit = true
         }
     }
 }

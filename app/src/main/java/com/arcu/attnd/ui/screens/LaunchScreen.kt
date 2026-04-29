@@ -372,7 +372,12 @@ fun QRScannerView(onCodeScanned: (String) -> Unit) {
 
     val cameraProviderFuture = remember { ProcessCameraProvider.getInstance(context) }
     val executor = remember { Executors.newSingleThreadExecutor() }
-// ...
+
+    DisposableEffect(executor) {
+        onDispose {
+            executor.shutdown()
+        }
+    }
 
     AndroidView(
         factory = { ctx ->
