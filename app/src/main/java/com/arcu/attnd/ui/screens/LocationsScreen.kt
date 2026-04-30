@@ -29,6 +29,7 @@ import com.arcu.attnd.data.NetworkModule
 import com.arcu.attnd.data.ScheduledItem
 import com.arcu.attnd.ui.theme.AttndTheme
 import com.arcu.attnd.util.FormatUtils
+import kotlinx.coroutines.delay
 
 @Composable
 fun LocationsScreen(
@@ -113,6 +114,12 @@ fun LocationDetailContent(
     error: String?
 ) {
     val context = LocalContext.current
+
+    // Ticker: increments every 30 s so countdown labels update live.
+    var tick by remember { mutableIntStateOf(0) }
+    LaunchedEffect(Unit) {
+        while (true) { delay(30_000); tick++ }
+    }
 
     Column(
         modifier = Modifier
@@ -212,7 +219,7 @@ fun LocationDetailContent(
                         Spacer(modifier = Modifier.height(8.dp))
 
                         loc.scheduledItems.forEach { item ->
-                            ScheduleItemInDetail(item)
+                            ScheduleItemInDetail(item, tick)
                             Spacer(modifier = Modifier.height(12.dp))
                         }
                     }
@@ -223,8 +230,8 @@ fun LocationDetailContent(
 }
 
 @Composable
-private fun ScheduleItemInDetail(item: ScheduledItem) {
-    val countdown = remember(item.startTime) { FormatUtils.startsInText(item.startTime) }
+private fun ScheduleItemInDetail(item: ScheduledItem, tick: Int) {
+    val countdown = remember(item.startTime, tick) { FormatUtils.startsInText(item.startTime) }
     Column {
         Row(
             horizontalArrangement = Arrangement.SpaceBetween,

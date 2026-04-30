@@ -30,6 +30,7 @@ import com.arcu.attnd.data.*
 import com.arcu.attnd.data.prefs.DevicePrefs
 import com.arcu.attnd.ui.screens.*
 import com.arcu.attnd.ui.theme.AttndTheme
+import com.arcu.attnd.util.integrity.AttestationManager
 import com.google.android.gms.maps.model.CameraPosition
 import com.google.android.gms.maps.model.LatLng
 import com.google.maps.android.compose.rememberCameraPositionState
@@ -39,6 +40,14 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         super.onCreate(savedInstanceState)
+
+        // Initialize attestation and networking before any API calls.
+        // AttestationManager.warmup() kicks off Play Integrity in the background
+        // so the JWT is ready before the first real request lands.
+        AttestationManager.init(this)
+        NetworkModule.init(this)
+        AttestationManager.warmup()
+
         enableEdgeToEdge()
         setContent {
             AttndTheme {

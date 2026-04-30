@@ -17,6 +17,7 @@ import com.arcu.attnd.data.EventLocation
 import com.arcu.attnd.data.ScheduledItem
 import com.arcu.attnd.ui.theme.AttndTheme
 import com.arcu.attnd.util.FormatUtils
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -33,7 +34,13 @@ fun ScheduleScreen(
     var selectedLocationId by remember { mutableStateOf<Int?>(null) }
     var filterMenuExpanded by remember { mutableStateOf(false) }
 
-    val filteredItems = remember(items, hideEnded, selectedLocationId) {
+    // Ticker: increments every 30 s so countdown labels re-compute without a refresh.
+    var tick by remember { mutableIntStateOf(0) }
+    LaunchedEffect(Unit) {
+        while (true) { delay(30_000); tick++ }
+    }
+
+    val filteredItems = remember(items, hideEnded, selectedLocationId, tick) {
         var result = items
         if (hideEnded) {
             result = result.filter { !FormatUtils.hasEnded(it.startTime) }
@@ -153,6 +160,7 @@ fun ScheduleScreen(
                             ScheduleItemRow(
                                 item = item,
                                 showLocation = selectedLocationId == null,
+                                tick = tick,
                                 onClick = { onItemClick(item.locationId) }
                             )
                             HorizontalDivider()
@@ -168,9 +176,10 @@ fun ScheduleScreen(
 private fun ScheduleItemRow(
     item: ScheduledItem,
     showLocation: Boolean,
+    tick: Int,
     onClick: () -> Unit
 ) {
-    val countdown = remember(item.startTime) { FormatUtils.startsInText(item.startTime) }
+    val countdown = remember(item.startTime, tick) { FormatUtils.startsInText(item.startTime) }
 
     ListItem(
         headlineContent = {
