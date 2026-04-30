@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Place
@@ -57,6 +58,7 @@ sealed class Screen(val route: String, val label: String, val icon: androidx.com
     object Map : Screen("map", "Map", Icons.Default.Place)
     object Locations : Screen("locations", "Locations", Icons.AutoMirrored.Filled.List)
     object LocationDetail : Screen("location_detail/{id}", "Detail")
+    object Schedule : Screen("schedule", "Schedule", Icons.Default.CalendarMonth)
     object Flyer : Screen("flyer", "Flyer", Icons.Default.Info)
     object Notifications : Screen("notifications", "Notifications", Icons.Default.Notifications)
     object Options : Screen("options", "Options", Icons.Default.Settings)
@@ -229,6 +231,52 @@ fun MainNavigation() {
             }
         }
 
+        composable(Screen.Schedule.route) {
+            var scheduledItems by remember { mutableStateOf<List<com.arcu.attnd.data.ScheduledItem>>(emptyList()) }
+            var locations by remember { mutableStateOf<List<com.arcu.attnd.data.EventLocation>>(emptyList()) }
+            var isLoading by remember { mutableStateOf(true) }
+            var isRefreshing by remember { mutableStateOf(false) }
+            var error by remember { mutableStateOf<String?>(null) }
+            val scope = rememberCoroutineScope()
+
+            fun fetchSchedule(refresh: Boolean = false) {
+                val eventId = currentEvent?.id ?: return
+                if (refresh) isRefreshing = true else isLoading = true
+                scope.launch {
+                    try {
+                        val scheduleResp = NetworkModule.api.getSchedule(eventId)
+                        scheduledItems = scheduleResp.results
+                        val locResp = NetworkModule.api.getLocations(eventId)
+                        locations = locResp.results
+                        error = null
+                    } catch (e: Exception) {
+                        error = e.message
+                    } finally {
+                        isLoading = false
+                        isRefreshing = false
+                    }
+                }
+            }
+
+            LaunchedEffect(currentEvent?.id) { fetchSchedule() }
+
+            AppScaffold(navController) { innerPadding ->
+                Surface(modifier = Modifier.padding(innerPadding)) {
+                    ScheduleScreen(
+                        items = scheduledItems,
+                        locations = locations,
+                        isLoading = isLoading,
+                        isRefreshing = isRefreshing,
+                        error = error,
+                        onRefresh = { fetchSchedule(refresh = true) },
+                        onItemClick = { locId ->
+                            navController.navigate("location_detail/$locId")
+                        }
+                    )
+                }
+            }
+        }
+
         composable(Screen.Flyer.route) {
             AppScaffold(navController) { innerPadding ->
                 Surface(modifier = Modifier.padding(innerPadding)) {
@@ -314,7 +362,7 @@ fun AppScaffold(
     val items = listOf(
         Screen.Map,
         Screen.Locations,
-        Screen.Flyer,
+        Screen.Schedule,
         Screen.Notifications,
         Screen.Options
     )

@@ -31,6 +31,9 @@ interface AttndApi {
         @Path("location_id") locationId: Int
     ): EventLocation
 
+    @GET("api/v1/events/{event_id}/schedule/")
+    suspend fun getSchedule(@Path("event_id") eventId: Int): ScheduleResponse
+
     @GET("api/v1/events/{event_id}/notifications/")
     suspend fun getNotifications(@Path("event_id") eventId: Int): NotificationResponse
 

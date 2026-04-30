@@ -40,7 +40,22 @@ data class EventLocation(
     @SerializedName("image_url") val imageUrl: String?,
     val latitude: Double,
     val longitude: Double,
-    val address: String
+    val address: String,
+    @SerializedName("scheduled_items") val scheduledItems: List<ScheduledItem> = emptyList()
+)
+
+data class ScheduledItem(
+    val id: Int,
+    val name: String,
+    val description: String,
+    @SerializedName("start_time") val startTime: String,
+    @SerializedName("location_id") val locationId: Int,
+    @SerializedName("location_name") val locationName: String
+)
+
+data class ScheduleResponse(
+    val count: Int,
+    val results: List<ScheduledItem>
 )
 
 data class NotificationResponse(

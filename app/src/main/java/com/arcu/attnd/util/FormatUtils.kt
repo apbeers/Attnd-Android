@@ -1,5 +1,7 @@
 package com.arcu.attnd.util
 
+import java.time.Duration
+import java.time.LocalDate
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.time.ZoneId
@@ -38,5 +40,53 @@ object FormatUtils {
         } catch (_: Exception) {
             "Just now"
         }
+    }
+
+    /**
+     * Formats an ISO 8601 string to "h:mm a" (today) or "EEE h:mm a" (other days)
+     * in the device's local timezone.
+     */
+    fun formatScheduleTime(isoString: String): String {
+        return try {
+            val zdt = ZonedDateTime.parse(isoString, isoFormatter)
+            val localZdt = zdt.withZoneSameInstant(ZoneId.systemDefault())
+            val today = LocalDate.now(ZoneId.systemDefault())
+            val pattern = if (localZdt.toLocalDate() == today) "h:mm a" else "EEE h:mm a"
+            localZdt.format(DateTimeFormatter.ofPattern(pattern, Locale.US))
+        } catch (_: Exception) {
+            isoString
+        }
+    }
+
+    /**
+     * Returns "Starts in Xh Ym" for future items, null if already started.
+     * Items started within the last hour are still shown (grace period).
+     */
+    fun startsInText(isoString: String): String? {
+        return try {
+            val zdt = ZonedDateTime.parse(isoString, isoFormatter)
+            val secondsUntil = Duration.between(ZonedDateTime.now(), zdt).seconds
+            if (secondsUntil <= 0) return null
+            val totalMinutes = (secondsUntil / 60).toInt()
+            if (totalMinutes < 1) return "Starting now"
+            val hours = totalMinutes / 60
+            val minutes = totalMinutes % 60
+            when {
+                hours == 0 -> "Starts in ${minutes}m"
+                minutes == 0 -> "Starts in ${hours}h"
+                else -> "Starts in ${hours}h ${minutes}m"
+            }
+        } catch (_: Exception) { null }
+    }
+
+    /**
+     * Returns true if this ISO 8601 datetime started more than [graceMinutes] ago.
+     */
+    fun hasEnded(isoString: String, graceMinutes: Long = 60): Boolean {
+        return try {
+            val zdt = ZonedDateTime.parse(isoString, isoFormatter)
+            val secondsUntil = Duration.between(ZonedDateTime.now(), zdt).seconds
+            secondsUntil < -(graceMinutes * 60)
+        } catch (_: Exception) { false }
     }
 }
