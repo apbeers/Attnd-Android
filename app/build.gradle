@@ -41,6 +41,8 @@ android {
 
         buildConfigField "String", "ATTND_API_KEY", "\"$attndKey\""
         buildConfigField "String", "MAPS_API_KEY", "\"$mapsKey\""
+
+        manifestPlaceholders = [MAPS_API_KEY: mapsKey]
     }
 
     signingConfigs {
