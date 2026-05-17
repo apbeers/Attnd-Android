@@ -5,14 +5,14 @@
 set -e
 cd "$(dirname "$0")/.."
 
-# Use Android Studio's bundled JDK if no system Java is found
-if ! command -v java &>/dev/null; then
-  AS_JDK="$(ls -d /Applications/Android\ Studio.app/Contents/jbr/Contents/Home 2>/dev/null || true)"
-  if [ -n "$AS_JDK" ]; then
+# Ensure JAVA_HOME is set (prefer Android Studio's bundled JDK on macOS)
+if [ -z "$JAVA_HOME" ] || ! [ -x "$JAVA_HOME/bin/java" ]; then
+  AS_JDK="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
+  if [ -d "$AS_JDK" ]; then
     export JAVA_HOME="$AS_JDK"
     export PATH="$JAVA_HOME/bin:$PATH"
     echo "Using Android Studio JDK: $JAVA_HOME"
-  else
+  elif ! command -v java &>/dev/null; then
     echo "❌ No Java found. Install Android Studio or a JDK from https://www.java.com"
     read -n 1
     exit 1
