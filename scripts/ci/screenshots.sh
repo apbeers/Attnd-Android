@@ -53,13 +53,38 @@ if [ -n "${CI:-}" ] && [ -e /dev/kvm ]; then
     | sudo tee /etc/udev/rules.d/99-kvm4all.rules > /dev/null
   sudo udevadm control --reload-rules
   sudo udevadm trigger --name-match=kvm
+  sudo udevadm settle || true
+  # The udev trigger can lag behind; set the mode directly as well.
+  sudo chmod 666 /dev/kvm || true
 fi
-[ -r /dev/kvm ] && [ -w /dev/kvm ] || echo "warning: /dev/kvm is not usable; the emulator will be very slow" >&2
+ls -l /dev/kvm 2> /dev/null || echo "no /dev/kvm on this runner" >&2
+if ! { [ -r /dev/kvm ] && [ -w /dev/kvm ]; }; then
+  echo "::error::/dev/kvm is not usable: an x86_64 API 37 emulator will not boot in time without KVM" >&2
+  exit 1
+fi
+
+# Shared libraries the emulator links against (even headless with -no-audio) that newer
+# ubuntu-latest images no longer ship, e.g. libpulse.so.0.
+if [ -n "${CI:-}" ] && command -v apt-get > /dev/null; then
+  log "Emulator system libraries"
+  sudo apt-get update -qq > /dev/null || true
+  for pkg in libpulse0 libnss3 libgl1 libxkbfile1 libxcursor1 libxdamage1 libxcomposite1 libxi6 \
+             libxtst6 libxrandr2 libasound2t64; do
+    sudo apt-get install -y -qq --no-install-recommends "$pkg" > /dev/null || echo "warning: could not install $pkg" >&2
+  done
+  endlog
+fi
 
 # ── SDK packages ─────────────────────────────────────────────────────────────────────────
 log "Install emulator and $SYSTEM_IMAGE"
-yes | "$SDKMANAGER" --licenses > /dev/null || true
+yes 2> /dev/null | "$SDKMANAGER" --licenses > /dev/null || true
 "$SDKMANAGER" --install emulator platform-tools "$SYSTEM_IMAGE" > /dev/null
+QEMU="$(dirname "$EMULATOR")/qemu/linux-x86_64/qemu-system-x86_64"
+if [ -x "$QEMU" ]; then
+  missing=$(LD_LIBRARY_PATH="$(dirname "$EMULATOR")/lib64:$(dirname "$EMULATOR")/lib64/qt/lib:${LD_LIBRARY_PATH:-}" \
+    ldd "$QEMU" | awk '/not found/ {print $1}' | sort -u | tr '\n' ' ')
+  [ -z "$missing" ] || { echo "::error::The emulator is missing system libraries: $missing" >&2; exit 1; }
+fi
 "$EMULATOR" -version | head -n 1
 endlog
 
