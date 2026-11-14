@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -68,7 +68,7 @@ jobs:
       ATTND_SERVER: ${{ vars.ATTND_SERVER || 'attnd.app' }}
       MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
