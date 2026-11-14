@@ -96,8 +96,13 @@ for candidate in $DEVICE_PROFILES; do
 done
 [ -n "$PROFILE" ] || { echo "None of [$DEVICE_PROFILES] in: $AVAILABLE" >&2; exit 1; }
 echo "Device profile: $PROFILE"
-echo no | "$AVDMANAGER" create avd --force -n "$AVD_NAME" -k "$SYSTEM_IMAGE" -d "$PROFILE" > /dev/null
-AVD_DIR="${ANDROID_AVD_HOME:-${ANDROID_USER_HOME:-$HOME/.android}/avd}/$AVD_NAME.avd"
+# Pin the AVD location for both avdmanager and the emulator (newer tools otherwise pick their own
+# default, e.g. under ~/.config, and the two can disagree).
+export ANDROID_AVD_HOME="${ANDROID_AVD_HOME:-$HOME/.android/avd}"
+mkdir -p "$ANDROID_AVD_HOME"
+echo no | "$AVDMANAGER" create avd --force -n "$AVD_NAME" -k "$SYSTEM_IMAGE" -d "$PROFILE" -p "$ANDROID_AVD_HOME/$AVD_NAME.avd"
+AVD_DIR="$ANDROID_AVD_HOME/$AVD_NAME.avd"
+[ -f "$AVD_DIR/config.ini" ] || { echo "::error::avdmanager did not create $AVD_DIR/config.ini"; ls -la "$ANDROID_AVD_HOME" "$HOME/.android" 2>&1 || true; exit 1; }
 # Replace (not append) each key: avdmanager already writes some of them, e.g. hw.ramSize.
 set_avd() {
   sed -i "/^$1[[:space:]]*=/d" "$AVD_DIR/config.ini"
