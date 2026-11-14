@@ -161,7 +161,7 @@ CI sets `VERSION_CODE=<run number>000` and `VERSION_NAME=2.0.<run number>` (alwa
 
 | Trigger | What happens |
 |---------|--------------|
-| Any push / PR | `testDebugUnitTest lintDebug assembleDebug` on ubuntu-latest (JDK 21; SDK packages installed by AGP) |
+| Push to `develop`/`main`, or a PR | `testDebugUnitTest lintDebug assembleDebug` on ubuntu-latest (JDK 21; SDK packages installed by AGP) |
 | Push to `develop` | Signed bundle built against the `dev` environment's `ATTND_SERVER` (Heroku dev app) → Play **internal testing** |
 | Push to `main` | Signed bundle against `attnd.app` → Play **production** (staged rollout if `PLAY_ROLLOUT` < 1) |
 

@@ -1,5 +1,5 @@
 # Android pipeline
-#   every push / PR   → unit tests, lint, debug build
+#   push to develop/main, or a PR   → unit tests, lint, debug build
 #   push to develop   → signed bundle → Google Play internal testing (talks to the dev server)
 #   push to main      → signed bundle → Google Play production (rollout set by PLAY_ROLLOUT)
 #
@@ -8,7 +8,7 @@ name: Android
 
 on:
   push:
-    branches: ['**']
+    branches: [main, develop]
   pull_request:
   workflow_dispatch:
 
