@@ -2,7 +2,9 @@
 #   pull request      → unit tests, lint, debug build
 #   push to develop   → one job: unit tests + lint + signed bundle in a single Gradle run (built in
 #                       parallel), then Google Play internal testing (talks to the dev server)
-#   push to main      → the same, then Google Play production (rollout set by PLAY_ROLLOUT)
+#   push to main      → the same, then Google Play production (rollout set by PLAY_ROLLOUT), together with
+#                       the store listing text from store/en-US (same Play edit). Screenshots are separate
+#                       and manual: store-screenshots.yml; text-only updates: store-text.yml.
 # Docs-only commits don't run; a newer push to develop cancels the older run (main never cancels).
 #
 # Setup: see SETUP.md in attnd-web. Uses only GitHub's own actions + Google's APIs.
@@ -11,7 +13,8 @@ name: Android
 on:
   push:
     branches: [main, develop]
-    paths-ignore: ['**/*.md']
+    paths-ignore: ['**/*.md', 'scripts/ci/screenshots.sh', 'scripts/ci/compose_screenshots.py',
+                   'store/en-US/captions.txt', '.github/workflows/store-*.yml']
   pull_request:
     paths-ignore: ['**/*.md']
   workflow_dispatch:
@@ -118,10 +121,13 @@ jobs:
           ROLLOUT: ${{ github.ref == 'refs/heads/main' && (vars.PLAY_ROLLOUT || '1.0') || '1.0' }}
           # The RELEASE_NOTES repo variable overrides store/en-US/release_notes.txt.
           NOTES: ${{ vars.RELEASE_NOTES || '' }}
+          # Production releases also publish the listing text (it is shared by every track, so never on develop).
+          LISTING: ${{ github.ref == 'refs/heads/main' && 'store/en-US' || '' }}
         run: |
           python3 -m pip install --quiet "pyjwt[crypto]"
           python3 scripts/ci/play_publish.py app/build/outputs/bundle/release/app-release.aab \
-            --track "$TRACK" --rollout "$ROLLOUT" --notes "$NOTES" --notes-file store/en-US/release_notes.txt
+            --track "$TRACK" --rollout "$ROLLOUT" --notes "$NOTES" --notes-file store/en-US/release_notes.txt \
+            ${LISTING:+--listing "$LISTING"}
       - name: Remove signing material
         if: always()
         run: rm -f signing.properties "$RUNNER_TEMP/upload.jks" app/google-services.json

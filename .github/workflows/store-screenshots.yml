@@ -1,49 +1,46 @@
-# Google Play store listing
-#   push to develop / main touching store/**, the screenshot scripts or this file, or a manual run
-#     → check the listing text, build the debug app against the dev server, capture screenshots on a
-#       headless emulator (DEMO event), compose the listing images, upload them as an artifact
-#   push to main, or a manual run with "upload" ticked
-#     → also replace the en-US Play listing (title, descriptions, phone screenshots, feature graphic,
-#       icon) and commit the edit. Listing changes are reviewed by Google and go live once approved.
-#
-# Text: store/en-US/*.txt. Scripts: scripts/ci/screenshots.sh, compose_screenshots.py, play_publish.py.
-# Uses only GitHub's own actions + Google's APIs.
-name: Store listing
+# Google Play listing MEDIA: phone screenshots (headless emulator, DEMO event on the dev server),
+# feature graphic and hi-res icon. Slow (~20-30 min), so it never runs with normal builds.
+# Manual only: Actions → "Store screenshots" → Run workflow (or ask Claude to "update the screenshots").
+#   upload off → generate and keep the images as the store-listing artifact (preview)
+#   upload on  → also replace the Play images (text untouched; see store-text.yml) and commit;
+#                Google reviews them, then they are live for everyone
+name: Store screenshots
 
 on:
+  # TEMPORARY while the pipeline is being made to work: pushes to develop that touch it run a preview
+  # (no upload). Remove this push trigger once the screenshots come out right.
   push:
-    branches: [main, develop]
+    branches: [develop]
     paths:
-      - 'store/**'
       - 'scripts/ci/screenshots.sh'
       - 'scripts/ci/compose_screenshots.py'
-      - '.github/workflows/store-listing.yml'
+      - 'store/en-US/captions.txt'
+      - '.github/workflows/store-screenshots.yml'
   workflow_dispatch:
     inputs:
       upload:
-        description: Upload the listing to Google Play (sent for review; goes live once approved)
+        description: Upload the images to Google Play (goes live for everyone after Google's review)
         type: boolean
         default: false
 
 concurrency:
-  group: store-listing-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  group: play-listing-media
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 env:
   GRADLE_OPTS: -Dorg.gradle.daemon=false
+  UPLOAD: ${{ github.event_name == 'workflow_dispatch' && inputs.upload && 'true' || 'false' }}
 
 jobs:
   listing:
-    name: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || inputs.upload) && 'Screenshots & Play listing upload' || 'Screenshots (no upload)' }}
+    name: ${{ (github.event_name == 'workflow_dispatch' && inputs.upload) && 'Screenshots & Play upload' || 'Screenshots (preview, no upload)' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     # Uploads use the production environment (its Play service account); previews use dev.
-    environment: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || inputs.upload) && 'production' || 'dev' }}
-    env:
-      UPLOAD: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || inputs.upload) && 'true' || 'false' }}
+    environment: ${{ (github.event_name == 'workflow_dispatch' && inputs.upload) && 'production' || 'dev' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -98,8 +95,8 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-      - name: Upload the listing to Google Play
+      - name: Upload the images to Google Play
         if: env.UPLOAD == 'true'
         env:
           GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
-        run: python scripts/ci/play_publish.py --listing store/en-US --images build/store
+        run: python scripts/ci/play_publish.py --listing store/en-US --images build/store --images-only

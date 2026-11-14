@@ -193,7 +193,7 @@ CI sets `VERSION_CODE=<run number>000` and `VERSION_NAME=2.0.<run number>` (alwa
 |---------|--------------|
 | Pull request | `testDebugUnitTest lintDebug assembleDebug` on ubuntu-latest (JDK 21; SDK packages installed by AGP) |
 | Push to `develop` | One job: `testDebugUnitTest lintDebug bundleRelease` in a single Gradle run (parallel), signed against the `dev` environment's `ATTND_SERVER` (Heroku dev app) → Play **internal testing** |
-| Push to `main` | The same against `attnd.app` → Play **production** (staged rollout if `PLAY_ROLLOUT` < 1) |
+| Push to `main` | The same against `attnd.app` → Play **production** (staged rollout if `PLAY_ROLLOUT` < 1), plus the store listing text in the same edit |
 
 Docs-only commits (`*.md`) don't run the pipeline; a newer push to `develop` cancels the older run (`main` never cancels). Gradle: parallel, build cache, configuration cache, 4 GB heap (`gradle.properties`). Publishing uses `scripts/ci/play_publish.py` (Play Developer API v3, service-account JWT) — no third-party actions or Gradle plugins. Release builds never contain the static API key. Server host: `ATTND_SERVER` → `BuildConfig.ATTND_SERVER` (default `attnd.app`). Setup checklist: `SETUP.md` in attnd-web.
 
@@ -211,14 +211,24 @@ Docs-only commits (`*.md`) don't run the pipeline; a newer push to `develop` can
 ```
 Unit tests are pure JVM (domain + data/api). The live integration tests run only when `ATTND_API_KEY` is set.
 
-## Store listing (`.github/workflows/store-listing.yml`)
+## Store listing (`store-text.yml`, `store-screenshots.yml`)
 
 The Play listing is generated, not edited in Play Console. Text lives in `store/en-US/`: `title.txt` (≤ 30), `short_description.txt` (≤ 80), `full_description.txt` (≤ 4000), `release_notes.txt` (≤ 500, used by `android.yml` releases unless the `RELEASE_NOTES` repo variable is set) and `captions.txt` (`screen=caption`, one screenshot per line in listing order, 2–8 lines, two short lines of text at most).
 
+Two **manual-only** workflows (they never run with normal builds), plus the release:
+
+| Workflow | What it does | Time |
+|----------|--------------|------|
+| `store-text.yml` ("Store listing text") | Validates `store/en-US` text; with **upload** (default on) replaces the en-US title/descriptions on Play and commits | ~1 min, Linux |
+| `store-screenshots.yml` ("Store screenshots") | Emulator screenshots + feature graphic + icon → `store-listing` artifact; with **upload** (default off) replaces the Play images only | ~20–30 min |
+| `android.yml` on `main` | The production release also publishes the listing text, in the same Play edit | — |
+
+- **When the user asks Claude to "update the store listing / screenshots"**: dispatch the workflow(s) on ref `main` with the GitHub MCP `actions_run_trigger` (`run_workflow`, `workflow_id` `store-text.yml` / `store-screenshots.yml`, inputs `upload: true`), follow the run, download the `store-listing` artifact and show the user the images. Listing and image uploads go live for everyone after Google's review — confirm with the user before uploading if they only asked for a preview. Manual runs need the workflow file on the default branch (`main`).
 - **Title policy** ([Play metadata guidance](https://android-developers.googleblog.com/2021/04/updated-guidance-to-improve-your-app.html)): the store title is "Attnd: Event Maps & Schedules"; the launcher label (`app_name`) stays "Attnd". No emoji, ALL CAPS, ranking/price/promotional words ("best", "#1", "free", "new", "sale", …) or keyword stuffing anywhere in the listing. `play_publish.py --listing store/en-US --check` enforces lengths and these rules offline; run it after editing the text.
 - **Screenshot mode** (debug builds only, `domain/ScreenshotRequest.kt`): `adb shell am start -n com.arcu.attnd.debug/com.arcu.attnd.MainActivity --es attnd_screenshot <launch|map|locations|location|schedule|notifications>` (optional `attnd_screenshot_event`, default `DEMO`; `attnd_screenshot_location`, default "Main Stage"). It joins the event through the normal lookup/join path and shows that screen with no launch screen flash, update banner/screen, Demo pill, offline notice, snackbar or usage counts; the map shot fits every pin without clustering. Keep it working when changing navigation or join.
-- **Pipeline**: push to `develop`/`main` touching `store/**`, `scripts/ci/screenshots.sh`, `scripts/ci/compose_screenshots.py` or the workflow, or a manual run. It builds the debug APK against the dev server (`ATTND_API_KEY` repo secret, `MAPS_API_KEY`), boots a headless `android-37.0;google_apis;x86_64` emulator (Pixel 9 Pro XL profile, KVM, demo-mode status bar at 9:41) and captures `build/screenshots/raw/<screen>.png` (`screenshots.sh`); `compose_screenshots.py` makes 2160×3840 phone screenshots (purple gradient, caption, framed screenshot), the 1024×500 feature graphic and the 512×512 icon (from `drawable/attnd_logo.png`) in `build/store/`, uploaded as the `store-listing` artifact.
-- **Upload** only on pushes to `main` or a manual run with **upload** ticked (environment `production`): `play_publish.py --listing` replaces the en-US text, phone screenshots, feature graphic and icon in one edit, validates and commits it. The commit withdraws anything already in review and resubmits it with the listing; changes go live after Google's review. Use `--not-for-review` if Play requires changes to be sent from the Console (after a rejection).
+- **Screenshot pipeline**: builds the debug APK against the dev server (`ATTND_API_KEY` repo secret, `MAPS_API_KEY`), boots a headless `android-37.0;google_apis;x86_64` emulator (Pixel 9 Pro XL profile, KVM, emulator system libraries such as libpulse installed by the script, demo-mode status bar at 9:41) and captures `build/screenshots/raw/<screen>.png` (`screenshots.sh`); `compose_screenshots.py` makes 2160×3840 phone screenshots (purple gradient, caption, framed screenshot), the 1024×500 feature graphic and the 512×512 icon (from `drawable/attnd_logo.png`) in `build/store/`.
+- **`play_publish.py`**: `--listing DIR` (text), `--images DIR` (+ `--images-only`), or an `.aab` with `--listing` (release + text in one edit). A commit withdraws anything already in review and resubmits it together. Use `--not-for-review` if Play requires changes to be sent from the Console (after a rejection).
+- **Temporary**: `store-screenshots.yml` also runs a preview (no upload) on pushes to `develop` that touch it, while it is being made to work. Remove that push trigger once the screenshots come out right.
 - Python for CI scripts runs in a venv (Pillow, `pyjwt[crypto]`); `__pycache__/` is git-ignored.
 
 ## Release
