@@ -1,0 +1,8 @@
+# One screenshot per line, in listing order: <screen>=<caption> (two short lines at most).
+# Screens: launch, map, locations, location, schedule, notifications (see ScreenshotScreen).
+map=Every stage, vendor and restroom on one map
+schedule=See what's on now and what's next
+location=Details for every spot at the event
+notifications=Updates straight from the organizers
+locations=Find anything at the event fast
+launch=Join by scanning the event's QR code

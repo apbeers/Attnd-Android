@@ -22,6 +22,8 @@ import com.arcu.attnd.domain.Event
 import com.arcu.attnd.domain.EventBundle
 import com.arcu.attnd.domain.JoinLinks
 import com.arcu.attnd.domain.NearbyEvent
+import com.arcu.attnd.domain.ScreenshotRequest
+import com.arcu.attnd.domain.ScreenshotScreen
 import com.arcu.attnd.domain.SupportInfo
 import com.arcu.attnd.domain.Tab
 import com.arcu.attnd.domain.UpdateLevel
@@ -93,6 +95,10 @@ private data class LocalState(
     val recenterRequest: Int = 0,
     val message: String? = null,
     val dismissedUpdateVersion: String? = null,
+    /** Store-screenshot mode (debug builds): see [ScreenshotRequest]. */
+    val screenshot: ScreenshotRequest? = null,
+    /** The screenshot event is still being joined: keep showing the loading screen, not the launch screen. */
+    val screenshotPending: Boolean = false,
 )
 
 class EventViewModel(
@@ -118,6 +124,10 @@ class EventViewModel(
     @Volatile
     private var pendingAppOpen = true
 
+    /** Store-screenshot mode: no usage counts are sent (see [startScreenshot]). */
+    @Volatile
+    private var screenshotMode = false
+
     private val local = MutableStateFlow(
         LocalState(
             notificationsEnabled = prefs.notificationsEnabled,
@@ -127,11 +137,17 @@ class EventViewModel(
     )
 
     val uiState: StateFlow<AppUiState> =
-        combine(repository.bundle, repository.sync, local, repository.appUpdate) { bundle, sync, state, update ->
+        combine(repository.bundle, repository.sync, local, repository.appUpdate) { savedBundle, savedSync, state, savedUpdate ->
+            val screenshot = state.screenshot
+            // Screenshot mode: the screen's layout tweaks, and nothing on top (no update banner or
+            // screen, status pill, offline notice or refresh spinner).
+            val bundle = if (screenshot != null && savedBundle != null) screenshot.present(savedBundle) else savedBundle
+            val update = if (screenshot != null) AppUpdate() else savedUpdate
+            val sync = if (screenshot != null) savedSync.copy(isRefreshing = false, error = null) else savedSync
             val display = bundle?.display
             AppUiState(
                 phase = when {
-                    !state.ready -> AppPhase.LOADING
+                    !state.ready || state.screenshotPending -> AppPhase.LOADING
                     bundle != null -> AppPhase.EVENT
                     else -> AppPhase.LAUNCH
                 },
@@ -146,7 +162,7 @@ class EventViewModel(
                 focusLocationId = state.focusLocationId,
                 focusScheduleItemId = state.focusScheduleItemId,
                 recenterRequest = state.recenterRequest,
-                message = state.message,
+                message = state.message.takeIf { screenshot == null },
                 update = update,
                 showUpdateBanner = update.level == UpdateLevel.AVAILABLE &&
                     update.latestVersion != state.dismissedUpdateVersion,
@@ -173,7 +189,9 @@ class EventViewModel(
                     else bundle.event.id to (if (state.showOptions) UsageMetric.TAB_OPTIONS else state.selectedTab.key)
                 }
                 .distinctUntilChanged()
-                .collect { view -> if (view != null) usage.track(view.first, UsageMetric.TAB_VIEW, view.second) }
+                .collect { view ->
+                    if (view != null && !screenshotMode) usage.track(view.first, UsageMetric.TAB_VIEW, view.second)
+                }
         }
     }
 
@@ -267,6 +285,40 @@ class EventViewModel(
         viewModelScope.launch {
             repository.leave()
             local.update { it.copy(showOptions = false, selectedTab = null, focusLocationId = null) }
+        }
+    }
+
+    /**
+     * Store-screenshot mode (debug builds; `scripts/ci/screenshots.sh`): joins the requested event
+     * through the normal lookup/join path, then shows [ScreenshotRequest.screen]. The loading screen
+     * stays up until then, so the launch screen never flashes; a failed join shows the launch screen
+     * with the error. [ScreenshotScreen.LAUNCH] leaves any joined event instead.
+     */
+    fun startScreenshot(request: ScreenshotRequest) {
+        screenshotMode = true
+        local.update {
+            it.copy(
+                screenshot = request,
+                screenshotPending = true,
+                showOptions = false,
+                message = null,
+                focusLocationId = null,
+            )
+        }
+        viewModelScope.launch {
+            try {
+                startJob.join()
+                if (request.screen == ScreenshotScreen.LAUNCH) {
+                    if (repository.currentEventId != null) repository.leave()
+                    local.update { it.copy(selectedTab = null) }
+                } else {
+                    join(silent = false) { repository.lookup(request.eventCode) }
+                    val location = repository.bundle.value?.let { request.focusLocation(it.locations) }
+                    local.update { it.copy(selectedTab = request.tab, focusLocationId = location?.id) }
+                }
+            } finally {
+                local.update { it.copy(screenshotPending = false) }
+            }
         }
     }
 
@@ -385,6 +437,7 @@ class EventViewModel(
 
     /** Counts [name] for the joined event; does nothing outside an event. */
     private fun track(name: String, detail: String? = null) {
+        if (screenshotMode) return
         val eventId = repository.bundle.value?.event?.id ?: return
         usage.track(eventId, name, detail)
     }

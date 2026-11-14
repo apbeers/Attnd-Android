@@ -116,11 +116,12 @@ jobs:
           GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
           TRACK: ${{ github.ref == 'refs/heads/main' && 'production' || 'internal' }}
           ROLLOUT: ${{ github.ref == 'refs/heads/main' && (vars.PLAY_ROLLOUT || '1.0') || '1.0' }}
-          NOTES: ${{ vars.RELEASE_NOTES || 'Improvements and fixes.' }}
+          # The RELEASE_NOTES repo variable overrides store/en-US/release_notes.txt.
+          NOTES: ${{ vars.RELEASE_NOTES || '' }}
         run: |
           python3 -m pip install --quiet "pyjwt[crypto]"
           python3 scripts/ci/play_publish.py app/build/outputs/bundle/release/app-release.aab \
-            --track "$TRACK" --rollout "$ROLLOUT" --notes "$NOTES"
+            --track "$TRACK" --rollout "$ROLLOUT" --notes "$NOTES" --notes-file store/en-US/release_notes.txt
       - name: Remove signing material
         if: always()
         run: rm -f signing.properties "$RUNNER_TEMP/upload.jks" app/google-services.json

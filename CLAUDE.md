@@ -42,7 +42,7 @@ app/
   build.gradle                    # Reads API keys from local.properties; applies google-services only if app/google-services.json exists
   src/main/java/com/arcu/attnd/
     AttndApplication.kt           # App init (attestation, notification channel) + AppGraph (manual DI: repository, app scope)
-    MainActivity.kt               # Single activity: intents (App Links, notification taps), foreground refresh loop
+    MainActivity.kt               # Single activity: intents (App Links, notification taps, debug screenshot extras), foreground refresh loop
     domain/                       # Pure Kotlin, unit tested — no Android imports
       Models.kt                   #   Event, EventLocation, ScheduleItem, EventNotification, EventBundle, GeoPoint
       DisplayConfig.kt            #   Server-driven `display` object + client defaults
@@ -50,6 +50,7 @@ app/
       ScheduleGrouping.kt         #   timeline / by_day / by_location / now_next, search, ended/now
       LocationGrouping.kt         #   category grouping, filters, mappable pins, bounds
       JoinLinks.kt                #   /join/<code>/ App Links + install-referrer parsing
+      ScreenshotRequest.kt        #   Debug store-screenshot mode: launch extras → screen to show
       UsageAggregator.kt          #   API-005 counts by (name, detail, UTC 5-minute window) + metric names
       SupportInfo.kt              #   API-004 build/device/event details, support code, copy text
     data/
@@ -209,6 +210,16 @@ Docs-only commits (`*.md`) don't run the pipeline; a newer push to `develop` can
 ./gradlew test                 # or ./run_tests.command
 ```
 Unit tests are pure JVM (domain + data/api). The live integration tests run only when `ATTND_API_KEY` is set.
+
+## Store listing (`.github/workflows/store-listing.yml`)
+
+The Play listing is generated, not edited in Play Console. Text lives in `store/en-US/`: `title.txt` (≤ 30), `short_description.txt` (≤ 80), `full_description.txt` (≤ 4000), `release_notes.txt` (≤ 500, used by `android.yml` releases unless the `RELEASE_NOTES` repo variable is set) and `captions.txt` (`screen=caption`, one screenshot per line in listing order, 2–8 lines, two short lines of text at most).
+
+- **Title policy** ([Play metadata guidance](https://android-developers.googleblog.com/2021/04/updated-guidance-to-improve-your-app.html)): the store title is "Attnd: Event Maps & Schedules"; the launcher label (`app_name`) stays "Attnd". No emoji, ALL CAPS, ranking/price/promotional words ("best", "#1", "free", "new", "sale", …) or keyword stuffing anywhere in the listing. `play_publish.py --listing store/en-US --check` enforces lengths and these rules offline; run it after editing the text.
+- **Screenshot mode** (debug builds only, `domain/ScreenshotRequest.kt`): `adb shell am start -n com.arcu.attnd.debug/com.arcu.attnd.MainActivity --es attnd_screenshot <launch|map|locations|location|schedule|notifications>` (optional `attnd_screenshot_event`, default `DEMO`; `attnd_screenshot_location`, default "Main Stage"). It joins the event through the normal lookup/join path and shows that screen with no launch screen flash, update banner/screen, Demo pill, offline notice, snackbar or usage counts; the map shot fits every pin without clustering. Keep it working when changing navigation or join.
+- **Pipeline**: push to `develop`/`main` touching `store/**`, `scripts/ci/screenshots.sh`, `scripts/ci/compose_screenshots.py` or the workflow, or a manual run. It builds the debug APK against the dev server (`ATTND_API_KEY` repo secret, `MAPS_API_KEY`), boots a headless `android-37.0;google_apis;x86_64` emulator (Pixel 9 Pro XL profile, KVM, demo-mode status bar at 9:41) and captures `build/screenshots/raw/<screen>.png` (`screenshots.sh`); `compose_screenshots.py` makes 2160×3840 phone screenshots (purple gradient, caption, framed screenshot), the 1024×500 feature graphic and the 512×512 icon (from `drawable/attnd_logo.png`) in `build/store/`, uploaded as the `store-listing` artifact.
+- **Upload** only on pushes to `main` or a manual run with **upload** ticked (environment `production`): `play_publish.py --listing` replaces the en-US text, phone screenshots, feature graphic and icon in one edit, validates and commits it. The commit withdraws anything already in review and resubmits it with the listing; changes go live after Google's review. Use `--not-for-review` if Play requires changes to be sent from the Console (after a rejection).
+- Python for CI scripts runs in a venv (Pillow, `pyjwt[crypto]`); `__pycache__/` is git-ignored.
 
 ## Release
 

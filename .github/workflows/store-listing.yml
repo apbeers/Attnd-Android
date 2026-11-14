@@ -1,0 +1,105 @@
+# Google Play store listing
+#   push to develop / main touching store/**, the screenshot scripts or this file, or a manual run
+#     → check the listing text, build the debug app against the dev server, capture screenshots on a
+#       headless emulator (DEMO event), compose the listing images, upload them as an artifact
+#   push to main, or a manual run with "upload" ticked
+#     → also replace the en-US Play listing (title, descriptions, phone screenshots, feature graphic,
+#       icon) and commit the edit. Listing changes are reviewed by Google and go live once approved.
+#
+# Text: store/en-US/*.txt. Scripts: scripts/ci/screenshots.sh, compose_screenshots.py, play_publish.py.
+# Uses only GitHub's own actions + Google's APIs.
+name: Store listing
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'store/**'
+      - 'scripts/ci/screenshots.sh'
+      - 'scripts/ci/compose_screenshots.py'
+      - '.github/workflows/store-listing.yml'
+  workflow_dispatch:
+    inputs:
+      upload:
+        description: Upload the listing to Google Play (sent for review; goes live once approved)
+        type: boolean
+        default: false
+
+concurrency:
+  group: store-listing-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+env:
+  GRADLE_OPTS: -Dorg.gradle.daemon=false
+
+jobs:
+  listing:
+    name: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || inputs.upload) && 'Screenshots & Play listing upload' || 'Screenshots (no upload)' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # Uploads use the production environment (its Play service account); previews use dev.
+    environment: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || inputs.upload) && 'production' || 'dev' }}
+    env:
+      UPLOAD: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || inputs.upload) && 'true' || 'false' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Python tools
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet --upgrade pip
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet Pillow "pyjwt[crypto]"
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+
+      - name: Check listing text (lengths and Play metadata policy)
+        run: python scripts/ci/play_publish.py --listing store/en-US --check
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - name: Accept Android SDK licenses
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
+
+      # Screenshot mode is debug-only. The dev server has the always-current DEMO event; the repo
+      # secret ATTND_API_KEY is the dev server's static key. Release builds never contain it.
+      - name: Build the debug app (dev server)
+        env:
+          ATTND_SERVER: ${{ vars.SCREENSHOT_SERVER || 'attnd-dev-7ab893f37020.herokuapp.com' }}
+          ATTND_API_KEY: ${{ secrets.ATTND_API_KEY }}
+          MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
+        run: |
+          if [ -z "$ATTND_API_KEY" ]; then echo "::error::The ATTND_API_KEY secret is needed to join DEMO on $ATTND_SERVER"; exit 1; fi
+          if [ -z "$MAPS_API_KEY" ]; then echo "::warning::MAPS_API_KEY is not set: the map screenshot will have no tiles"; fi
+          ./gradlew assembleDebug
+
+      - name: Capture screenshots on the emulator
+        run: scripts/ci/screenshots.sh app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Compose listing images
+        run: |
+          sudo apt-get install -y --no-install-recommends fonts-dejavu-core > /dev/null || true
+          python scripts/ci/compose_screenshots.py --raw build/screenshots/raw --out build/store
+          python scripts/ci/play_publish.py --listing store/en-US --images build/store --check
+
+      - name: Listing images
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: store-listing
+          path: |
+            build/store/
+            build/screenshots/
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Upload the listing to Google Play
+        if: env.UPLOAD == 'true'
+        env:
+          GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+        run: python scripts/ci/play_publish.py --listing store/en-US --images build/store

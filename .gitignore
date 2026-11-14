@@ -27,3 +27,7 @@ cleanup_locks.command
 # Firebase config (per developer / CI secret) — see CLAUDE.md "Push notifications (FCM)"
 app/google-services.json
 app/src/*/google-services.json
+
+# Python bytecode (scripts/ci)
+__pycache__/
+*.pyc

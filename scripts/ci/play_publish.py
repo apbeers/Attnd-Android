@@ -1,30 +1,73 @@
 #!/usr/bin/env python3
 """
-Upload an Android App Bundle to Google Play with the Play Developer Publishing API (v3).
+Google Play Developer Publishing API (v3) uploads: an app bundle release, or the store listing.
 
+Bundle release:
     play_publish.py app-release.aab --track internal
-    play_publish.py app-release.aab --track production --rollout 0.2 --notes "Improvements"
+    play_publish.py app-release.aab --track production --rollout 0.2 --notes-file store/en-US/release_notes.txt
+
+Store listing (text from store/en-US/*.txt, images from compose_screenshots.py):
+    play_publish.py --listing store/en-US --check                      # validate the text only, offline
+    play_publish.py --listing store/en-US --images build/store         # validate, then upload and commit
+    play_publish.py --listing store/en-US --images build/store --not-for-review   # commit, send from Console
+
+The listing mode replaces the en-US title, short and full description, and every phone screenshot,
+the feature graphic and the hi-res icon (one subdirectory per image type under --images:
+phoneScreenshots/, featureGraphic/, icon/; files are uploaded in name order). Committing sends the
+changes for review; they go live once approved.
 
 Env: GOOGLE_PLAY_SERVICE_ACCOUNT_JSON (service account key JSON), PLAY_PACKAGE (default com.arcu.attnd)
-Requires: PyJWT + cryptography (pip install "pyjwt[crypto]").
+Requires: PyJWT + cryptography (pip install "pyjwt[crypto]"); --check needs only the standard library.
 """
 
 import argparse
 import json
 import os
+import re
+import struct
 import sys
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
-
-import jwt
+from pathlib import Path
 
 API = 'https://androidpublisher.googleapis.com/androidpublisher/v3/applications'
 UPLOAD = 'https://androidpublisher.googleapis.com/upload/androidpublisher/v3/applications'
+LANGUAGE = 'en-US'
+
+# Play Console limits (characters).
+LIMITS = {'title': 30, 'short_description': 80, 'full_description': 4000, 'release_notes': 500}
+
+# Play's metadata policy: no performance, ranking, price or promotion claims. The title also may
+# not use "new" or other promotional words, ALL CAPS (other than the brand) or repeated symbols.
+# https://android-developers.googleblog.com/2021/04/updated-guidance-to-improve-your-app.html
+CLAIMS = [
+    r'best', r'#\s*1', r'no\.?\s*1', r'number\s+one', r'top[\s-]?(rated|ranked|app|free|paid)',
+    r'free', r'sale', r'discount', r'cheap(est)?', r'cash\s*back', r'promo(tion)?', r'bonus',
+    r'million\s+(downloads|users)', r'(app|game)\s+of\s+the\s+year', r"editor'?s\s+choice",
+    r'download\s+now', r'install\s+now', r'limited\s+time',
+]
+TITLE_ONLY = [r'new', r'top', r'hot', r'popular', r'trending', r'download', r'install', r'play\s+now', r'try\s+now']
+CAPS_ALLOWED = {'QR'}
+
+# imageType → (count range, exact size or None, max bytes). Play: screenshots 320–3840 px per side,
+# at most 2:1, ≤ 8 MB, 2–8 per type; feature graphic 1024×500; icon 512×512 ≤ 1 MB.
+IMAGE_TYPES = {
+    'phoneScreenshots': ((2, 8), None, 8 * 1024 * 1024),
+    'featureGraphic': ((1, 1), (1024, 500), 15 * 1024 * 1024),
+    'icon': ((1, 1), (512, 512), 1024 * 1024),
+}
+
+
+class PlayError(Exception):
+    pass
 
 
 def access_token(info):
+    import jwt  # only the network paths need PyJWT
+
     now = int(time.time())
     assertion = jwt.encode({
         'iss': info['client_email'], 'scope': 'https://www.googleapis.com/auth/androidpublisher',
@@ -45,20 +88,118 @@ def call(token, method, url, body=None, raw=None, content_type='application/json
             text = resp.read()
             return json.loads(text) if text else {}
     except urllib.error.HTTPError as err:
-        sys.exit(f'{method} {url.split("?")[0]} failed ({err.code}): {err.read().decode(errors="replace")[:1500]}')
+        raise PlayError(f'{method} {url.split("?")[0]} failed ({err.code}): '
+                        f'{err.read().decode(errors="replace")[:1500]}') from None
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('aab')
-    parser.add_argument('--track', required=True, help='internal, alpha, beta or production')
-    parser.add_argument('--rollout', type=float, default=1.0, help='0 < fraction <= 1 (production staged rollout)')
-    parser.add_argument('--notes', default='')
-    args = parser.parse_args()
+# ── Text checks ─────────────────────────────────────────────────────────────
 
-    info = json.loads(os.environ['GOOGLE_PLAY_SERVICE_ACCOUNT_JSON'])
-    package = os.environ.get('PLAY_PACKAGE', 'com.arcu.attnd')
-    token = access_token(info)
+def read_text(path):
+    """A listing text file without its trailing newline (Play counts every character)."""
+    return Path(path).read_text(encoding='utf-8').strip()
+
+
+def is_emoji(ch):
+    code = ord(ch)
+    return (unicodedata.category(ch) in ('So', 'Cs') or 0x1F000 <= code <= 0x1FAFF
+            or code in (0x200D, 0xFE0F, 0x20E3))
+
+
+def policy_problems(field, text):
+    """Problems with one listing field; empty when it follows the limits and the metadata policy."""
+    problems = []
+    if not text:
+        problems.append('is empty')
+    if len(text) > LIMITS[field]:
+        problems.append(f'is {len(text)} characters (max {LIMITS[field]})')
+    emoji = sorted({ch for ch in text if is_emoji(ch)})
+    if emoji:
+        problems.append(f'contains emoji or symbols: {" ".join(emoji)}')
+    # Release notes ("What's new") only get the length and emoji checks: "crash-free" is fine there.
+    banned = [] if field == 'release_notes' else CLAIMS + (TITLE_ONLY if field == 'title' else [])
+    for pattern in banned:
+        match = re.search(rf'(?<![\w#]){pattern}(?!\w)', text, re.IGNORECASE)
+        if match:
+            problems.append(f'uses "{match.group(0)}" (no ranking, price or promotional claims)')
+    if field == 'title':
+        caps = [w for w in re.findall(r'[A-Za-z]{2,}', text) if w.isupper() and w not in CAPS_ALLOWED]
+        if caps:
+            problems.append(f'uses ALL CAPS: {", ".join(caps)}')
+        if re.search(r'([^\w\s])\1', text) or re.search(r'[^\w\s]\s*[^\w\s]\s*[^\w\s]', text):
+            problems.append('repeats special characters')
+    if field == 'full_description':
+        # Keyword stuffing: one word making up a large share of the text.
+        words = [w.lower() for w in re.findall(r"[A-Za-z][A-Za-z']{3,}", text)]
+        for word in set(words):
+            count = words.count(word)
+            if word != 'attnd' and count > 10 and count > len(words) * 0.05:
+                problems.append(f'repeats "{word}" {count} times (keyword stuffing)')
+    return problems
+
+
+def check_fields(fields):
+    problems = [f'{field}: {p}' for field, text in fields.items() for p in policy_problems(field, text)]
+    if problems:
+        sys.exit('Store listing text does not meet Play policy:\n  ' + '\n  '.join(problems))
+
+
+def load_listing(store_dir):
+    fields = {name: read_text(Path(store_dir) / f'{name}.txt')
+              for name in ('title', 'short_description', 'full_description')}
+    notes = Path(store_dir) / 'release_notes.txt'
+    if notes.exists():
+        fields['release_notes'] = read_text(notes)
+    check_fields(fields)
+    return fields
+
+
+# ── Image checks ────────────────────────────────────────────────────────────
+
+def png_info(path):
+    """(width, height, has_alpha) from a PNG header, or exit if it isn't a PNG."""
+    with open(path, 'rb') as f:
+        head = f.read(26)
+    if head[:8] != b'\x89PNG\r\n\x1a\n' or head[12:16] != b'IHDR':
+        sys.exit(f'{path} is not a PNG')
+    width, height = struct.unpack('>II', head[16:24])
+    return width, height, head[25] in (4, 6)
+
+
+def load_images(images_dir):
+    images = {}
+    problems = []
+    for image_type, ((low, high), size, max_bytes) in IMAGE_TYPES.items():
+        files = sorted((Path(images_dir) / image_type).glob('*.png'))
+        if not low <= len(files) <= high:
+            problems.append(f'{image_type}: {len(files)} PNGs (need {low}–{high})')
+        for path in files:
+            width, height, alpha = png_info(path)
+            if size and (width, height) != size:
+                problems.append(f'{path}: {width}×{height}, need {size[0]}×{size[1]}')
+            if image_type == 'phoneScreenshots':
+                if not (320 <= min(width, height) and max(width, height) <= 3840):
+                    problems.append(f'{path}: each side must be 320–3840 px')
+                if max(width, height) > 2 * min(width, height):
+                    problems.append(f'{path}: aspect ratio over 2:1')
+            if alpha and image_type != 'icon':
+                problems.append(f'{path}: must be 24-bit PNG (no alpha)')
+            if path.stat().st_size > max_bytes:
+                problems.append(f'{path}: {path.stat().st_size} bytes (max {max_bytes})')
+        images[image_type] = files
+    if problems:
+        sys.exit('Store listing images are not ready for Play:\n  ' + '\n  '.join(problems))
+    return images
+
+
+# ── Modes ───────────────────────────────────────────────────────────────────
+
+def publish_bundle(token, package, args):
+    # --notes (e.g. the RELEASE_NOTES repo variable) wins; otherwise the checked-in notes file.
+    notes = args.notes.strip()
+    if not notes and args.notes_file and Path(args.notes_file).exists():
+        notes = read_text(args.notes_file)
+    if notes:
+        check_fields({'release_notes': notes})
 
     edit = call(token, 'POST', f'{API}/{package}/edits', body={})['id']
     with open(args.aab, 'rb') as f:
@@ -71,13 +212,87 @@ def main():
                'status': 'completed' if args.rollout >= 1 else 'inProgress'}
     if args.rollout < 1:
         release['userFraction'] = args.rollout
-    if args.notes:
-        release['releaseNotes'] = [{'language': 'en-US', 'text': args.notes[:500]}]
+    if notes:
+        release['releaseNotes'] = [{'language': LANGUAGE, 'text': notes}]
     call(token, 'PUT', f'{API}/{package}/edits/{edit}/tracks/{args.track}',
          body={'track': args.track, 'releases': [release]})
     call(token, 'POST', f'{API}/{package}/edits/{edit}:commit')
     print(f'Released {version_code} to the {args.track} track'
           + (f' at {args.rollout:.0%} rollout' if args.rollout < 1 else ''))
+
+
+def publish_listing(token, package, fields, images, not_for_review=False):
+    edit = call(token, 'POST', f'{API}/{package}/edits', body={})['id']
+    base = f'{package}/edits/{edit}/listings/{LANGUAGE}'
+    # PATCH, not PUT: only these three fields change (a PUT would also clear the promo video).
+    call(token, 'PATCH', f'{API}/{base}', body={
+        'language': LANGUAGE, 'title': fields['title'],
+        'shortDescription': fields['short_description'], 'fullDescription': fields['full_description']})
+    print(f'Listing text: "{fields["title"]}"')
+    for image_type, files in images.items():
+        deleted = call(token, 'DELETE', f'{API}/{base}/{image_type}').get('deleted', [])
+        for path in files:
+            call(token, 'POST', f'{UPLOAD}/{base}/{image_type}?uploadType=media',
+                 raw=path.read_bytes(), content_type='image/png')
+        print(f'{image_type}: replaced {len(deleted)} with {len(files)}')
+    call(token, 'POST', f'{API}/{package}/edits/{edit}:validate')
+    # Default commit behaviour (changesInReviewBehavior=CANCEL_IN_REVIEW_AND_SUBMIT): anything already
+    # in review is withdrawn and resubmitted together with this listing. --not-for-review instead
+    # leaves the changes in Play Console for a person to send (Play requires that after a rejection).
+    query = '?changesNotSentForReview=true' if not_for_review else ''
+    call(token, 'POST', f'{API}/{package}/edits/{edit}:commit{query}')
+    if not_for_review:
+        print('Committed without sending for review: send the changes from Play Console → Publishing overview.')
+    else:
+        print('Committed: the listing changes are sent for review and go live once approved.')
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('aab', nargs='?', help='app bundle to release (bundle mode)')
+    parser.add_argument('--track', help='internal, alpha, beta or production')
+    parser.add_argument('--rollout', type=float, default=1.0, help='0 < fraction <= 1 (production staged rollout)')
+    parser.add_argument('--notes', default='', help='release notes (overrides --notes-file)')
+    parser.add_argument('--notes-file', help='release notes file used when --notes is empty, e.g. store/en-US/release_notes.txt')
+    parser.add_argument('--listing', metavar='STORE_DIR', help='store listing mode: text files, e.g. store/en-US')
+    parser.add_argument('--images', metavar='DIR', help='listing images: DIR/<imageType>/*.png')
+    parser.add_argument('--check', action='store_true', help='listing mode: validate only, upload nothing')
+    parser.add_argument('--not-for-review', action='store_true',
+                        help="listing mode: commit with changesNotSentForReview (send from Play Console)")
+    args = parser.parse_args()
+
+    if args.listing:
+        fields = load_listing(args.listing)
+        images = load_images(args.images) if args.images else {}
+        if args.check:
+            print(('Store listing text and images pass' if images else 'Store listing text passes') + ' the Play checks.')
+            return
+        if not images:
+            parser.error('--listing needs --images to upload (or --check to validate only)')
+    elif not args.aab or not args.track:
+        parser.error('bundle mode needs an .aab and --track (or use --listing)')
+
+    info = json.loads(os.environ['GOOGLE_PLAY_SERVICE_ACCOUNT_JSON'])
+    package = os.environ.get('PLAY_PACKAGE', 'com.arcu.attnd')
+    token = access_token(info)
+
+    try:
+        if not args.listing:
+            publish_bundle(token, package, args)
+            return
+        # An edit fails to commit when another edit (e.g. a release from android.yml) was committed
+        # meanwhile; the listing upload is idempotent, so start over with a fresh edit.
+        for attempt in range(1, 4):
+            try:
+                publish_listing(token, package, fields, images, args.not_for_review)
+                return
+            except PlayError as err:
+                if attempt == 3:
+                    raise
+                print(f'Attempt {attempt} failed, retrying with a new edit: {err}', file=sys.stderr)
+                time.sleep(30 * attempt)
+    except PlayError as err:
+        sys.exit(str(err))
 
 
 if __name__ == '__main__':

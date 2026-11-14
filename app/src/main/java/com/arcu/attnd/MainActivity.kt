@@ -11,6 +11,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.arcu.attnd.domain.JoinLinks
+import com.arcu.attnd.domain.ScreenshotRequest
 import com.arcu.attnd.push.PushNotifications
 import com.arcu.attnd.ui.AttndApp
 import com.arcu.attnd.ui.EventViewModel
@@ -18,7 +19,7 @@ import kotlinx.coroutines.launch
 
 /**
  * Single activity. All state lives in [EventViewModel] / EventRepository; this class only wires
- * up intents (App Links, notification taps) and the foreground refresh loop.
+ * up intents (App Links, notification taps, debug store-screenshot extras) and the foreground refresh loop.
  */
 class MainActivity : ComponentActivity() {
 
@@ -54,6 +55,18 @@ class MainActivity : ComponentActivity() {
 
     private fun handleIntent(intent: Intent?) {
         intent ?: return
+        // Store screenshots (scripts/ci/screenshots.sh), debug builds only: --es attnd_screenshot <screen>.
+        if (BuildConfig.DEBUG) {
+            val screenshot = ScreenshotRequest.parse(
+                screen = intent.getStringExtra(ScreenshotRequest.EXTRA_SCREEN),
+                eventCode = intent.getStringExtra(ScreenshotRequest.EXTRA_EVENT_CODE),
+                locationName = intent.getStringExtra(ScreenshotRequest.EXTRA_LOCATION),
+            )
+            if (screenshot != null) {
+                viewModel.startScreenshot(screenshot)
+                return
+            }
+        }
         if (PushNotifications.opensNotifications(intent)) {
             viewModel.openNotifications(PushNotifications.notificationId(intent))
             return
