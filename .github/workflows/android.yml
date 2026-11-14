@@ -1,7 +1,9 @@
 # Android pipeline
-#   push to develop/main, or a PR   → unit tests, lint, debug build
-#   push to develop   → signed bundle → Google Play internal testing (talks to the dev server)
-#   push to main      → signed bundle → Google Play production (rollout set by PLAY_ROLLOUT)
+#   pull request      → unit tests, lint, debug build
+#   push to develop   → one job: unit tests + lint + signed bundle in a single Gradle run (built in
+#                       parallel), then Google Play internal testing (talks to the dev server)
+#   push to main      → the same, then Google Play production (rollout set by PLAY_ROLLOUT)
+# Docs-only commits don't run; a newer push to develop cancels the older run (main never cancels).
 #
 # Setup: see SETUP.md in attnd-web. Uses only GitHub's own actions + Google's APIs.
 name: Android
@@ -9,12 +11,14 @@ name: Android
 on:
   push:
     branches: [main, develop]
+    paths-ignore: ['**/*.md']
   pull_request:
+    paths-ignore: ['**/*.md']
   workflow_dispatch:
 
 concurrency:
   group: android-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/develop' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
@@ -25,6 +29,8 @@ env:
 jobs:
   test:
     name: Build & test
+    # Delivery runs the same checks in its own Gradle run, so this job is for pull requests and other refs.
+    if: github.event_name == 'pull_request' || (github.ref != 'refs/heads/develop' && github.ref != 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -57,9 +63,8 @@ jobs:
           retention-days: 7
 
   deliver:
-    name: ${{ github.ref == 'refs/heads/main' && 'Play production' || 'Play internal testing' }}
+    name: ${{ github.ref == 'refs/heads/main' && 'Test, build & Play production' || 'Test, build & Play internal testing' }}
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main')
-    needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 40
     environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'dev' }}
@@ -94,8 +99,18 @@ jobs:
             echo "KEY_PASSWORD=$KEY_PASSWORD"
           } > signing.properties
           if [ -n "$GOOGLE_SERVICES_JSON" ]; then printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json; fi
-      - name: Build signed bundle
-        run: ./gradlew bundleRelease
+      - name: Unit tests, lint and signed bundle
+        run: ./gradlew testDebugUnitTest lintDebug bundleRelease
+      - name: Reports
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-reports
+          path: |
+            app/build/reports/
+            app/build/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Publish to Google Play
         env:
           GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}

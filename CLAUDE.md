@@ -190,11 +190,11 @@ CI sets `VERSION_CODE=<run number>000` and `VERSION_NAME=2.0.<run number>` (alwa
 
 | Trigger | What happens |
 |---------|--------------|
-| Push to `develop`/`main`, or a PR | `testDebugUnitTest lintDebug assembleDebug` on ubuntu-latest (JDK 21; SDK packages installed by AGP) |
-| Push to `develop` | Signed bundle built against the `dev` environment's `ATTND_SERVER` (Heroku dev app) → Play **internal testing** |
-| Push to `main` | Signed bundle against `attnd.app` → Play **production** (staged rollout if `PLAY_ROLLOUT` < 1) |
+| Pull request | `testDebugUnitTest lintDebug assembleDebug` on ubuntu-latest (JDK 21; SDK packages installed by AGP) |
+| Push to `develop` | One job: `testDebugUnitTest lintDebug bundleRelease` in a single Gradle run (parallel), signed against the `dev` environment's `ATTND_SERVER` (Heroku dev app) → Play **internal testing** |
+| Push to `main` | The same against `attnd.app` → Play **production** (staged rollout if `PLAY_ROLLOUT` < 1) |
 
-Publishing uses `scripts/ci/play_publish.py` (Play Developer API v3, service-account JWT) — no third-party actions or Gradle plugins. Release builds never contain the static API key. Server host: `ATTND_SERVER` → `BuildConfig.ATTND_SERVER` (default `attnd.app`). Setup checklist: `SETUP.md` in attnd-web.
+Docs-only commits (`*.md`) don't run the pipeline; a newer push to `develop` cancels the older run (`main` never cancels). Gradle: parallel, build cache, configuration cache, 4 GB heap (`gradle.properties`). Publishing uses `scripts/ci/play_publish.py` (Play Developer API v3, service-account JWT) — no third-party actions or Gradle plugins. Release builds never contain the static API key. Server host: `ATTND_SERVER` → `BuildConfig.ATTND_SERVER` (default `attnd.app`). Setup checklist: `SETUP.md` in attnd-web.
 
 ## Building
 
