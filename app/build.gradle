@@ -150,6 +150,24 @@ android {
     }
 }
 
+// Live API integration tests (src/test/.../integration, against ATTND_IT_SERVER with ATTND_IT_KEY) run
+// only with -PintegrationTests, and then only they run:
+//   ATTND_IT_SERVER=… ATTND_IT_KEY=… ./gradlew testDebugUnitTest -PintegrationTests
+// A plain `./gradlew test` (CI's unit-test run) never includes them. The test JVM inherits the Gradle
+// process's environment at execution time (also with the configuration cache), so the two variables
+// reach the tests without being stored in the build; the tests skip themselves when either is unset.
+def integrationTests = providers.gradleProperty('integrationTests').isPresent()
+tasks.withType(Test).configureEach { test ->
+    if (integrationTests) {
+        test.filter.includeTestsMatching 'com.arcu.attnd.integration.*'
+        // Results depend on a live server, not on inputs Gradle can see: never up to date or from the cache.
+        test.outputs.upToDateWhen { false }
+        test.outputs.cacheIf { false }
+    } else {
+        test.exclude 'com/arcu/attnd/integration/**'
+    }
+}
+
 // Dependency policy: Kotlin/kotlinx, AndroidX/Jetpack and the Google first-party SDKs the app
 // needs. No other third-party libraries (networking is HttpURLConnection, JSON is
 // kotlinx.serialization, images use a small in-house loader).

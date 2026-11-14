@@ -77,7 +77,7 @@ app/
       theme/
   src/test/java/com/arcu/attnd/
     unit/                         # JVM tests: decoding, display defaults, grouping in event tz, HTTP client, usage, support info
-    integration/AttndApiTest.kt   # Live v2 API (skipped when ATTND_API_KEY is not set)
+    integration/                  # Live v2 API tests (AttndApiTest protocol, DemoEventTest DEMO content; LiveServer config), only with -PintegrationTests
 version.properties                # VERSION_CODE — increment for each release
 signing.properties                # (not committed) Keystore config for release signing
 local.properties                  # (not committed) ATTND_API_KEY, MAPS_API_KEY
@@ -198,6 +198,7 @@ CI sets `VERSION_CODE=<run number>000` and `VERSION_NAME=2.0.<run number>` (alwa
 | Pull request | `testDebugUnitTest lintDebug assembleDebug` on ubuntu-latest (JDK 21; SDK packages installed by AGP), then `scripts/ci/lint_summary.py` prints lint's findings and annotates them as warnings (never fails) |
 | Push to `develop` | One job: `testDebugUnitTest lintDebug bundleRelease` in a single Gradle run (parallel), lint summary as for pull requests, signed against the `dev` environment's `ATTND_SERVER` (Heroku dev app) → Play **internal testing** |
 | Push to `main` | The same against `attnd.app` → Play **production** (staged rollout if `PLAY_ROLLOUT` < 1), plus the store listing text in the same edit |
+| Every run (PR, `develop`, `main`) | In parallel: **Integration · dev** (`attnd-dev-7ab893f37020.herokuapp.com`, secret `ATTND_API_KEY`) and **Integration · prod** (`attnd.app`, secret `ATTND_PROD_CI_KEY`, accepted for the DEMO event only): `testDebugUnitTest -PintegrationTests`, then `scripts/ci/junit_summary.py` prints failures to the log and the job summary. Nothing depends on them, so they never gate delivery; prod is `continue-on-error` (a failure is a warning). A missing secret skips that job's tests |
 
 Docs-only commits (`*.md`) don't run the pipeline; a newer push to `develop` cancels the older run (`main` never cancels). Gradle: parallel, build cache, configuration cache, 4 GB heap (`gradle.properties`). Publishing uses `scripts/ci/play_publish.py` (Play Developer API v3, service-account JWT) — no third-party actions or Gradle plugins. Release builds never contain the static API key. Server host: `ATTND_SERVER` → `BuildConfig.ATTND_SERVER` (default `attnd.app`). Setup checklist: `SETUP.md` in attnd-web.
 
@@ -211,9 +212,12 @@ Docs-only commits (`*.md`) don't run the pipeline; a newer push to `develop` can
 ## Running Tests
 
 ```bash
-./gradlew test                 # or ./run_tests.command
+./gradlew test                 # unit tests only; or ./run_tests.command
+ATTND_IT_SERVER=attnd-dev-7ab893f37020.herokuapp.com ATTND_IT_KEY=… \
+  ./gradlew testDebugUnitTest -PintegrationTests   # live API tests only
 ```
-Unit tests are pure JVM (domain + data/api). The live integration tests run only when `ATTND_API_KEY` is set.
+Unit tests are pure JVM (domain + data/api) and never include `com.arcu.attnd.integration` (`app/build.gradle` excludes it unless `-PintegrationTests` is passed, which then runs only that package, never up to date or from the build cache).
+The live tests are pure JVM too and go through the app's real client (`UrlConnectionHttpClient` → `AttndApi` → `ApiMapper`). Server and key come from the environment (`ATTND_IT_SERVER` host or `https://` origin, `ATTND_IT_KEY`; not from `local.properties`/`BuildConfig`); without either they are skipped. They only use the **DEMO** event (attnd-web `load_demo_event`: 18 locations, 51 schedule items, 4 sent notifications, happening now) and cover app-status, lookup/auth (401, re-attest retry), bundle ETag/304/404, join/leave, devices (never `"push_token": ""`), usage (bad entries → 200 with `accepted: 0`), the retired-version 410 and lossless decoding. Device ids are `ci-android-<GITHUB_RUN_ID>-<random>`; every joined device leaves in `@After`. If the DEMO facts change, update the iOS, Android and web suites together.
 
 ## Store listing (`store-text.yml`, `store-screenshots.yml`)
 

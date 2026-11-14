@@ -2,6 +2,9 @@
 #   pull request      → unit tests, lint, debug build
 #   push to develop   → one job: unit tests + lint + signed bundle in a single Gradle run (built in
 #                       parallel), then Google Play internal testing (talks to the dev server)
+#   every run         → also "Integration · dev" and "Integration · prod": the live API tests
+#                       (src/test/.../integration) against each server, in parallel. They never gate
+#                       delivery; the prod job may fail without failing the run (continue-on-error).
 #   push to main      → the same, then Google Play production (rollout set by PLAY_ROLLOUT), together with
 #                       the store listing text from store/en-US (same Play edit). Screenshots are separate
 #                       and manual: store-screenshots.yml; text-only updates: store-text.yml.
@@ -52,9 +55,8 @@ jobs:
         run: if [ -n "$GOOGLE_SERVICES_JSON" ]; then printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json; fi
       - name: Unit tests, lint, debug build
         env:
-          # Live API tests are opt-in: set repo variable LIVE_API_TESTS=true (and LIVE_API_SERVER).
-          ATTND_API_KEY: ${{ vars.LIVE_API_TESTS == 'true' && secrets.ATTND_API_KEY || '' }}
-          ATTND_SERVER: ${{ vars.LIVE_API_SERVER || 'attnd-dev-7ab893f37020.herokuapp.com' }}
+          # Live API tests are the separate "Integration" jobs; this run excludes them (see app/build.gradle).
+          ATTND_SERVER: attnd-dev-7ab893f37020.herokuapp.com
           MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
         run: ./gradlew testDebugUnitTest lintDebug assembleDebug
       - name: Lint warnings
@@ -139,3 +141,63 @@ jobs:
       - name: Remove signing material
         if: always()
         run: rm -f signing.properties "$RUNNER_TEMP/upload.jks" app/google-services.json
+
+  integration:
+    # Live API tests through the app's real client (HttpClient → AttndApi → ApiMapper), pure JVM, against
+    # the DEMO event. Separate from the unit tests above so a server problem never blocks a release: no job
+    # depends on these. Prod uses a CI key the server accepts only for DEMO; until it is set there, that job
+    # fails as a warning (continue-on-error) and the run stays green.
+    name: Integration · ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: ${{ matrix.target == 'prod' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: dev
+            server: attnd-dev-7ab893f37020.herokuapp.com
+            key: ATTND_API_KEY        # the dev server's static key
+          - target: prod
+            server: attnd.app
+            key: ATTND_PROD_CI_KEY    # accepted by production for the DEMO event only
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+      - name: Accept Android SDK licenses
+        # `yes` reports "Broken pipe" when sdkmanager exits before reading all of it; that is expected.
+        run: yes 2> /dev/null | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
+      - name: Live API tests (${{ matrix.server }})
+        env:
+          ATTND_IT_SERVER: ${{ matrix.server }}
+          # Each job only ever sees its own server's key (never the dev key on prod).
+          ATTND_IT_KEY: ${{ secrets[matrix.key] }}
+        run: |
+          if [ -z "$ATTND_IT_KEY" ]; then
+            echo "::warning title=Integration · ${{ matrix.target }}::Secret ${{ matrix.key }} is not set; the live tests are skipped."
+          fi
+          ./gradlew testDebugUnitTest -PintegrationTests
+      - name: Test summary
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/ci/junit_summary.py --title "Integration · ${{ matrix.target }} (${{ matrix.server }})" \
+            ${{ matrix.target == 'prod' && '--warn' || '' }} app/build/test-results/testDebugUnitTest
+      - name: Prod failures don't fail the run
+        if: ${{ failure() && matrix.target == 'prod' }}
+        run: |
+          echo "Integration · prod failed; reported as a warning only (continue-on-error). Expected until production serves the CI key." >> "$GITHUB_STEP_SUMMARY"
+          echo "::warning title=Integration · prod::Live tests against attnd.app failed (not blocking)."
+      - name: Reports
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: integration-${{ matrix.target }}-reports
+          path: |
+            app/build/reports/tests/
+            app/build/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
