@@ -1,293 +1,338 @@
+@file:OptIn(ExperimentalMaterial3Api::class)
+
 package com.arcu.attnd.ui.screens
 
 import android.content.Intent
-import android.net.Uri
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.DirectionsWalk
-import androidx.compose.material.icons.filled.Place
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
-import com.arcu.attnd.data.EventLocation
-import com.arcu.attnd.data.NetworkModule
-import com.arcu.attnd.data.ScheduledItem
-import com.arcu.attnd.ui.theme.AttndTheme
-import com.arcu.attnd.util.FormatUtils
-import kotlinx.coroutines.delay
+import androidx.core.net.toUri
+import com.arcu.attnd.domain.EventBundle
+import com.arcu.attnd.domain.EventLocation
+import com.arcu.attnd.domain.EventTime
+import com.arcu.attnd.domain.LocationGrouping
+import com.arcu.attnd.domain.LocationsStyle
+import com.arcu.attnd.domain.ScheduleGrouping
+import com.arcu.attnd.ui.components.CategoryChips
+import com.arcu.attnd.ui.components.EmptyState
+import com.arcu.attnd.ui.components.IdListDetail
+import com.arcu.attnd.ui.components.ImagePlaceholder
+import com.arcu.attnd.ui.components.RemoteImage
+import com.arcu.attnd.ui.components.SearchField
+import com.arcu.attnd.ui.components.SectionHeader
+import com.arcu.attnd.ui.components.rememberNow
 
+/** Locations tab: list (styled by `display.locations_style`) with a detail pane. */
 @Composable
-fun LocationsScreen(
-    locations: List<EventLocation>,
-    isLoading: Boolean,
-    error: String?,
-    onLocationClick: (Int) -> Unit
+fun LocationsTab(
+    bundle: EventBundle,
+    isRefreshing: Boolean,
+    onRefresh: () -> Unit,
+    focusLocationId: Int?,
+    onFocusConsumed: () -> Unit,
+    onScheduleItemClick: (Int) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Box(modifier = Modifier.fillMaxSize()) {
-        if (isLoading) {
-            CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
-        } else if (error != null) {
-            Text(text = "Error: $error", modifier = Modifier.align(Alignment.Center), color = MaterialTheme.colorScheme.error)
-        } else {
-            LazyColumn(modifier = Modifier.fillMaxSize()) {
-                items(locations) { location ->
-                    ListItem(
-                        headlineContent = { Text(location.name) },
-                        supportingContent = { Text(location.snippet) },
-                        leadingContent = {
-                            if (location.imageUrl != null) {
-                                AsyncImage(
-                                    model = location.imageUrl,
-                                    contentDescription = null,
-                                    modifier = Modifier
-                                        .size(56.dp)
-                                        .clip(RoundedCornerShape(8.dp)),
-                                    contentScale = ContentScale.Crop
-                                )
-                            } else {
-                                Box(
-                                    modifier = Modifier
-                                        .size(56.dp)
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(MaterialTheme.colorScheme.surfaceVariant),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        Icons.Default.Place,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                        },
-                        modifier = Modifier.clickable { onLocationClick(location.id) }
-                    )
-                    HorizontalDivider()
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun LocationDetailScreen(eventId: Int, locationId: Int) {
-    var location by remember { mutableStateOf<EventLocation?>(null) }
-    var isLoading by remember { mutableStateOf(true) }
-    var error by remember { mutableStateOf<String?>(null) }
-
-    LaunchedEffect(locationId) {
-        try {
-            location = NetworkModule.api.getLocationDetails(eventId, locationId)
-        } catch (e: Exception) {
-            error = e.message
-        } finally {
-            isLoading = false
-        }
-    }
-
-    LocationDetailContent(
-        location = location,
-        isLoading = isLoading,
-        error = error
-    )
-}
-
-@Composable
-fun LocationDetailContent(
-    location: EventLocation?,
-    isLoading: Boolean,
-    error: String?
-) {
-    val context = LocalContext.current
-
-    // Ticker: increments every 30 s so countdown labels update live.
-    var tick by remember { mutableIntStateOf(0) }
-    LaunchedEffect(Unit) {
-        while (true) { delay(30_000); tick++ }
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-    ) {
-        if (isLoading) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
-            }
-        } else if (error != null) {
-            Text(
-                "Error loading details: $error",
-                color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.padding(16.dp)
+    IdListDetail(
+        requestedId = focusLocationId,
+        onRequestConsumed = onFocusConsumed,
+        modifier = modifier,
+        list = { selectedId, open ->
+            LocationsList(
+                bundle = bundle,
+                isRefreshing = isRefreshing,
+                onRefresh = onRefresh,
+                selectedId = selectedId,
+                onLocationClick = open,
             )
-        } else {
-            location?.let { loc ->
-                // Hero image
-                if (loc.imageUrl != null) {
-                    AsyncImage(
-                        model = loc.imageUrl,
-                        contentDescription = null,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(220.dp),
-                        contentScale = ContentScale.Crop
-                    )
-                }
-
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(loc.name, style = MaterialTheme.typography.headlineMedium)
-                    Spacer(modifier = Modifier.height(4.dp))
-                    if (loc.address.isNotBlank()) {
-                        Text(loc.address, style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Spacer(modifier = Modifier.height(12.dp))
-                    }
-
-                    // Walking directions button
-                    if (loc.latitude != 0.0 || loc.longitude != 0.0) {
-                        Button(
-                            onClick = {
-                                val gmmUri = Uri.parse(
-                                    "google.navigation:q=${loc.latitude},${loc.longitude}&mode=w"
-                                )
-                                val mapIntent = Intent(Intent.ACTION_VIEW, gmmUri).apply {
-                                    setPackage("com.google.android.apps.maps")
-                                }
-                                if (mapIntent.resolveActivity(context.packageManager) != null) {
-                                    context.startActivity(mapIntent)
-                                } else {
-                                    val webUri = Uri.parse(
-                                        "https://maps.google.com/maps?daddr=${loc.latitude},${loc.longitude}&dirflg=w"
-                                    )
-                                    context.startActivity(Intent(Intent.ACTION_VIEW, webUri))
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Icon(
-                                Icons.Default.DirectionsWalk,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Get Walking Directions")
-                        }
-                        Spacer(modifier = Modifier.height(16.dp))
-                    }
-
-                    HorizontalDivider()
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Text(loc.description, style = MaterialTheme.typography.bodyLarge)
-
-                    loc.website?.let { url ->
-                        Spacer(modifier = Modifier.height(16.dp))
-                        TextButton(
-                            onClick = {
-                                context.startActivity(
-                                    Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                                )
-                            }
-                        ) {
-                            Text("Visit Website")
-                        }
-                    }
-
-                    // Scheduled items at this location
-                    if (loc.scheduledItems.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(16.dp))
-                        HorizontalDivider()
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Text("Schedule", style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold)
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        loc.scheduledItems.forEach { item ->
-                            ScheduleItemInDetail(item, tick)
-                            Spacer(modifier = Modifier.height(12.dp))
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ScheduleItemInDetail(item: ScheduledItem, tick: Int) {
-    val countdown = remember(item.startTime, tick) { FormatUtils.startsInText(item.startTime) }
-    Column {
-        Row(
-            horizontalArrangement = Arrangement.SpaceBetween,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text(
-                text = FormatUtils.formatScheduleTime(item.startTime),
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            if (countdown != null) {
-                Text(
-                    text = countdown,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
+        },
+        detail = { id, showBack, back ->
+            val location = bundle.location(id)
+            if (location == null) {
+                EmptyState("This location is no longer listed.")
+            } else {
+                LocationDetail(
+                    bundle = bundle,
+                    location = location,
+                    onBack = if (showBack) back else null,
+                    onScheduleItemClick = onScheduleItemClick,
                 )
             }
+        },
+        emptyDetail = { EmptyState("Select a location to see its details.") },
+    )
+}
+
+/** The locations list with optional search and category chips. Also used beside the map. */
+@Composable
+fun LocationsList(
+    bundle: EventBundle,
+    isRefreshing: Boolean,
+    onRefresh: () -> Unit,
+    selectedId: Int?,
+    onLocationClick: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+    contentPadding: PaddingValues = PaddingValues(0.dp),
+) {
+    val display = bundle.display
+    var query by rememberSaveable { mutableStateOf("") }
+    var category by rememberSaveable { mutableStateOf<String?>(null) }
+    val categories = remember(bundle.locations, bundle.categories) {
+        LocationGrouping.availableCategories(bundle.locations, bundle.categories)
+    }
+    val filtered = remember(bundle.locations, query, category) {
+        LocationGrouping.filter(bundle.locations, query, category)
+    }
+
+    Column(modifier.fillMaxSize()) {
+        if (display.enableSearch) SearchField(query, { query = it }, "Search locations")
+        if (display.groupByCategory) CategoryChips(categories, category, { category = it })
+        PullToRefreshBox(isRefreshing = isRefreshing, onRefresh = onRefresh, modifier = Modifier.fillMaxSize()) {
+            if (filtered.isEmpty()) {
+                EmptyState(
+                    if (bundle.locations.isEmpty()) "No locations have been added yet."
+                    else "No locations match your search."
+                )
+            } else {
+                LazyColumn(Modifier.fillMaxSize(), contentPadding = contentPadding) {
+                    when (display.locationsStyle) {
+                        LocationsStyle.CARDS -> items(filtered, key = { it.id }) { location ->
+                            LocationCard(location, display.showLocationImages, location.id == selectedId) {
+                                onLocationClick(location.id)
+                            }
+                        }
+                        LocationsStyle.LIST -> locationRows(filtered, display.showLocationImages, selectedId, onLocationClick)
+                        LocationsStyle.GROUPED -> LocationGrouping.byCategory(filtered, bundle.categories).forEach { section ->
+                            item(key = section.key) { SectionHeader(section.title) }
+                            locationRows(section.locations, display.showLocationImages, selectedId, onLocationClick)
+                        }
+                    }
+                }
+            }
         }
-        Text(item.name, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
-        if (item.description.isNotBlank()) {
-            Text(
-                item.description,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+    }
+}
+
+private fun LazyListScope.locationRows(
+    locations: List<EventLocation>,
+    showImages: Boolean,
+    selectedId: Int?,
+    onClick: (Int) -> Unit,
+) {
+    items(locations, key = { it.id }) { location ->
+        LocationRow(location, showImages, location.id == selectedId) { onClick(location.id) }
+        HorizontalDivider()
+    }
+}
+
+@Composable
+private fun LocationRow(location: EventLocation, showImage: Boolean, selected: Boolean, onClick: () -> Unit) {
+    ListItem(
+        headlineContent = { Text(location.name) },
+        supportingContent = if (location.snippet.isNotBlank()) {
+            { Text(location.snippet, maxLines = 2, overflow = TextOverflow.Ellipsis) }
+        } else {
+            null
+        },
+        overlineContent = if (location.category != null) {
+            { Text(location.category) }
+        } else {
+            null
+        },
+        leadingContent = if (showImage) {
+            {
+                RemoteImage(
+                    url = location.imageUrl,
+                    contentDescription = null,
+                    maxDimension = 256,
+                    modifier = Modifier.size(56.dp).clip(RoundedCornerShape(8.dp)),
+                    placeholder = { PinPlaceholder() },
+                )
+            }
+        } else {
+            null
+        },
+        colors = if (selected) {
+            ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+        } else {
+            ListItemDefaults.colors()
+        },
+        modifier = Modifier.clickable(onClick = onClick),
+    )
+}
+
+@Composable
+private fun PinPlaceholder() {
+    ImagePlaceholder(Modifier.fillMaxSize())
+}
+
+@Composable
+private fun LocationCard(location: EventLocation, showImage: Boolean, selected: Boolean, onClick: () -> Unit) {
+    Card(
+        onClick = onClick,
+        colors = if (selected) {
+            CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+        } else {
+            CardDefaults.cardColors()
+        },
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+    ) {
+        if (showImage && location.imageUrl != null) {
+            RemoteImage(
+                url = location.imageUrl,
+                contentDescription = null,
+                modifier = Modifier.fillMaxWidth().height(180.dp),
             )
         }
+        Column(Modifier.padding(16.dp)) {
+            location.category?.let {
+                Text(it, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+            }
+            Text(location.name, style = MaterialTheme.typography.titleLarge)
+            if (location.snippet.isNotBlank()) {
+                Text(location.snippet, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
     }
 }
 
-@Preview(showBackground = true)
+/** Location detail: image, address, walking directions, description, website and its schedule. */
 @Composable
-fun LocationsScreenPreview() {
-    val dummyLocations = listOf(
-        EventLocation(1, "Main Stage", "Live Music", "The big stage", null, null, 0.0, 0.0, "123 Main St"),
-        EventLocation(2, "Food Court", "Tacos & More", "Eat here", null, null, 0.0, 0.0, "123 Main St")
-    )
-    AttndTheme {
-        LocationsScreen(dummyLocations, false, null) {}
+fun LocationDetail(
+    bundle: EventBundle,
+    location: EventLocation,
+    onBack: (() -> Unit)?,
+    onScheduleItemClick: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    val zone = bundle.event.zone
+    val now = rememberNow()
+    val items = remember(bundle.schedule, location.id) {
+        ScheduleGrouping.sortChronologically(bundle.scheduleAt(location.id))
     }
-}
 
-@Preview(showBackground = true)
-@Composable
-fun LocationDetailScreenPreview() {
-    val dummyLocation = EventLocation(
-        1, "Main Stage", "Live Music",
-        "The big stage where all the magic happens.",
-        "https://example.com", null, 0.0, 0.0, "123 Main St"
-    )
-    AttndTheme {
-        LocationDetailContent(
-            location = dummyLocation,
-            isLoading = false,
-            error = null
-        )
+    Column(modifier.fillMaxSize()) {
+        if (onBack != null) {
+            TopAppBar(
+                title = { Text(location.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+            )
+        }
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+            if (bundle.display.showLocationImages && location.imageUrl != null) {
+                RemoteImage(
+                    url = location.imageUrl,
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxWidth().height(220.dp),
+                )
+            }
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                location.category?.let { AssistChip(onClick = {}, label = { Text(it) }) }
+                Text(location.name, style = MaterialTheme.typography.headlineMedium)
+                if (location.address.isNotBlank()) {
+                    Text(location.address, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                location.coordinate?.let { point ->
+                    Button(
+                        onClick = {
+                            val uri = "https://www.google.com/maps/dir/?api=1&destination=${point.latitude},${point.longitude}&travelmode=walking".toUri()
+                            context.startActivity(Intent(Intent.ACTION_VIEW, uri))
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.DirectionsWalk, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Walking directions")
+                    }
+                }
+                if (location.description.isNotBlank()) {
+                    Text(location.description, style = MaterialTheme.typography.bodyLarge)
+                }
+                location.website?.let { url ->
+                    OutlinedButton(onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, url.toUri())) }) {
+                        Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Visit website")
+                    }
+                }
+                if (items.isNotEmpty()) {
+                    HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                    Text("Schedule", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    items.forEach { item ->
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { onScheduleItemClick(item.id) }
+                                .padding(vertical = 6.dp),
+                        ) {
+                            Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                                Text(
+                                    EventTime.formatDayTime(item.startTime, zone),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                EventTime.startsInText(item.startTime, now)?.let {
+                                    Text(it, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                            Text(item.name, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                }
+            }
+        }
     }
 }
