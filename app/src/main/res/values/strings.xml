@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">Attnd</string>
+    <string name="notification_channel_name">Event updates</string>
+    <string name="notification_channel_description">Announcements from the organizers of the event you joined.</string>
 </resources>
