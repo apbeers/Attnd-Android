@@ -42,7 +42,9 @@ jobs:
         run: if [ -n "$GOOGLE_SERVICES_JSON" ]; then printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json; fi
       - name: Unit tests, lint, debug build
         env:
-          ATTND_API_KEY: ${{ secrets.ATTND_API_KEY }}
+          # Live API tests are opt-in: set repo variable LIVE_API_TESTS=true (and LIVE_API_SERVER).
+          ATTND_API_KEY: ${{ vars.LIVE_API_TESTS == 'true' && secrets.ATTND_API_KEY || '' }}
+          ATTND_SERVER: ${{ vars.LIVE_API_SERVER || 'attnd-dev.herokuapp.com' }}
           MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
         run: ./gradlew testDebugUnitTest lintDebug assembleDebug
       - name: Reports
