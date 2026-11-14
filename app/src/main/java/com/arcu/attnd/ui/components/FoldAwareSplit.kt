@@ -23,7 +23,7 @@ enum class SplitAxis {
 
 /**
  * Two panes split along [axis]. When a fold/hinge from [hingeBounds] (window coordinates, from
- * `currentWindowAdaptiveInfo().windowPosture`) crosses this layout, the split is placed exactly on
+ * `currentWindowAdaptiveInfoV2().windowPosture`) crosses this layout, the split is placed exactly on
  * it and nothing is drawn under the hinge; otherwise the first pane gets [fraction] of the space.
  * Must be given bounded constraints (e.g. fillMaxSize()).
  */

@@ -220,13 +220,12 @@ def feature_graphic(icon, map_raw, tagline):
 def find_icon_source(res_dir):
     """
     The launcher logo: the adaptive icon's foreground bitmap when it is a full-bleed PNG
-    (mipmap-anydpi-v26/ic_launcher.xml → foreground → layer-list → @drawable/<name>), else the
+    (mipmap-anydpi[-vNN]/ic_launcher.xml → foreground → layer-list → @drawable/<name>), else the
     highest-resolution legacy mipmap ic_launcher.png.
     """
     res = Path(res_dir)
     candidates = []
-    adaptive = res / 'mipmap-anydpi-v26' / 'ic_launcher.xml'
-    if adaptive.exists():
+    for adaptive in sorted(res.glob('mipmap-anydpi*/ic_launcher.xml')):
         fg = re.search(r'<foreground[^>]*android:drawable="@(\w+)/(\w+)"', adaptive.read_text())
         if fg:
             kind, name = fg.groups()
@@ -237,7 +236,12 @@ def find_icon_source(res_dir):
     candidates += list(res.glob('mipmap-*/ic_launcher.png'))
     if not candidates:
         sys.exit(f'No launcher icon PNG found under {res}')
-    return max(candidates, key=lambda p: Image.open(p).size[0] * Image.open(p).size[1])
+
+    def pixels(path):
+        with Image.open(path) as image:
+            return image.size[0] * image.size[1]
+
+    return max(candidates, key=pixels)
 
 
 def hires_icon(source):

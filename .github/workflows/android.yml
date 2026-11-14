@@ -44,7 +44,8 @@ jobs:
           java-version: '21'
           cache: gradle
       - name: Accept Android SDK licenses
-        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
+        # `yes` reports "Broken pipe" when sdkmanager exits before reading all of it; that is expected.
+        run: yes 2> /dev/null | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
       - name: Firebase config (optional)
         env:
           GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
@@ -56,6 +57,9 @@ jobs:
           ATTND_SERVER: ${{ vars.LIVE_API_SERVER || 'attnd-dev-7ab893f37020.herokuapp.com' }}
           MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
         run: ./gradlew testDebugUnitTest lintDebug assembleDebug
+      - name: Lint warnings
+        if: ${{ !cancelled() }}
+        run: python3 scripts/ci/lint_summary.py app/build/reports/lint-results-debug.xml
       - name: Reports
         if: always()
         uses: actions/upload-artifact@v7
@@ -85,7 +89,8 @@ jobs:
           java-version: '21'
           cache: gradle
       - name: Accept Android SDK licenses
-        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
+        # `yes` reports "Broken pipe" when sdkmanager exits before reading all of it; that is expected.
+        run: yes 2> /dev/null | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
       - name: Signing and Firebase config
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -104,6 +109,9 @@ jobs:
           if [ -n "$GOOGLE_SERVICES_JSON" ]; then printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json; fi
       - name: Unit tests, lint and signed bundle
         run: ./gradlew testDebugUnitTest lintDebug bundleRelease
+      - name: Lint warnings
+        if: ${{ !cancelled() }}
+        run: python3 scripts/ci/lint_summary.py app/build/reports/lint-results-debug.xml
       - name: Reports
         if: failure()
         uses: actions/upload-artifact@v7

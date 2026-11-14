@@ -37,7 +37,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
+import androidx.compose.material3.adaptive.currentWindowAdaptiveInfoV2
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffoldDefaults
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteType
@@ -188,7 +188,9 @@ private fun EventShell(state: AppUiState, bundle: EventBundle, viewModel: EventV
         return
     }
 
-    val adaptiveInfo = currentWindowAdaptiveInfo()
+    // Bar when the width or height is compact or in tabletop posture, otherwise a rail. The L/XL width
+    // classes that V2 adds only split widths of 1200 dp and more, so the choice is the same as before.
+    val adaptiveInfo = currentWindowAdaptiveInfoV2()
     val navType = if (tabs.size < 2) NavigationSuiteType.None else NavigationSuiteScaffoldDefaults.calculateFromAdaptiveInfo(adaptiveInfo)
     // The bottom bar pads itself for the system bars; with a rail (or nothing) the content must.
     val contentInsets = if (navType == NavigationSuiteType.NavigationBar) {

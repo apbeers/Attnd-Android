@@ -6,7 +6,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.adaptive.allHorizontalHingeBounds
 import androidx.compose.material3.adaptive.allVerticalHingeBounds
-import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
+import androidx.compose.material3.adaptive.currentWindowAdaptiveInfoV2
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.window.core.layout.WindowSizeClass
@@ -29,7 +29,8 @@ import com.arcu.attnd.ui.screens.ScheduleList
 @Composable
 fun MapTab(state: AppUiState, viewModel: EventViewModel) {
     val bundle = state.bundle ?: return
-    val adaptiveInfo = currentWindowAdaptiveInfo()
+    // V2 adds the L (1200 dp) and XL (1600 dp) width classes; "at least medium" (600 dp) is unchanged.
+    val adaptiveInfo = currentWindowAdaptiveInfoV2()
     val posture = adaptiveInfo.windowPosture
     val unfolded = adaptiveInfo.windowSizeClass.isWidthAtLeastBreakpoint(WindowSizeClass.WIDTH_DP_MEDIUM_LOWER_BOUND)
     val pane = bundle.display.secondaryPane

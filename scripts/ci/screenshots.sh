@@ -68,9 +68,11 @@ fi
 if [ -n "${CI:-}" ] && command -v apt-get > /dev/null; then
   log "Emulator system libraries"
   sudo apt-get update -qq > /dev/null || true
+  # NEEDRESTART_SUSPEND: skip needrestart's "Restarting services… / restarts being deferred" report.
   for pkg in libpulse0 libnss3 libgl1 libxkbfile1 libxcursor1 libxdamage1 libxcomposite1 libxi6 \
              libxtst6 libxrandr2 libasound2t64; do
-    sudo apt-get install -y -qq --no-install-recommends "$pkg" > /dev/null || echo "warning: could not install $pkg" >&2
+    sudo NEEDRESTART_SUSPEND=1 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "$pkg" > /dev/null \
+      || echo "::warning::could not install $pkg (the emulator may not start)" >&2
   done
   endlog
 fi

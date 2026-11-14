@@ -98,7 +98,13 @@ object PushNotifications {
     /**
      * The current FCM registration token, or null when Firebase is not configured
      * (no google-services.json in the build) or the token cannot be fetched.
+     *
+     * firebase-messaging 25.1 deprecates the token API in favour of `register()` / `onRegistered`,
+     * which hand out a Firebase Installation ID (FID) instead of a token. Moving to it changes what
+     * `push_token` carries and how attnd-web sends pushes, so it is an API change that starts in
+     * attnd-web (API_CHANGES.md); until then the token API is used on purpose.
      */
+    @Suppress("DEPRECATION")
     suspend fun currentToken(context: Context): String? {
         if (FirebaseApp.getApps(context).isEmpty()) return null
         return try {

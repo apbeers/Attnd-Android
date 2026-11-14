@@ -20,6 +20,9 @@ class AttndMessagingService : FirebaseMessagingService() {
 
     private val graph get() = (application as AttndApplication).graph
 
+    // Deprecated with the token API in firebase-messaging 25.1 (see PushNotifications.currentToken):
+    // still called for tokens until the app moves to FIDs, which needs an attnd-web API change first.
+    @Suppress("OVERRIDE_DEPRECATION")
     override fun onNewToken(token: String) {
         graph.appScope.launch { graph.repository.onPushTokenChanged(token) }
     }

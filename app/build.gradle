@@ -30,8 +30,6 @@ android {
         versionCode = code
         versionName = System.getenv("VERSION_NAME") ?: "1.0.$code"
 
-        resConfigs "en"
-
         Properties localProperties = new Properties()
         def localPropertiesFile = rootProject.file('local.properties')
         if (localPropertiesFile.exists()) {
@@ -110,9 +108,32 @@ android {
         compose = true
         buildConfig = true
     }
+    androidResources {
+        // English only: drop the libraries' translations (replaces defaultConfig.resConfigs).
+        localeFilters += ['en']
+    }
+    lint {
+        // Machine-readable report next to the HTML/SARIF ones; CI prints and annotates its warnings
+        // (scripts/ci/lint_summary.py) without failing the build.
+        xmlReport = true
+    }
     packaging {
         resources {
             excludes += '/META-INF/{AL2.0,LGPL2.1}'
+        }
+        jniLibs {
+            // Prebuilt native libraries from AndroidX / ML Kit / CameraX AARs. They are published
+            // already stripped (`file` reports "stripped"), so AGP has nothing to remove; without this
+            // it tries anyway and logs "Unable to strip the following libraries" when the runner has
+            // no matching NDK. We build no native code ourselves. Add new ones here if that message
+            // comes back after a dependency update.
+            keepDebugSymbols += [
+                    '**/libandroidx.graphics.path.so',     // androidx.graphics:graphics-path (Compose)
+                    '**/libbarhopper_v3.so',               // ML Kit barcode scanning
+                    '**/libdatastore_shared_counter.so',   // androidx.datastore
+                    '**/libimage_processing_util_jni.so',  // CameraX
+                    '**/libsurface_util_jni.so',           // CameraX
+            ]
         }
     }
 

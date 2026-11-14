@@ -52,7 +52,8 @@ jobs:
           cache: gradle
 
       - name: Accept Android SDK licenses
-        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
+        # `yes` reports "Broken pipe" when sdkmanager exits before reading all of it; that is expected.
+        run: yes 2> /dev/null | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
 
       # Screenshot mode is debug-only. The dev server has the always-current DEMO event; the repo
       # secret ATTND_API_KEY is the dev server's static key. Release builds never contain it.
