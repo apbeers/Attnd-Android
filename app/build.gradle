@@ -70,7 +70,17 @@ android {
 
     buildTypes {
         debug {
-            applicationIdSuffix ".debug"
+            // -PstoreScreenshots (store-screenshots.yml): the package and upload-key signature of the real
+            // app, which the restricted Maps key accepts, so the store screenshots show map tiles. Still a
+            // debug build (screenshot mode, dev server); it is only installed on the CI emulator.
+            if (project.hasProperty("storeScreenshots")) {
+                if (!rootProject.file("signing.properties").exists()) {
+                    throw new GradleException("-PstoreScreenshots needs signing.properties (the upload key)")
+                }
+                signingConfig = signingConfigs.getByName("release")
+            } else {
+                applicationIdSuffix ".debug"
+            }
             versionNameSuffix "-debug"
         }
         release {

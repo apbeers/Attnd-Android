@@ -65,18 +65,38 @@ jobs:
 
       # Screenshot mode is debug-only. The dev server has the always-current DEMO event; the repo
       # secret ATTND_API_KEY is the dev server's static key. Release builds never contain it.
+      # The Maps key only accepts the real app's package + signing certificates, so the screenshot build
+      # is signed with the upload key as com.arcu.attnd (-PstoreScreenshots). It never leaves the emulator.
+      - name: Upload key for the screenshot build
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then echo "::error::ANDROID_KEYSTORE_BASE64 is not available in this environment"; exit 1; fi
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/upload.jks"
+          {
+            echo "STORE_FILE=$RUNNER_TEMP/upload.jks"
+            echo "STORE_PASSWORD=$STORE_PASSWORD"
+            echo "KEY_ALIAS=$KEY_ALIAS"
+            echo "KEY_PASSWORD=$KEY_PASSWORD"
+          } > signing.properties
+
       - name: Build the debug app (dev server)
         env:
           ATTND_SERVER: ${{ vars.SCREENSHOT_SERVER || 'attnd-dev-7ab893f37020.herokuapp.com' }}
           ATTND_API_KEY: ${{ secrets.ATTND_API_KEY }}
-          # The release key is restricted to the signed apps; a key for this debug build can be set separately.
-          MAPS_API_KEY: ${{ secrets.SCREENSHOT_MAPS_API_KEY || secrets.MAPS_API_KEY }}
+          MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
         run: |
           if [ -z "$ATTND_API_KEY" ]; then echo "::error::The ATTND_API_KEY secret is needed to join DEMO on $ATTND_SERVER"; exit 1; fi
           if [ -z "$MAPS_API_KEY" ]; then echo "::warning::MAPS_API_KEY is not set: the map screenshot will have no tiles"; fi
-          ./gradlew assembleDebug
+          ./gradlew assembleDebug -PstoreScreenshots
+          rm -f signing.properties "$RUNNER_TEMP/upload.jks"
 
       - name: Capture screenshots on the emulator
+        env:
+          SCREENSHOT_PACKAGE: com.arcu.attnd
         run: scripts/ci/screenshots.sh app/build/outputs/apk/debug/app-debug.apk
 
       - name: Compose listing images
@@ -101,3 +121,7 @@ jobs:
         env:
           GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
         run: python scripts/ci/play_publish.py --listing store/en-US --images build/store --images-only
+
+      - name: Remove signing material
+        if: always()
+        run: rm -f signing.properties "$RUNNER_TEMP/upload.jks"

@@ -29,7 +29,7 @@ DEVICE_PROFILES=${DEVICE_PROFILES:-"pixel_10_pro_xl pixel_9_pro_xl pixel_8_pro p
 SETTLE_SECONDS=${SETTLE_SECONDS:-25}
 CAPTIONS=${CAPTIONS:-store/en-US/captions.txt}
 AVD_NAME=attnd_store
-PACKAGE=com.arcu.attnd.debug
+PACKAGE=${SCREENSHOT_PACKAGE:-com.arcu.attnd.debug}  # com.arcu.attnd for -PstoreScreenshots builds
 ACTIVITY=com.arcu.attnd.MainActivity
 
 : "${ANDROID_HOME:?ANDROID_HOME must point at the Android SDK}"
@@ -214,7 +214,7 @@ done
 "$ADB" logcat -d > "$LOG_DIR/logcat.txt" 2>/dev/null || true
 # A blank map is almost always the Maps key's app restriction rejecting this debug build.
 if grep -qiE 'Authorization failure|API key not found|Ensure that the "Maps SDK for Android"' "$LOG_DIR/logcat.txt"; then
-  echo "::warning::Google Maps rejected the key in the screenshot build (blank map). Allow package $PACKAGE with this build's signing certificate on the key, or set a SCREENSHOT_MAPS_API_KEY secret. Details:"
+  echo "::warning::Google Maps rejected the key in the screenshot build (blank map). The key must allow package $PACKAGE with this build's signing certificate (store-screenshots.yml signs with the upload key). Details:"
   grep -iE -A3 'Authorization failure|API key not found' "$LOG_DIR/logcat.txt" | head -n 20
 fi
 "$ADB" exec-out screencap -p > /dev/null  # keep adb happy before the emulator is killed
