@@ -36,6 +36,11 @@ class DevicePrefs(context: Context) {
         get() = prefs.getLong(KEY_LAST_SYNC, 0L).takeIf { it > 0L }
         set(value) = prefs.edit { if (value == null) remove(KEY_LAST_SYNC) else putLong(KEY_LAST_SYNC, value) }
 
+    /** The `latest_version` whose "update available" banner the user dismissed. */
+    var dismissedUpdateVersion: String?
+        get() = prefs.getString(KEY_DISMISSED_UPDATE, null)
+        set(value) = prefs.edit { putString(KEY_DISMISSED_UPDATE, value) }
+
     var pushToken: String?
         get() = prefs.getString(KEY_PUSH_TOKEN, null)
         set(value) = prefs.edit { putString(KEY_PUSH_TOKEN, value) }
@@ -70,6 +75,7 @@ class DevicePrefs(context: Context) {
         private const val KEY_ETAG = "bundle_etag"
         private const val KEY_LAST_SYNC = "bundle_last_sync"
         private const val KEY_PUSH_TOKEN = "push_token"
+        private const val KEY_DISMISSED_UPDATE = "dismissed_update_version"
         private const val KEY_NOTIFICATIONS = "notifications_enabled"
         private const val KEY_SHOW_LOCATION = "show_user_location"
         private const val KEY_REFERRER_CHECKED = "install_referrer_checked"

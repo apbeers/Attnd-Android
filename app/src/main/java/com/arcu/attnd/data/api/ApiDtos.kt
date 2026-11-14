@@ -153,6 +153,16 @@ data class DeviceRequest(
     val subscribed: Boolean? = null,
 )
 
+/** GET /api/app-status/ (API-003). Unversioned and frozen: only ever gains keys. */
+@Serializable
+data class AppStatusDto(
+    val update: String? = null,
+    @SerialName("min_version") val minVersion: String? = null,
+    @SerialName("latest_version") val latestVersion: String? = null,
+    @SerialName("update_url") val updateUrl: String? = null,
+    val message: String? = null,
+)
+
 @Serializable
 data class StatusResponseDto(
     val status: String? = null,

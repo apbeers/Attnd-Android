@@ -13,12 +13,14 @@ import com.arcu.attnd.data.RefreshResult
 import com.arcu.attnd.data.SyncState
 import com.arcu.attnd.data.net.ApiException
 import com.arcu.attnd.data.prefs.DevicePrefs
+import com.arcu.attnd.domain.AppUpdate
 import com.arcu.attnd.domain.Event
 import com.arcu.attnd.domain.EventBundle
 import com.arcu.attnd.domain.EventTime
 import com.arcu.attnd.domain.JoinLinks
 import com.arcu.attnd.domain.NearbyEvent
 import com.arcu.attnd.domain.Tab
+import com.arcu.attnd.domain.UpdateLevel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -64,6 +66,10 @@ data class AppUiState(
     val recenterRequest: Int = 0,
     /** One-shot user-facing message (snackbar / launch screen). */
     val message: String? = null,
+    /** API-003: REQUIRED replaces the UI with the update screen. */
+    val update: AppUpdate = AppUpdate(),
+    /** A newer version exists and the user hasn't dismissed the banner for it. */
+    val showUpdateBanner: Boolean = false,
 )
 
 private data class LocalState(
@@ -78,6 +84,7 @@ private data class LocalState(
     val focusScheduleItemId: Int? = null,
     val recenterRequest: Int = 0,
     val message: String? = null,
+    val dismissedUpdateVersion: String? = null,
 )
 
 class EventViewModel(
@@ -90,11 +97,12 @@ class EventViewModel(
         LocalState(
             notificationsEnabled = prefs.notificationsEnabled,
             showUserLocation = prefs.showUserLocation,
+            dismissedUpdateVersion = prefs.dismissedUpdateVersion,
         )
     )
 
     val uiState: StateFlow<AppUiState> =
-        combine(repository.bundle, repository.sync, local) { bundle, sync, state ->
+        combine(repository.bundle, repository.sync, local, repository.appUpdate) { bundle, sync, state, update ->
             val display = bundle?.display
             AppUiState(
                 phase = when {
@@ -114,6 +122,9 @@ class EventViewModel(
                 focusScheduleItemId = state.focusScheduleItemId,
                 recenterRequest = state.recenterRequest,
                 message = state.message,
+                update = update,
+                showUpdateBanner = update.level == UpdateLevel.AVAILABLE &&
+                    update.latestVersion != state.dismissedUpdateVersion,
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, AppUiState())
 
@@ -124,6 +135,7 @@ class EventViewModel(
      * migrate a v1 saved event code or check the Play install referrer (first install via QR code).
      */
     private suspend fun start() {
+        viewModelScope.launch { repository.checkForUpdate() }
         val restored = repository.restore()
         if (restored == null) {
             val legacyCode = prefs.eventCode
@@ -247,6 +259,7 @@ class EventViewModel(
      */
     suspend fun foregroundSync() {
         startJob.join()
+        repository.checkForUpdate()
         val lastSync = repository.sync.value.lastSyncedAt
         if (lastSync == null || System.currentTimeMillis() - lastSync > RESUME_DEBOUNCE_MS) repository.refresh()
         while (true) {
@@ -257,6 +270,12 @@ class EventViewModel(
     }
 
     // ── Navigation & preferences ────────────────────────────────────────────
+
+    fun dismissUpdateBanner() {
+        val version = uiState.value.update.latestVersion
+        prefs.dismissedUpdateVersion = version
+        local.update { it.copy(dismissedUpdateVersion = version) }
+    }
 
     fun selectTab(tab: Tab) {
         val current = uiState.value.selectedTab

@@ -4,6 +4,7 @@ import com.arcu.attnd.data.net.ApiException
 import com.arcu.attnd.data.net.HttpClient
 import com.arcu.attnd.data.net.HttpResponse
 import com.arcu.attnd.data.net.UrlConnectionHttpClient
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.serialization.KSerializer
 import java.io.IOException
 import java.net.URLEncoder
@@ -31,6 +32,19 @@ class AttndApi(
     private val baseUrl: String = BASE_URL,
     private val http: HttpClient = UrlConnectionHttpClient(),
 ) {
+
+    /** Set when any call answers 410/426: this build's API version has been retired. */
+    val updateRequired = MutableStateFlow(false)
+
+    /**
+     * `GET /api/app-status/` (API-003). Unversioned and unauthenticated, so a build whose API
+     * version was retired, or whose attestation fails, can still learn that it must update.
+     */
+    suspend fun appStatus(appVersion: String): AppStatusDto {
+        val url = baseUrl.substringBeforeLast("v$API_VERSION/") + "app-status/" +
+            "?platform=android&version=${encode(appVersion)}&api=$API_VERSION"
+        return decode(http.execute("GET", url, mapOf("Accept" to "application/json"), null), AppStatusDto.serializer())
+    }
 
     suspend fun nearbyEvents(lat: Double, lng: Double): NearbyResponseDto =
         get("events/nearby/?lat=$lat&lng=$lng", NearbyResponseDto.serializer())
@@ -78,9 +92,13 @@ class AttndApi(
     ): HttpResponse {
         val url = baseUrl + path
         val first = http.execute(method, url, headers(tokens.token()) + extraHeaders, body)
-        if (first.code != 401) return first
+        if (first.code != 401) return first.also(::checkRetired)
         val fresh = tokens.reauthenticate() ?: return first
-        return http.execute(method, url, headers(fresh) + extraHeaders, body)
+        return http.execute(method, url, headers(fresh) + extraHeaders, body).also(::checkRetired)
+    }
+
+    private fun checkRetired(response: HttpResponse) {
+        if (response.code == 410 || response.code == 426) updateRequired.value = true
     }
 
     private fun headers(token: String): Map<String, String> = mapOf(
@@ -102,7 +120,10 @@ class AttndApi(
     private fun encode(value: String): String = URLEncoder.encode(value, StandardCharsets.UTF_8)
 
     companion object {
+        /** The API version this build speaks. Bump it together with [BASE_URL]. */
+        const val API_VERSION = 2
+
         /** Host comes from the ATTND_SERVER build setting: develop builds use the dev server. */
-        val BASE_URL = "https://${com.arcu.attnd.BuildConfig.ATTND_SERVER}/api/v2/"
+        val BASE_URL = "https://${com.arcu.attnd.BuildConfig.ATTND_SERVER}/api/v$API_VERSION/"
     }
 }

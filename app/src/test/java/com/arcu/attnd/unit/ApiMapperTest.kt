@@ -1,19 +1,22 @@
 package com.arcu.attnd.unit
 
 import com.arcu.attnd.data.api.ApiMapper
+import com.arcu.attnd.data.api.AppStatusDto
+import com.arcu.attnd.domain.AppUpdate
 import com.arcu.attnd.domain.EventStatus
 import com.arcu.attnd.domain.GeoPoint
 import com.arcu.attnd.domain.LocationsStyle
 import com.arcu.attnd.domain.ScheduleStyle
 import com.arcu.attnd.domain.SecondaryPane
 import com.arcu.attnd.domain.Tab
+import com.arcu.attnd.domain.UpdateLevel
+import java.time.ZoneId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.time.ZoneId
 
 class ApiMapperTest {
 
@@ -129,5 +132,16 @@ class ApiMapperTest {
         assertNull(ApiMapper.parseBundle("not json"))
         assertNull(ApiMapper.parseBundle("{}"))
         assertNull(ApiMapper.parseBundle("""{"event": {"name": "no id"}}"""))
+    }
+
+    @Test
+    fun appUpdate_unknownOrMissingValuesNeverPrompt() {
+        val required = ApiMapper.appUpdate(AppStatusDto(update = "required", latestVersion = "2.0.9", updateUrl = "https://play.google.com/store/apps/details?id=com.arcu.attnd"))
+        assertEquals(UpdateLevel.REQUIRED, required.level)
+        assertEquals("2.0.9", required.latestVersion)
+        assertEquals(UpdateLevel.NONE, ApiMapper.appUpdate(AppStatusDto(update = "someday")).level)
+        assertEquals(UpdateLevel.NONE, ApiMapper.appUpdate(AppStatusDto()).level)
+        // Only https store links are opened.
+        assertEquals(AppUpdate.PLAY_STORE_URL, ApiMapper.appUpdate(AppStatusDto(update = "available", updateUrl = "javascript:x")).updateUrl)
     }
 }

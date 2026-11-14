@@ -137,4 +137,33 @@ class AttndApiClientTest {
             assertEquals(404, e.code)
         }
     }
+
+    // ── API-003: app status / retired API versions ─────────────────────────
+
+    @Test
+    fun appStatus_isUnauthenticatedAndOutsideTheVersionedPath() = runTest {
+        val http = FakeHttp(response(200, """{"update": "required", "update_url": "https://play.google.com/x", "new": 1}"""))
+        val api = AttndApi(FakeTokens(fresh = null), "https://example.test/api/v2/", http)
+
+        val status = api.appStatus("2.0.5")
+
+        assertEquals("required", status.update)
+        val request = http.requests.single()
+        assertEquals("https://example.test/api/app-status/?platform=android&version=2.0.5&api=2", request.url)
+        assertNull(request.headers["Authorization"])
+    }
+
+    @Test
+    fun goneOrUpgradeRequired_flagsUpdateRequired() = runTest {
+        val http = FakeHttp(response(410, """{"error": "update_required"}"""))
+        val api = AttndApi(FakeTokens(fresh = null), "https://example.test/api/v2/", http)
+        assertFalse(api.updateRequired.value)
+        try {
+            api.lookup("CODE")
+            fail("expected ApiException")
+        } catch (e: ApiException) {
+            assertEquals(410, e.code)
+        }
+        assertTrue(api.updateRequired.value)
+    }
 }

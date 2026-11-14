@@ -1,5 +1,6 @@
 package com.arcu.attnd.data.api
 
+import com.arcu.attnd.domain.AppUpdate
 import com.arcu.attnd.domain.DisplayConfig
 import com.arcu.attnd.domain.Event
 import com.arcu.attnd.domain.EventBundle
@@ -10,6 +11,7 @@ import com.arcu.attnd.domain.EventTime
 import com.arcu.attnd.domain.GeoPoint
 import com.arcu.attnd.domain.NearbyEvent
 import com.arcu.attnd.domain.ScheduleItem
+import com.arcu.attnd.domain.UpdateLevel
 
 /**
  * Converts v2 DTOs into domain models, applying the documented default for every missing key.
@@ -141,4 +143,16 @@ object ApiMapper {
             sendTime = EventTime.parse(dto.sendTime),
         )
     }
+
+    /** Unknown or missing `update` values mean no prompt, so a future state can't lock users out. */
+    fun appUpdate(dto: AppStatusDto): AppUpdate = AppUpdate(
+        level = when (dto.update?.trim()?.lowercase()) {
+            "required" -> UpdateLevel.REQUIRED
+            "available" -> UpdateLevel.AVAILABLE
+            else -> UpdateLevel.NONE
+        },
+        latestVersion = dto.latestVersion?.takeIf { it.isNotBlank() },
+        updateUrl = dto.updateUrl?.takeIf { it.startsWith("https://") } ?: AppUpdate.PLAY_STORE_URL,
+        message = dto.message?.takeIf { it.isNotBlank() },
+    )
 }

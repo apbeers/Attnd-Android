@@ -6,15 +6,19 @@ import com.arcu.attnd.data.api.DeviceRequest
 import com.arcu.attnd.data.api.JoinRequest
 import com.arcu.attnd.data.api.LeaveRequest
 import com.arcu.attnd.data.prefs.DevicePrefs
+import com.arcu.attnd.domain.AppUpdate
 import com.arcu.attnd.domain.Event
 import com.arcu.attnd.domain.EventBundle
 import com.arcu.attnd.domain.NearbyEvent
+import com.arcu.attnd.domain.UpdateLevel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -62,6 +66,30 @@ class EventRepository(
     val sync: StateFlow<SyncState> = _sync.asStateFlow()
 
     private val refreshMutex = Mutex()
+
+    private val _appUpdate = MutableStateFlow(AppUpdate())
+
+    /**
+     * Whether this build should update (API-003): the last `app-status` answer, forced to
+     * REQUIRED once any API call has answered 410/426 (this build's API version is retired).
+     */
+    val appUpdate: Flow<AppUpdate> = combine(_appUpdate, api.updateRequired) { update, retired ->
+        if (retired) update.copy(level = UpdateLevel.REQUIRED) else update
+    }
+
+    /** Asks the server whether this build should update. Failures keep the last answer. */
+    suspend fun checkForUpdate() {
+        val status = withContext(io) {
+            try {
+                api.appStatus(appVersion)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                null
+            }
+        } ?: return
+        _appUpdate.value = ApiMapper.appUpdate(status)
+    }
 
     val deviceId: String get() = prefs.deviceId
     val currentEventId: Int? get() = prefs.eventId

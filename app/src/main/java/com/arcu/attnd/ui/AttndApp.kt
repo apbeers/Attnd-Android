@@ -58,6 +58,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.arcu.attnd.domain.DisplayConfig
 import com.arcu.attnd.domain.EventBundle
 import com.arcu.attnd.domain.Tab
+import com.arcu.attnd.domain.UpdateLevel
 import com.arcu.attnd.ui.components.EventBanners
 import com.arcu.attnd.ui.components.RemoteImage
 import com.arcu.attnd.ui.screens.FlyerScreen
@@ -68,6 +69,8 @@ import com.arcu.attnd.ui.screens.NotificationsScreen
 import com.arcu.attnd.ui.screens.OptionsScreen
 import com.arcu.attnd.ui.screens.ScheduleItemDetail
 import com.arcu.attnd.ui.screens.ScheduleTab
+import com.arcu.attnd.ui.screens.UpdateAvailableBanner
+import com.arcu.attnd.ui.screens.UpdateRequiredScreen
 import com.arcu.attnd.ui.theme.AttndTheme
 
 /** Root composable: theme (with the event's accent colour) and launch vs. event UI. */
@@ -79,36 +82,49 @@ fun AttndApp(viewModel: EventViewModel = viewModel(factory = EventViewModel.Fact
     }
 
     AttndTheme(accentColor = accent) {
-        when (state.phase) {
-            AppPhase.LOADING -> Surface(Modifier.fillMaxSize()) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
-            }
-            AppPhase.LAUNCH -> LaunchScreen(
-                join = state.join,
-                nearby = state.nearby,
-                message = state.message ?: state.sync.error,
-                onJoinCode = viewModel::joinByCode,
-                onJoinEvent = viewModel::joinEvent,
-                onNearbyLoading = viewModel::setNearbyLoading,
-                onNearbyLocation = viewModel::loadNearby,
-                onNearbyError = viewModel::setNearbyError,
-                onClearJoinError = viewModel::clearJoinError,
-            )
-            AppPhase.EVENT -> {
-                val bundle = state.bundle ?: return@AttndTheme
-                if (state.showOptions) {
-                    OptionsScreen(
-                        eventName = bundle.event.name,
-                        notificationsEnabled = state.notificationsEnabled,
-                        onNotificationsChange = viewModel::setNotificationsEnabled,
-                        showUserLocation = state.showUserLocation,
-                        onShowUserLocationChange = viewModel::setShowUserLocation,
-                        onLeaveEvent = viewModel::leaveEvent,
-                        onBack = { viewModel.showOptions(false) },
-                    )
-                } else {
-                    EventShell(state, bundle, viewModel)
+        if (state.update.level == UpdateLevel.REQUIRED) {
+            UpdateRequiredScreen(state.update)
+            return@AttndTheme
+        }
+        Box(Modifier.fillMaxSize()) {
+            when (state.phase) {
+                AppPhase.LOADING -> Surface(Modifier.fillMaxSize()) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
                 }
+                AppPhase.LAUNCH -> LaunchScreen(
+                    join = state.join,
+                    nearby = state.nearby,
+                    message = state.message ?: state.sync.error,
+                    onJoinCode = viewModel::joinByCode,
+                    onJoinEvent = viewModel::joinEvent,
+                    onNearbyLoading = viewModel::setNearbyLoading,
+                    onNearbyLocation = viewModel::loadNearby,
+                    onNearbyError = viewModel::setNearbyError,
+                    onClearJoinError = viewModel::clearJoinError,
+                )
+                AppPhase.EVENT -> {
+                    val bundle = state.bundle ?: return@AttndTheme
+                    if (state.showOptions) {
+                        OptionsScreen(
+                            eventName = bundle.event.name,
+                            notificationsEnabled = state.notificationsEnabled,
+                            onNotificationsChange = viewModel::setNotificationsEnabled,
+                            showUserLocation = state.showUserLocation,
+                            onShowUserLocationChange = viewModel::setShowUserLocation,
+                            onLeaveEvent = viewModel::leaveEvent,
+                            onBack = { viewModel.showOptions(false) },
+                        )
+                    } else {
+                        EventShell(state, bundle, viewModel)
+                    }
+                }
+            }
+            if (state.showUpdateBanner) {
+                UpdateAvailableBanner(
+                    update = state.update,
+                    onDismiss = viewModel::dismissUpdateBanner,
+                    modifier = Modifier.align(Alignment.TopCenter),
+                )
             }
         }
     }
