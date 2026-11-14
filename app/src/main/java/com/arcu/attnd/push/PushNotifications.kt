@@ -57,12 +57,23 @@ object PushNotifications {
             intent.getStringExtra(KEY_TYPE) == TYPE_NOTIFICATION
     }
 
+    /**
+     * The server's notification id carried by a notification-tap Intent: our own notifications put
+     * it there, and FCM's tray notifications copy the data payload into the extras (as strings).
+     */
+    fun notificationId(intent: Intent?): Int? = intent?.getStringExtra(KEY_NOTIFICATION_ID)?.toIntOrNull()
+
+    /**
+     * Shows an organizer notification. [notificationId] is the local id (unique per notification);
+     * [serverNotificationId] is the API's id when the push carried one, passed on for usage counts.
+     */
     @SuppressLint("MissingPermission") // checked by hasPermission()
-    fun show(context: Context, title: String, body: String, notificationId: Int) {
+    fun show(context: Context, title: String, body: String, notificationId: Int, serverNotificationId: Int? = null) {
         if (!hasPermission(context)) return
         val intent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra(EXTRA_OPEN_TAB, TAB_NOTIFICATIONS)
+            if (serverNotificationId != null) putExtra(KEY_NOTIFICATION_ID, serverNotificationId.toString())
         }
         val pendingIntent = PendingIntent.getActivity(
             context,

@@ -41,6 +41,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -78,6 +79,8 @@ fun LocationsTab(
     onFocusConsumed: () -> Unit,
     onScheduleItemClick: (Int) -> Unit,
     modifier: Modifier = Modifier,
+    onLocationShown: (Int) -> Unit = {},
+    onSearch: () -> Unit = {},
 ) {
     IdListDetail(
         requestedId = focusLocationId,
@@ -90,6 +93,7 @@ fun LocationsTab(
                 onRefresh = onRefresh,
                 selectedId = selectedId,
                 onLocationClick = open,
+                onSearch = onSearch,
             )
         },
         detail = { id, showBack, back ->
@@ -97,6 +101,7 @@ fun LocationsTab(
             if (location == null) {
                 EmptyState("This location is no longer listed.")
             } else {
+                LaunchedEffect(id) { onLocationShown(id) }
                 LocationDetail(
                     bundle = bundle,
                     location = location,
@@ -119,6 +124,7 @@ fun LocationsList(
     onLocationClick: (Int) -> Unit,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(0.dp),
+    onSearch: () -> Unit = {},
 ) {
     val display = bundle.display
     var query by rememberSaveable { mutableStateOf("") }
@@ -131,7 +137,7 @@ fun LocationsList(
     }
 
     Column(modifier.fillMaxSize()) {
-        if (display.enableSearch) SearchField(query, { query = it }, "Search locations")
+        if (display.enableSearch) SearchField(query, { query = it }, "Search locations", onSearch = onSearch)
         if (display.groupByCategory) CategoryChips(categories, category, { category = it })
         PullToRefreshBox(isRefreshing = isRefreshing, onRefresh = onRefresh, modifier = Modifier.fillMaxSize()) {
             if (filtered.isEmpty()) {

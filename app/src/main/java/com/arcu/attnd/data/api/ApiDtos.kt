@@ -153,6 +153,31 @@ data class DeviceRequest(
     val subscribed: Boolean? = null,
 )
 
+/**
+ * `POST events/<id>/usage/` (API-005): anonymous hourly counts. Deliberately has no device id or
+ * any other identifier; `detail` is left out when absent.
+ */
+@Serializable
+data class UsageRequest(
+    val platform: String = PLATFORM,
+    val events: List<UsageEntryDto> = emptyList(),
+)
+
+@Serializable
+data class UsageEntryDto(
+    val name: String = "",
+    val detail: String? = null,
+    val count: Int = 1,
+    /** ISO 8601 UTC start of the hour the counts fell in. */
+    val at: String? = null,
+)
+
+@Serializable
+data class UsageResponseDto(
+    val status: String? = null,
+    val accepted: Int? = null,
+)
+
 /** GET /api/app-status/ (API-003). Unversioned and frozen: only ever gains keys. */
 @Serializable
 data class AppStatusDto(

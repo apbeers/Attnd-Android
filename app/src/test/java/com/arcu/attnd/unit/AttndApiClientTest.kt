@@ -4,6 +4,8 @@ import com.arcu.attnd.data.api.AttndApi
 import com.arcu.attnd.data.api.AuthTokenProvider
 import com.arcu.attnd.data.api.DeviceRequest
 import com.arcu.attnd.data.api.JoinRequest
+import com.arcu.attnd.data.api.UsageEntryDto
+import com.arcu.attnd.data.api.UsageRequest
 import com.arcu.attnd.data.net.ApiException
 import com.arcu.attnd.data.net.HttpClient
 import com.arcu.attnd.data.net.HttpResponse
@@ -136,6 +138,28 @@ class AttndApiClientTest {
         } catch (e: ApiException) {
             assertEquals(404, e.code)
         }
+    }
+
+    // ── API-005: usage counts ───────────────────────────────────────────────
+
+    @Test
+    fun sendUsage_postsToEventUsageWithAuth_andNoDeviceId() = runTest {
+        val http = FakeHttp(response(200, """{"status": "ok", "accepted": 1, "new": true}"""))
+        val api = AttndApi(FakeTokens(fresh = null), "https://example.test/api/v2/", http)
+
+        val result = api.sendUsage(9, UsageRequest(events = listOf(UsageEntryDto(name = "app_open", at = "2026-11-14T16:00:00Z"))))
+
+        assertEquals("ok", result.status)
+        assertEquals(1, result.accepted)
+        val request = http.requests.single()
+        assertEquals("POST", request.method)
+        assertEquals("https://example.test/api/v2/events/9/usage/", request.url)
+        assertEquals("Bearer old-token", request.headers["Authorization"])
+        assertFalse(request.headers.containsKey("X-Device-Id"))
+        val body = request.body!!
+        assertTrue(body, body.contains("\"platform\":\"android\""))
+        assertTrue(body, body.contains("\"name\":\"app_open\""))
+        assertFalse(body, body.contains("device"))
     }
 
     // ── API-003: app status / retired API versions ─────────────────────────

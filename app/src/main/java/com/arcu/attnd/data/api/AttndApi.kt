@@ -76,6 +76,13 @@ class AttndApi(
     suspend fun registerDevice(request: DeviceRequest): StatusResponseDto =
         post("devices/", ApiJson.encodeToString(DeviceRequest.serializer(), request))
 
+    /** API-005: anonymous usage counts for [eventId]. Never carries a device id. */
+    suspend fun sendUsage(eventId: Int, request: UsageRequest): UsageResponseDto =
+        decode(
+            send("POST", "events/$eventId/usage/", body = ApiJson.encodeToString(UsageRequest.serializer(), request)),
+            UsageResponseDto.serializer(),
+        )
+
     // ── Plumbing ────────────────────────────────────────────────────────────
 
     private suspend fun <T> get(path: String, serializer: KSerializer<T>): T =

@@ -57,6 +57,8 @@ class EventRepository(
     private val cacheFile: File,
     private val appVersion: String,
     private val pushTokenProvider: suspend () -> String?,
+    /** API-005: flushed before leaving or switching events so counts go to the old event. */
+    private val usage: UsageReporter? = null,
     private val io: CoroutineDispatcher = Dispatchers.IO,
 ) {
     private val _bundle = MutableStateFlow<EventBundle?>(null)
@@ -120,6 +122,7 @@ class EventRepository(
     suspend fun join(event: Event): RefreshResult = withContext(io) {
         val previous = prefs.eventId
         if (previous != null && previous != event.id) {
+            usage?.flushNow()
             // Leave the old event gracefully; failure must not block joining the new one.
             runSuspendCatching { api.leave(previous, LeaveRequest(deviceId)) }
         }
@@ -136,6 +139,7 @@ class EventRepository(
     suspend fun leave() {
         withContext(io) {
             val eventId = prefs.eventId
+            if (eventId != null) usage?.flushNow()
             clearLocal()
             if (eventId != null) {
                 runSuspendCatching { api.leave(eventId, LeaveRequest(deviceId)) }

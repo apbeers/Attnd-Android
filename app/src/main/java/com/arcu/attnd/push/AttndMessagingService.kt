@@ -35,9 +35,9 @@ class AttndMessagingService : FirebaseMessagingService() {
                 val title = message.notification?.title ?: data["title"]
                 val body = message.notification?.body ?: data["body"]
                 if (title != null || body != null) {
-                    val id = data[PushNotifications.KEY_NOTIFICATION_ID]?.toIntOrNull()
-                        ?: (System.currentTimeMillis() % Int.MAX_VALUE).toInt()
-                    PushNotifications.show(this, title ?: "Event update", body.orEmpty(), id)
+                    val serverId = data[PushNotifications.KEY_NOTIFICATION_ID]?.toIntOrNull()
+                    val id = serverId ?: (System.currentTimeMillis() % Int.MAX_VALUE).toInt()
+                    PushNotifications.show(this, title ?: "Event update", body.orEmpty(), id, serverId)
                 }
                 if (isForCurrentEvent) graph.appScope.launch { repository.refresh() }
             }

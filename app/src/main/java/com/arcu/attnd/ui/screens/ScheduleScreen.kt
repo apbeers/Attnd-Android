@@ -36,6 +36,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -68,6 +69,8 @@ fun ScheduleTab(
     onFocusConsumed: () -> Unit,
     onLocationClick: (Int) -> Unit,
     modifier: Modifier = Modifier,
+    onItemShown: (Int) -> Unit = {},
+    onSearch: () -> Unit = {},
 ) {
     IdListDetail(
         requestedId = focusItemId,
@@ -81,6 +84,7 @@ fun ScheduleTab(
                 onRefresh = onRefresh,
                 selectedId = selectedId,
                 onItemClick = open,
+                onSearch = onSearch,
             )
         },
         detail = { id, showBack, back ->
@@ -88,6 +92,7 @@ fun ScheduleTab(
             if (item == null) {
                 EmptyState("This item is no longer on the schedule.")
             } else {
+                LaunchedEffect(id) { onItemShown(id) }
                 ScheduleItemDetail(bundle, item, onBack = if (showBack) back else null, onLocationClick = onLocationClick)
             }
         },
@@ -109,6 +114,7 @@ fun ScheduleList(
     onItemClick: (Int) -> Unit,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(0.dp),
+    onSearch: () -> Unit = {},
 ) {
     val zone = bundle.event.zone
     val now = rememberNow()
@@ -124,7 +130,7 @@ fun ScheduleList(
     }
 
     Column(modifier.fillMaxSize()) {
-        if (bundle.display.enableSearch) SearchField(query, { query = it }, "Search schedule")
+        if (bundle.display.enableSearch) SearchField(query, { query = it }, "Search schedule", onSearch = onSearch)
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
             horizontalArrangement = Arrangement.SpaceBetween,

@@ -50,12 +50,15 @@ app/
       ScheduleGrouping.kt         #   timeline / by_day / by_location / now_next, search, ended/now
       LocationGrouping.kt         #   category grouping, filters, mappable pins, bounds
       JoinLinks.kt                #   /join/<code>/ App Links + install-referrer parsing
+      UsageAggregator.kt          #   API-005 counts by (name, detail, UTC hour) + metric names
+      SupportInfo.kt              #   API-004 build/device/event details, support code, copy text
     data/
       net/HttpClient.kt           #   HttpURLConnection client (no caching, so 304s reach us)
       api/AttndApi.kt             #   v2 endpoints; 401 → re-attest → retry once; ETag/If-None-Match
       api/ApiDtos.kt              #   @Serializable wire format (all fields nullable) + ApiJson config
       api/ApiMapper.kt            #   DTO → domain, applying defaults
       EventRepository.kt          #   Single source of truth (StateFlow bundle), join/leave/refresh, disk cache
+      UsageReporter.kt            #   API-005 anonymous usage counts: aggregate, flush every ~60 s / background / leave
       AttestedTokenProvider.kt    #   Bearer token: attestation JWT or static key
       InstallReferrer.kt          #   Play Install Referrer → event_code
       attest/AttestationApi.kt    #   Unauthenticated /api/v1/attest/ endpoints
@@ -69,7 +72,7 @@ app/
       screens/                    #   Launch, Map, Locations, Schedule, Notifications, Flyer, Options
       theme/
   src/test/java/com/arcu/attnd/
-    unit/                         # JVM tests: decoding, display defaults, grouping in event tz, HTTP client
+    unit/                         # JVM tests: decoding, display defaults, grouping in event tz, HTTP client, usage, support info
     integration/AttndApiTest.kt   # Live v2 API (skipped when ATTND_API_KEY is not set)
 version.properties                # VERSION_CODE — increment for each release
 signing.properties                # (not committed) Keystore config for release signing
@@ -81,7 +84,25 @@ app/google-services.json          # (not committed) Firebase config for FCM
 
 - **`EventRepository`** owns the joined event. `bundle: StateFlow<EventBundle?>` is the single source of truth; `sync: StateFlow<SyncState>` carries refresh progress and the last error. The raw bundle JSON is written to `filesDir/event_bundle.json` (atomic temp-file rename), so the app starts **offline** with the last content and refreshes in the background.
 - **`EventViewModel`** combines repository state with UI-local state into one `AppUiState` (phase LOADING / LAUNCH / EVENT, selected tab, join/nearby state, one-shot focus requests and messages). Screens receive state slices + callbacks only; they hold no app state (only UI state like search text).
-- Device ID: a UUID generated on first launch (`DevicePrefs.deviceId`), used for join/leave/devices and as `X-Device-Id`.
+- **`UsageReporter`** (in `AppGraph`, runs on `appScope`) collects anonymous usage counts; `EventViewModel` records them with one-line `track(...)` calls, and `EventRepository` flushes it before leaving or switching events.
+- Device ID: a UUID generated on first launch (`DevicePrefs.deviceId`), used for join/leave/devices and as `X-Device-Id`. Never sent with usage counts.
+
+### Usage reporting (API-005)
+
+`POST events/<id>/usage/` with `{platform: "android", events: [{name, detail?, count, at}]}`, `at` = UTC start of the hour. No device id or other identifier, never search text. `UsageReporter` aggregates per event in a `UsageAggregator`, sends at most every 60 s while there is data, when `MainActivity.onStop` runs (not on rotation) and before leave/switch; a failed batch is retried once on the next flush, then dropped; errors are swallowed.
+
+| Metric | Where |
+|--------|-------|
+| `app_open` | `EventViewModel.foregroundSync` on the first resume after launch or after the app was backgrounded, while in an event |
+| `tab_view` (`map`…`notifications`, `options`) | `EventViewModel` init: counted whenever the visible tab (or Options) changes, including the initial tab |
+| `location_view` / `schedule_item_view` | `LaunchedEffect` in the Locations/Schedule detail panes and the hidden-tab overlays → `onLocationShown` / `onScheduleItemShown` |
+| `notification_open` | `MainActivity` notification-tap intent (`notification_id` extra) → `openNotifications(id)` |
+| `search` | `SearchField`: on IME search or once the non-empty query settles for 1.5 s → `onSearch` |
+| `refresh` | `EventViewModel.refresh` (pull to refresh only) |
+
+### Support info (API-004)
+
+Options shows an "Internal test build" card when `BuildConfig.ATTND_SERVER != "attnd.app"`, and an **About & support** section from `AppUiState.supportInfo` (built in `EventViewModel`): version/code, build type, server, API version, Android version, device, event name/code/id/content version, last refresh (device time zone), the **support code** (first 8 characters of the device id, no dashes, upper case) and **Copy support info** (plain text including the full device id, via `LocalClipboard`).
 
 ## API (v2)
 

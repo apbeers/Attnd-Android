@@ -1,16 +1,20 @@
 package com.arcu.attnd.ui
 
 import android.content.Context
+import android.os.Build
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.arcu.attnd.AttndApplication
+import com.arcu.attnd.BuildConfig
 import com.arcu.attnd.data.EventRepository
 import com.arcu.attnd.data.InstallReferrer
 import com.arcu.attnd.data.RefreshResult
 import com.arcu.attnd.data.SyncState
+import com.arcu.attnd.data.UsageReporter
+import com.arcu.attnd.data.api.AttndApi
 import com.arcu.attnd.data.net.ApiException
 import com.arcu.attnd.data.prefs.DevicePrefs
 import com.arcu.attnd.domain.AppUpdate
@@ -19,8 +23,10 @@ import com.arcu.attnd.domain.EventBundle
 import com.arcu.attnd.domain.EventTime
 import com.arcu.attnd.domain.JoinLinks
 import com.arcu.attnd.domain.NearbyEvent
+import com.arcu.attnd.domain.SupportInfo
 import com.arcu.attnd.domain.Tab
 import com.arcu.attnd.domain.UpdateLevel
+import com.arcu.attnd.domain.UsageMetric
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -28,6 +34,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -70,6 +78,8 @@ data class AppUiState(
     val update: AppUpdate = AppUpdate(),
     /** A newer version exists and the user hasn't dismissed the banner for it. */
     val showUpdateBanner: Boolean = false,
+    /** API-004: build, server, device and event details for Options → About & support. */
+    val supportInfo: SupportInfo? = null,
 )
 
 private data class LocalState(
@@ -91,7 +101,24 @@ class EventViewModel(
     private val appContext: Context,
     private val repository: EventRepository,
     private val prefs: DevicePrefs,
+    private val usage: UsageReporter,
 ) : ViewModel() {
+
+    /** The parts of [SupportInfo] that never change while the process runs. */
+    private val baseSupportInfo = SupportInfo(
+        appVersion = BuildConfig.VERSION_NAME,
+        versionCode = BuildConfig.VERSION_CODE,
+        buildType = BuildConfig.BUILD_TYPE,
+        serverHost = BuildConfig.ATTND_SERVER,
+        apiVersion = AttndApi.API_VERSION,
+        osVersion = "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
+        device = "${Build.MANUFACTURER} ${Build.MODEL}",
+        deviceId = repository.deviceId,
+    )
+
+    /** Set when the app leaves the foreground (and at launch): the next resume counts as `app_open`. */
+    @Volatile
+    private var pendingAppOpen = true
 
     private val local = MutableStateFlow(
         LocalState(
@@ -125,10 +152,32 @@ class EventViewModel(
                 update = update,
                 showUpdateBanner = update.level == UpdateLevel.AVAILABLE &&
                     update.latestVersion != state.dismissedUpdateVersion,
+                supportInfo = baseSupportInfo.copy(
+                    eventName = bundle?.event?.name,
+                    eventCode = bundle?.event?.eventCode,
+                    eventId = bundle?.event?.id,
+                    contentVersion = bundle?.contentVersion,
+                    lastSyncedAt = sync.lastSyncedAt,
+                ),
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, AppUiState())
 
     private val startJob: Job = viewModelScope.launch { start() }
+
+    init {
+        // API-005 `tab_view`: whatever the user is looking at in the event (the initial/default
+        // tab, every tab change, a jump from a pin or a push, and Options), counted on change.
+        viewModelScope.launch {
+            uiState
+                .map { state ->
+                    val bundle = state.bundle
+                    if (state.phase != AppPhase.EVENT || bundle == null) null
+                    else bundle.event.id to (if (state.showOptions) UsageMetric.TAB_OPTIONS else state.selectedTab.key)
+                }
+                .distinctUntilChanged()
+                .collect { view -> if (view != null) usage.track(view.first, UsageMetric.TAB_VIEW, view.second) }
+        }
+    }
 
     /**
      * Offline start: show the persisted bundle immediately, then refresh. Without a saved bundle,
@@ -249,7 +298,9 @@ class EventViewModel(
 
     // ── Sync ────────────────────────────────────────────────────────────────
 
+    /** Pull to refresh. */
     fun refresh() {
+        track(UsageMetric.REFRESH)
         viewModelScope.launch { repository.refresh() }
     }
 
@@ -259,6 +310,10 @@ class EventViewModel(
      */
     suspend fun foregroundSync() {
         startJob.join()
+        if (pendingAppOpen) {
+            pendingAppOpen = false
+            track(UsageMetric.APP_OPEN)
+        }
         repository.checkForUpdate()
         val lastSync = repository.sync.value.lastSyncedAt
         if (lastSync == null || System.currentTimeMillis() - lastSync > RESUME_DEBOUNCE_MS) repository.refresh()
@@ -286,9 +341,14 @@ class EventViewModel(
     }
 
     /** Opening the app from a push notification lands on the Notifications tab. */
-    fun openNotifications() {
+    fun openNotifications(notificationId: Int? = null) {
         local.update { it.copy(selectedTab = Tab.NOTIFICATIONS, showOptions = false) }
-        refresh()
+        viewModelScope.launch {
+            // On a cold start the saved bundle (and so the event id) is only known after start().
+            startJob.join()
+            track(UsageMetric.NOTIFICATION_OPEN, notificationId?.toString())
+            repository.refresh()
+        }
     }
 
     /** Shows a location's detail: on the Locations tab, or as an overlay when that tab is hidden. */
@@ -306,6 +366,28 @@ class EventViewModel(
 
     fun consumeFocusScheduleItem() {
         local.update { it.copy(focusScheduleItemId = null) }
+    }
+
+    // ── Usage reporting (API-005) ───────────────────────────────────────────
+
+    /** A location's detail became visible (from the list, a map pin or a schedule item). */
+    fun onLocationShown(locationId: Int) = track(UsageMetric.LOCATION_VIEW, locationId.toString())
+
+    fun onScheduleItemShown(itemId: Int) = track(UsageMetric.SCHEDULE_ITEM_VIEW, itemId.toString())
+
+    /** A search was submitted or settled. The text itself is never reported. */
+    fun onSearch() = track(UsageMetric.SEARCH)
+
+    /** The app left the foreground (not a configuration change): send counts, and count the next resume. */
+    fun onAppBackground() {
+        pendingAppOpen = true
+        usage.flushNow()
+    }
+
+    /** Counts [name] for the joined event; does nothing outside an event. */
+    private fun track(name: String, detail: String? = null) {
+        val eventId = repository.bundle.value?.event?.id ?: return
+        usage.track(eventId, name, detail)
     }
 
     fun showOptions(show: Boolean) {
@@ -342,7 +424,7 @@ class EventViewModel(
         val Factory: ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 val app = checkNotNull(this[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY]) as AttndApplication
-                EventViewModel(app, app.graph.repository, app.graph.prefs)
+                EventViewModel(app, app.graph.repository, app.graph.prefs, app.graph.usage)
             }
         }
     }

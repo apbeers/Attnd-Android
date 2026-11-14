@@ -2,9 +2,10 @@ package com.arcu.attnd
 
 import android.app.Application
 import android.content.Context
-import com.arcu.attnd.data.EventRepository
-import com.arcu.attnd.data.api.AttndApi
 import com.arcu.attnd.data.AttestedTokenProvider
+import com.arcu.attnd.data.EventRepository
+import com.arcu.attnd.data.UsageReporter
+import com.arcu.attnd.data.api.AttndApi
 import com.arcu.attnd.data.prefs.DevicePrefs
 import com.arcu.attnd.push.PushNotifications
 import com.arcu.attnd.util.integrity.AttestationManager
@@ -37,11 +38,17 @@ class AppGraph(context: Context, val prefs: DevicePrefs) {
     /** For work that must outlive a screen, e.g. a refresh triggered by a push. */
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
+    private val api = AttndApi(AttestedTokenProvider)
+
+    /** API-005: anonymous usage counts, flushed in the background on [appScope]. */
+    val usage = UsageReporter(appScope, sender = { eventId, request -> api.sendUsage(eventId, request) })
+
     val repository = EventRepository(
-        api = AttndApi(AttestedTokenProvider),
+        api = api,
         prefs = prefs,
         cacheFile = File(appContext.filesDir, "event_bundle.json"),
         appVersion = BuildConfig.VERSION_NAME,
         pushTokenProvider = { PushNotifications.currentToken(appContext) },
+        usage = usage,
     )
 }

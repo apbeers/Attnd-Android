@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
@@ -26,13 +28,19 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.arcu.attnd.data.SyncState
@@ -106,7 +114,26 @@ fun SearchField(
     onQueryChange: (String) -> Unit,
     placeholder: String,
     modifier: Modifier = Modifier,
+    onSearch: () -> Unit = {},
 ) {
+    // API-005 `search`: reported once per submitted or settled (~1.5 s) non-empty query; never the text.
+    val currentOnSearch by rememberUpdatedState(onSearch)
+    var reported by rememberSaveable { mutableStateOf("") }
+    val report: (String) -> Unit = { text ->
+        val trimmed = text.trim()
+        if (trimmed.isNotEmpty() && trimmed != reported) {
+            reported = trimmed
+            currentOnSearch()
+        }
+    }
+    LaunchedEffect(query) {
+        if (query.isBlank()) {
+            reported = ""
+        } else {
+            delay(SEARCH_SETTLE_MS)
+            report(query)
+        }
+    }
     OutlinedTextField(
         value = query,
         onValueChange = onQueryChange,
@@ -120,11 +147,15 @@ fun SearchField(
             }
         },
         singleLine = true,
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+        keyboardActions = KeyboardActions(onSearch = { report(query) }),
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp),
     )
 }
+
+private const val SEARCH_SETTLE_MS = 1_500L
 
 /** Horizontally scrolling category filter chips ("All" + one per category). */
 @Composable

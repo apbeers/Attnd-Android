@@ -104,9 +104,11 @@ fun AttndApp(viewModel: EventViewModel = viewModel(factory = EventViewModel.Fact
                 )
                 AppPhase.EVENT -> {
                     val bundle = state.bundle ?: return@AttndTheme
-                    if (state.showOptions) {
+                    val supportInfo = state.supportInfo
+                    if (state.showOptions && supportInfo != null) {
                         OptionsScreen(
                             eventName = bundle.event.name,
+                            supportInfo = supportInfo,
                             notificationsEnabled = state.notificationsEnabled,
                             onNotificationsChange = viewModel::setNotificationsEnabled,
                             showUserLocation = state.showUserLocation,
@@ -169,6 +171,7 @@ private fun EventShell(state: AppUiState, bundle: EventBundle, viewModel: EventV
     val overlayLocation = state.focusLocationId?.takeIf { Tab.LOCATIONS !in tabs }?.let { bundle.location(it) }
     val overlayItem = state.focusScheduleItemId?.takeIf { Tab.SCHEDULE !in tabs }?.let { bundle.scheduleItem(it) }
     if (overlayLocation != null) {
+        LaunchedEffect(overlayLocation.id) { viewModel.onLocationShown(overlayLocation.id) }
         BackHandler { viewModel.consumeFocusLocation() }
         Surface(Modifier.fillMaxSize()) {
             LocationDetail(bundle, overlayLocation, onBack = viewModel::consumeFocusLocation, onScheduleItemClick = viewModel::focusScheduleItem)
@@ -176,6 +179,7 @@ private fun EventShell(state: AppUiState, bundle: EventBundle, viewModel: EventV
         return
     }
     if (overlayItem != null) {
+        LaunchedEffect(overlayItem.id) { viewModel.onScheduleItemShown(overlayItem.id) }
         BackHandler { viewModel.consumeFocusScheduleItem() }
         Surface(Modifier.fillMaxSize()) {
             ScheduleItemDetail(bundle, overlayItem, onBack = viewModel::consumeFocusScheduleItem, onLocationClick = viewModel::focusLocation)
@@ -238,6 +242,8 @@ private fun TabContent(state: AppUiState, bundle: EventBundle, viewModel: EventV
             focusLocationId = state.focusLocationId,
             onFocusConsumed = viewModel::consumeFocusLocation,
             onScheduleItemClick = viewModel::focusScheduleItem,
+            onLocationShown = viewModel::onLocationShown,
+            onSearch = viewModel::onSearch,
         )
         Tab.SCHEDULE -> ScheduleTab(
             bundle = bundle,
@@ -246,6 +252,8 @@ private fun TabContent(state: AppUiState, bundle: EventBundle, viewModel: EventV
             focusItemId = state.focusScheduleItemId,
             onFocusConsumed = viewModel::consumeFocusScheduleItem,
             onLocationClick = viewModel::focusLocation,
+            onItemShown = viewModel::onScheduleItemShown,
+            onSearch = viewModel::onSearch,
         )
         Tab.FLYER -> FlyerScreen(bundle.event.flyerUrl)
         Tab.NOTIFICATIONS -> NotificationsScreen(

@@ -52,6 +52,7 @@ fun MapTab(state: AppUiState, viewModel: EventViewModel) {
                     onRefresh = viewModel::refresh,
                     selectedId = null,
                     onLocationClick = viewModel::focusLocation,
+                    onSearch = viewModel::onSearch,
                 )
                 SecondaryPane.SCHEDULE, SecondaryPane.NOW_NEXT -> ScheduleList(
                     bundle = bundle,
@@ -60,6 +61,7 @@ fun MapTab(state: AppUiState, viewModel: EventViewModel) {
                     onRefresh = viewModel::refresh,
                     selectedId = null,
                     onItemClick = viewModel::focusScheduleItem,
+                    onSearch = viewModel::onSearch,
                 )
                 SecondaryPane.NONE -> Unit
             }

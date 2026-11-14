@@ -40,6 +40,12 @@ class MainActivity : ComponentActivity() {
         setContent { AttndApp(viewModel) }
     }
 
+    override fun onStop() {
+        super.onStop()
+        // Backgrounded (not just rotated): send usage counts now; the next resume is an app_open.
+        if (!isChangingConfigurations) viewModel.onAppBackground()
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
@@ -49,7 +55,7 @@ class MainActivity : ComponentActivity() {
     private fun handleIntent(intent: Intent?) {
         intent ?: return
         if (PushNotifications.opensNotifications(intent)) {
-            viewModel.openNotifications()
+            viewModel.openNotifications(PushNotifications.notificationId(intent))
             return
         }
         // App Link: https://attnd.app/join/<code>/
