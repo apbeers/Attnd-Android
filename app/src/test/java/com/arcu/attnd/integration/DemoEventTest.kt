@@ -186,11 +186,14 @@ class DemoEventTest {
     @Test
     fun notifications_areTheFourSentOnes() {
         val notifications = fetch().bundle.notifications
-        assertEquals(
-            setOf("Welcome!", "Taco Row is open", "Shade & water", "Set time change"),
-            notifications.map { it.title }.toSet(),
-        )
-        assertEquals(4, notifications.size)
+        // load_demo_event sends four at once and schedules two more ("Headliner soon" +90 min, "Day 2" +24 h)
+        // that the scheduler sends later, so 4–6 depending on how long ago the demo was loaded.
+        val titles = notifications.map { it.title }.toSet()
+        assertTrue("the four sent at load: $titles",
+            titles.containsAll(setOf("Welcome!", "Taco Row is open", "Shade & water", "Set time change")))
+        assertTrue("only the two scheduled ones may join them: $titles",
+            (titles - setOf("Welcome!", "Taco Row is open", "Shade & water", "Set time change")).all { it in setOf("Headliner soon", "Day 2") })
+        assertEquals("no duplicates", titles.size, notifications.size)
         val times = notifications.map { it.sendTime!!.toInstant() }
         assertEquals("newest first", times.sortedDescending(), times)
         assertTrue("no scheduled (future) notification is in the bundle", times.all { !it.isAfter(Instant.now()) })
