@@ -2,6 +2,12 @@
 
 Kotlin + Jetpack Compose app that lets attendees discover and follow live events. Consumes the Attnd REST API **v2** served by **[attnd-web](https://github.com/apbeers/Attnd-Web)** (contract: `API_V2.md`).
 
+
+## Branching (initial development)
+
+- `main` = production (default branch), `develop` = dev/beta. Pushing to `develop` deploys to the dev server / TestFlight / Play internal testing; pushing to `main` deploys to production.
+- **While there are no real users yet, commit and push straight to `develop`** — no feature branches or PRs needed. Merge `develop` → `main` to release. Revisit this once the apps have users.
+
 ## Tech Stack & Dependency Policy
 
 **No third-party libraries.** Allowed: the Kotlin stdlib and kotlinx (coroutines, serialization), AndroidX/Jetpack, and the Google first-party SDKs the app genuinely needs. Do not add Retrofit, OkHttp, Gson, Coil, etc.
@@ -157,9 +163,9 @@ CI sets `VERSION_CODE=<run number>000` and `VERSION_NAME=2.0.<run number>` (alwa
 |---------|--------------|
 | Any push / PR | `testDebugUnitTest lintDebug assembleDebug` on ubuntu-latest (JDK 21; SDK packages installed by AGP) |
 | Push to `develop` | Signed bundle built against the `dev` environment's `ATTND_SERVER` (Heroku dev app) → Play **internal testing** |
-| Push to `master` | Signed bundle against `attnd.app` → Play **production** (staged rollout if `PLAY_ROLLOUT` < 1) |
+| Push to `main` | Signed bundle against `attnd.app` → Play **production** (staged rollout if `PLAY_ROLLOUT` < 1) |
 
-Publishing uses `scripts/ci/play_publish.py` (Play Developer API v3, service-account JWT) — no third-party actions or Gradle plugins. Release builds never contain the static API key. Server host: `ATTND_SERVER` → `BuildConfig.ATTND_SERVER` (default `attnd.app`). Setup checklist: `DEPLOYMENT.md` in attnd-web.
+Publishing uses `scripts/ci/play_publish.py` (Play Developer API v3, service-account JWT) — no third-party actions or Gradle plugins. Release builds never contain the static API key. Server host: `ATTND_SERVER` → `BuildConfig.ATTND_SERVER` (default `attnd.app`). Setup checklist: `SETUP.md` in attnd-web.
 
 ## Building
 

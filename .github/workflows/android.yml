@@ -1,9 +1,9 @@
 # Android pipeline
 #   every push / PR   → unit tests, lint, debug build
 #   push to develop   → signed bundle → Google Play internal testing (talks to the dev server)
-#   push to master    → signed bundle → Google Play production (rollout set by PLAY_ROLLOUT)
+#   push to main      → signed bundle → Google Play production (rollout set by PLAY_ROLLOUT)
 #
-# Setup: see DEPLOYMENT.md in attnd-web. Uses only GitHub's own actions + Google's APIs.
+# Setup: see SETUP.md in attnd-web. Uses only GitHub's own actions + Google's APIs.
 name: Android
 
 on:
@@ -14,7 +14,7 @@ on:
 
 concurrency:
   group: android-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/master' && github.ref != 'refs/heads/develop' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/develop' }}
 
 permissions:
   contents: read
@@ -55,12 +55,12 @@ jobs:
           retention-days: 7
 
   deliver:
-    name: ${{ github.ref == 'refs/heads/master' && 'Play production' || 'Play internal testing' }}
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/master')
+    name: ${{ github.ref == 'refs/heads/main' && 'Play production' || 'Play internal testing' }}
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main')
     needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    environment: ${{ github.ref == 'refs/heads/master' && 'production' || 'dev' }}
+    environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'dev' }}
     env:
       # Higher than every version code uploaded before CI existed (last manual build: 224).
       VERSION_CODE: ${{ github.run_number }}000
@@ -97,8 +97,8 @@ jobs:
       - name: Publish to Google Play
         env:
           GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
-          TRACK: ${{ github.ref == 'refs/heads/master' && 'production' || 'internal' }}
-          ROLLOUT: ${{ github.ref == 'refs/heads/master' && (vars.PLAY_ROLLOUT || '1.0') || '1.0' }}
+          TRACK: ${{ github.ref == 'refs/heads/main' && 'production' || 'internal' }}
+          ROLLOUT: ${{ github.ref == 'refs/heads/main' && (vars.PLAY_ROLLOUT || '1.0') || '1.0' }}
           NOTES: ${{ vars.RELEASE_NOTES || 'Improvements and fixes.' }}
         run: |
           python3 -m pip install --quiet "pyjwt[crypto]"
