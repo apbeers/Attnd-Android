@@ -20,7 +20,6 @@ import com.arcu.attnd.data.prefs.DevicePrefs
 import com.arcu.attnd.domain.AppUpdate
 import com.arcu.attnd.domain.Event
 import com.arcu.attnd.domain.EventBundle
-import com.arcu.attnd.domain.EventTime
 import com.arcu.attnd.domain.JoinLinks
 import com.arcu.attnd.domain.NearbyEvent
 import com.arcu.attnd.domain.SupportInfo
@@ -40,7 +39,6 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.IOException
-import java.time.Instant
 
 enum class AppPhase { LOADING, LAUNCH, EVENT }
 
@@ -305,8 +303,10 @@ class EventViewModel(
     }
 
     /**
-     * Runs while the activity is resumed: refresh now (the app came to the foreground), then every
-     * five minutes on event days. Cancelled automatically when the activity pauses.
+     * Runs while the activity is resumed: refresh now (the app came to the foreground), then poll
+     * every five seconds while an event is joined, so organizer edits on the web show up live. Polls
+     * are conditional GETs (usually `304`) and silent: no spinner, and one failed poll just retries
+     * on the next tick. Cancelled automatically when the activity pauses.
      */
     suspend fun foregroundSync() {
         startJob.join()
@@ -318,9 +318,8 @@ class EventViewModel(
         val lastSync = repository.sync.value.lastSyncedAt
         if (lastSync == null || System.currentTimeMillis() - lastSync > RESUME_DEBOUNCE_MS) repository.refresh()
         while (true) {
-            delay(REFRESH_INTERVAL_MS)
-            val event = repository.bundle.value?.event ?: continue
-            if (EventTime.isEventDay(event, Instant.now())) repository.refresh()
+            delay(LIVE_POLL_INTERVAL_MS)
+            if (repository.bundle.value != null) repository.refresh(silent = true)
         }
     }
 
@@ -418,7 +417,7 @@ class EventViewModel(
     }
 
     companion object {
-        private const val REFRESH_INTERVAL_MS = 5 * 60 * 1000L
+        private const val LIVE_POLL_INTERVAL_MS = 5 * 1000L
         private const val RESUME_DEBOUNCE_MS = 30 * 1000L
 
         val Factory: ViewModelProvider.Factory = viewModelFactory {

@@ -2,9 +2,8 @@ package com.arcu.attnd.domain
 
 import java.time.Instant
 import java.time.format.DateTimeFormatter
-import java.time.temporal.ChronoUnit
 
-/** One aggregated usage count (API-005): [at] is the ISO-8601 UTC start of the hour it fell in. */
+/** One aggregated usage count (API-005): [at] is the ISO-8601 UTC start of the 5-minute window it fell in. */
 data class UsageEntry(
     val name: String,
     val detail: String?,
@@ -27,21 +26,21 @@ object UsageMetric {
 }
 
 /**
- * In-memory usage counts keyed by (name, detail, UTC hour). Counts only: nothing here identifies
+ * In-memory usage counts keyed by (name, detail, UTC 5-minute window). Counts only: nothing here identifies
  * the device or the person, and callers must never pass search text as a detail.
  *
  * Thread-safe; [drain] hands out everything collected so far and starts over.
  */
 class UsageAggregator {
 
-    private data class Key(val name: String, val detail: String?, val hour: Instant)
+    private data class Key(val name: String, val detail: String?, val bucket: Instant)
 
     private val counts = LinkedHashMap<Key, Int>()
 
     @Synchronized
     fun add(name: String, detail: String? = null, at: Instant, count: Int = 1) {
         if (name.isBlank() || count <= 0) return
-        val key = Key(name, detail?.takeIf { it.isNotBlank() }, hourStart(at))
+        val key = Key(name, detail?.takeIf { it.isNotBlank() }, bucketStart(at))
         counts[key] = (counts[key] ?: 0) + count
     }
 
@@ -52,20 +51,24 @@ class UsageAggregator {
     @get:Synchronized
     val size: Int get() = counts.size
 
-    /** Returns every entry, oldest hour first, and clears the aggregator. */
+    /** Returns every entry, oldest window first, and clears the aggregator. */
     @Synchronized
     fun drain(): List<UsageEntry> {
         val entries = counts.entries
-            .sortedBy { it.key.hour }
-            .map { (key, count) -> UsageEntry(key.name, key.detail, count, formatHour(key.hour)) }
+            .sortedBy { it.key.bucket }
+            .map { (key, count) -> UsageEntry(key.name, key.detail, count, formatBucket(key.bucket)) }
         counts.clear()
         return entries
     }
 
     companion object {
-        fun hourStart(at: Instant): Instant = at.truncatedTo(ChronoUnit.HOURS)
+        /** Width of one aggregation window. */
+        const val BUCKET_SECONDS = 5 * 60L
 
-        /** e.g. `2026-11-14T16:00:00Z`. */
-        fun formatHour(hour: Instant): String = DateTimeFormatter.ISO_INSTANT.format(hourStart(hour))
+        /** Start of the UTC 5-minute window containing [at] (16:07:42 → 16:05:00). */
+        fun bucketStart(at: Instant): Instant = Instant.ofEpochSecond(Math.floorDiv(at.epochSecond, BUCKET_SECONDS) * BUCKET_SECONDS)
+
+        /** e.g. `2026-11-14T16:05:00Z`. */
+        fun formatBucket(at: Instant): String = DateTimeFormatter.ISO_INSTANT.format(bucketStart(at))
     }
 }

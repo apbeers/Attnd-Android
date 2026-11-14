@@ -59,7 +59,8 @@ import com.arcu.attnd.domain.DisplayConfig
 import com.arcu.attnd.domain.EventBundle
 import com.arcu.attnd.domain.Tab
 import com.arcu.attnd.domain.UpdateLevel
-import com.arcu.attnd.ui.components.EventBanners
+import com.arcu.attnd.ui.components.EventStatusPills
+import com.arcu.attnd.ui.components.OfflineNotice
 import com.arcu.attnd.ui.components.RemoteImage
 import com.arcu.attnd.ui.screens.FlyerScreen
 import com.arcu.attnd.ui.screens.LaunchScreen
@@ -220,11 +221,13 @@ private fun EventShell(state: AppUiState, bundle: EventBundle, viewModel: EventV
                     .padding(padding)
                     .consumeWindowInsets(padding),
             ) {
-                EventBanners(bundle.event, state.sync)
+                OfflineNotice(state.sync)
                 Box(Modifier.fillMaxWidth().weight(1f)) {
                     tabStates.SaveableStateProvider(state.selectedTab.key) {
                         TabContent(state, bundle, viewModel)
                     }
+                    // Floats over the content (no layout space) so demo / ended events stay obvious.
+                    EventStatusPills(bundle.event, Modifier.align(Alignment.TopCenter))
                 }
             }
         }

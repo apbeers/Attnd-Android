@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="attnd_primary">#3D2581</color>
+    <!-- Brand purple from the app icon; keep in sync with ui/theme/Color.kt. -->
+    <color name="attnd_primary">#431F86</color>
 </resources>

@@ -3,13 +3,19 @@ package com.arcu.attnd.ui.components
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -61,49 +67,76 @@ fun rememberNow(intervalMs: Long = 30_000L): Instant {
 }
 
 /**
- * Banners above the tab content: the demo banner (`is_demo`), the "event has ended" banner
- * (`status == archived`) and an offline notice when the last refresh failed.
+ * Event status pills: "Demo event" (`is_demo`) and "Event ended" (`status == archived`). Small and
+ * always visible; the caller overlays them (e.g. top-centre of the tab content) so they take no
+ * layout space. They keep clear of the status bar and display cutouts. Emits nothing when neither applies.
  */
 @Composable
-fun EventBanners(event: Event, sync: SyncState, modifier: Modifier = Modifier) {
-    Column(modifier.fillMaxWidth()) {
+fun EventStatusPills(event: Event, modifier: Modifier = Modifier) {
+    if (!event.isDemo && !event.isArchived) return
+    Row(
+        modifier = modifier
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
+            .padding(top = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
         if (event.isDemo) {
-            Banner(
+            StatusPill(
                 icon = Icons.Filled.Science,
-                text = "Demo Event — this is a preview, not a live event.",
+                text = "Demo event",
                 container = MaterialTheme.colorScheme.tertiaryContainer,
                 content = MaterialTheme.colorScheme.onTertiaryContainer,
             )
         }
         if (event.isArchived) {
-            Banner(
+            StatusPill(
                 icon = Icons.Filled.EventBusy,
-                text = "This event has ended.",
+                text = "Event ended",
                 container = MaterialTheme.colorScheme.secondaryContainer,
                 content = MaterialTheme.colorScheme.onSecondaryContainer,
-            )
-        }
-        sync.error?.let { message ->
-            Banner(
-                icon = Icons.Filled.CloudOff,
-                text = message,
-                container = MaterialTheme.colorScheme.errorContainer,
-                content = MaterialTheme.colorScheme.onErrorContainer,
             )
         }
     }
 }
 
 @Composable
-private fun Banner(icon: ImageVector, text: String, container: Color, content: Color) {
-    Surface(color = container, contentColor = content, modifier = Modifier.fillMaxWidth()) {
+private fun StatusPill(icon: ImageVector, text: String, container: Color, content: Color) {
+    Surface(
+        shape = CircleShape,
+        color = container,
+        contentColor = content,
+        tonalElevation = 3.dp,
+        shadowElevation = 3.dp,
+    ) {
         Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            modifier = Modifier
+                .height(28.dp)
+                .padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(16.dp))
+            Text(text, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, maxLines = 1)
+        }
+    }
+}
+
+/** Slim offline notice above the tab content while the last refresh failed (see [SyncState.error]). */
+@Composable
+fun OfflineNotice(sync: SyncState, modifier: Modifier = Modifier) {
+    val message = sync.error ?: return
+    Surface(
+        color = MaterialTheme.colorScheme.errorContainer,
+        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
-            Text(text, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+            Icon(Icons.Filled.CloudOff, contentDescription = null, modifier = Modifier.size(16.dp))
+            Text(message, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
         }
     }
 }

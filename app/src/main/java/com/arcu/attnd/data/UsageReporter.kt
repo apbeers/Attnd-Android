@@ -16,7 +16,7 @@ import java.time.Instant
 /**
  * Anonymous usage reporting (API-005, `POST events/<id>/usage/`).
  *
- * Counts are aggregated in memory per event by (name, detail, UTC hour) and sent at most every
+ * Counts are aggregated in memory per event by (name, detail, UTC 5-minute window) and sent at most every
  * [flushIntervalMs] while there is something to send, when the app goes to the background and
  * before leaving or switching events ([flushNow]). A batch that fails is retried once on the next
  * flush, then dropped. Everything runs on [scope]; nothing ever blocks the UI or surfaces an error.

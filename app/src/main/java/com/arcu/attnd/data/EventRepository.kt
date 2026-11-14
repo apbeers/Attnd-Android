@@ -69,6 +69,9 @@ class EventRepository(
 
     private val refreshMutex = Mutex()
 
+    /** Failed refreshes since the last successful one; lets silent polls ride out a blip. */
+    private var consecutiveFailures = 0
+
     private val _appUpdate = MutableStateFlow(AppUpdate())
 
     /**
@@ -148,22 +151,28 @@ class EventRepository(
         }
     }
 
-    /** Downloads the bundle unless the server says it is unchanged. Never throws (except cancellation). */
-    suspend fun refresh(): RefreshResult = withContext(io) {
+    /**
+     * Downloads the bundle unless the server says it is unchanged. Never throws (except cancellation).
+     *
+     * [silent] is for the live-update poll: it never shows [SyncState.isRefreshing], and a failure
+     * only sets [SyncState.error] (the offline notice) after [SILENT_FAILURES_BEFORE_ERROR] failures
+     * in a row, so one dropped poll doesn't flash the notice. Any success clears the error.
+     */
+    suspend fun refresh(silent: Boolean = false): RefreshResult = withContext(io) {
         val eventId = prefs.eventId ?: return@withContext RefreshResult.NoEvent
         refreshMutex.withLock {
             if (prefs.eventId != eventId) return@withLock RefreshResult.NotModified
-            _sync.update { it.copy(isRefreshing = true) }
+            if (!silent) _sync.update { it.copy(isRefreshing = true) }
             try {
-                fetchBundle(eventId)
+                fetchBundle(eventId, silent)
             } catch (e: CancellationException) {
                 throw e
             } catch (_: IOException) {
-                fail("Can't reach Attnd right now. Showing saved content.")
+                fail("Can't reach Attnd right now. Showing saved content.", silent)
             } catch (e: Exception) {
-                fail("Couldn't refresh (${e.javaClass.simpleName}).")
+                fail("Couldn't refresh (${e.javaClass.simpleName}).", silent)
             } finally {
-                _sync.update { it.copy(isRefreshing = false) }
+                if (!silent) _sync.update { it.copy(isRefreshing = false) }
             }
         }
     }
@@ -198,7 +207,7 @@ class EventRepository(
     private fun etagFor(eventId: Int): String? =
         prefs.bundleEtag?.takeIf { _bundle.value?.event?.id == eventId }
 
-    private suspend fun fetchBundle(eventId: Int): RefreshResult {
+    private suspend fun fetchBundle(eventId: Int, silent: Boolean): RefreshResult {
         val response = api.bundle(eventId, etagFor(eventId), deviceId)
         return when {
             response.code == 304 -> {
@@ -209,7 +218,7 @@ class EventRepository(
                 val json = response.json
                 val parsed = json?.let { ApiMapper.parseBundle(it) }
                 when {
-                    json == null || parsed == null -> fail("The server sent content this version can't read.")
+                    json == null || parsed == null -> fail("The server sent content this version can't read.", silent)
                     prefs.eventId != eventId -> RefreshResult.NotModified // left or switched meanwhile
                     else -> {
                         writeCache(json)
@@ -225,18 +234,20 @@ class EventRepository(
                 _sync.update { it.copy(error = "This event is no longer available.") }
                 RefreshResult.EventGone
             }
-            else -> fail("Server error (${response.code}). Showing saved content.")
+            else -> fail("Server error (${response.code}). Showing saved content.", silent)
         }
     }
 
     private fun markSynced() {
         val now = System.currentTimeMillis()
         prefs.lastSyncedAt = now
+        consecutiveFailures = 0
         _sync.update { it.copy(lastSyncedAt = now, error = null) }
     }
 
-    private fun fail(message: String): RefreshResult {
-        _sync.update { it.copy(error = message) }
+    private fun fail(message: String, silent: Boolean = false): RefreshResult {
+        consecutiveFailures++
+        if (!silent || consecutiveFailures >= SILENT_FAILURES_BEFORE_ERROR) _sync.update { it.copy(error = message) }
         return RefreshResult.Failed(message)
     }
 
@@ -244,6 +255,7 @@ class EventRepository(
         prefs.clearEvent()
         cacheFile.delete()
         _bundle.value = null
+        consecutiveFailures = 0
         _sync.value = SyncState()
     }
 
@@ -275,6 +287,9 @@ class EventRepository(
 
     private companion object {
         const val PUSH_TOKEN_TIMEOUT_MS = 10_000L
+
+        /** Silent polls run every 5 s, so this shows the offline notice after ~15 s without contact. */
+        const val SILENT_FAILURES_BEFORE_ERROR = 3
     }
 }
 

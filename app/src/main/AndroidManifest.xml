@@ -29,6 +29,9 @@
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_icon"
             android:resource="@drawable/ic_stat_attnd" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_color"
+            android:resource="@color/attnd_primary" />
 
         <!-- No orientation lock: the app resizes freely (folded, unfolded, tabletop, rotated). -->
         <activity

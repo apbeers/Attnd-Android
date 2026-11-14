@@ -154,7 +154,7 @@ data class DeviceRequest(
 )
 
 /**
- * `POST events/<id>/usage/` (API-005): anonymous hourly counts. Deliberately has no device id or
+ * `POST events/<id>/usage/` (API-005): anonymous counts per 5-minute window. Deliberately has no device id or
  * any other identifier; `detail` is left out when absent.
  */
 @Serializable
@@ -168,7 +168,7 @@ data class UsageEntryDto(
     val name: String = "",
     val detail: String? = null,
     val count: Int = 1,
-    /** ISO 8601 UTC start of the hour the counts fell in. */
+    /** ISO 8601 UTC start of the 5-minute window the counts fell in. */
     val at: String? = null,
 )
 

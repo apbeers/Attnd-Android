@@ -50,7 +50,7 @@ app/
       ScheduleGrouping.kt         #   timeline / by_day / by_location / now_next, search, ended/now
       LocationGrouping.kt         #   category grouping, filters, mappable pins, bounds
       JoinLinks.kt                #   /join/<code>/ App Links + install-referrer parsing
-      UsageAggregator.kt          #   API-005 counts by (name, detail, UTC hour) + metric names
+      UsageAggregator.kt          #   API-005 counts by (name, detail, UTC 5-minute window) + metric names
       SupportInfo.kt              #   API-004 build/device/event details, support code, copy text
     data/
       net/HttpClient.kt           #   HttpURLConnection client (no caching, so 304s reach us)
@@ -89,7 +89,7 @@ app/google-services.json          # (not committed) Firebase config for FCM
 
 ### Usage reporting (API-005)
 
-`POST events/<id>/usage/` with `{platform: "android", events: [{name, detail?, count, at}]}`, `at` = UTC start of the hour. No device id or other identifier, never search text. `UsageReporter` aggregates per event in a `UsageAggregator`, sends at most every 60 s while there is data, when `MainActivity.onStop` runs (not on rotation) and before leave/switch; a failed batch is retried once on the next flush, then dropped; errors are swallowed.
+`POST events/<id>/usage/` with `{platform: "android", events: [{name, detail?, count, at}]}`, `at` = UTC start of the 5-minute window (e.g. `2026-11-14T16:05:00Z`). No device id or other identifier, never search text. `UsageReporter` aggregates per event in a `UsageAggregator`, sends at most every 60 s while there is data, when `MainActivity.onStop` runs (not on rotation) and before leave/switch; a failed batch is retried once on the next flush, then dropped; errors are swallowed.
 
 | Metric | Where |
 |--------|-------|
@@ -117,7 +117,7 @@ Base `https://attnd.app/api/v2/` — see attnd-web `API_V2.md`.
 | `POST events/<id>/leave/` | `{device_id}` |
 | `POST devices/` | On launch and when push token / notification preference changes |
 
-Bundle refresh: on join, when the app is resumed, pull-to-refresh, every 5 minutes while resumed on event days, and on a `content_updated` push. A `404` on the bundle clears the event and returns to the launch screen.
+Bundle refresh: on join, when the app is resumed, pull-to-refresh, on a `content_updated` push, and a **live poll every 5 s** while the activity is resumed and an event is joined (`EventViewModel.foregroundSync`; conditional GET, usually `304`) so organizer edits show up live. Polls use `refresh(silent = true)`: no spinner, and the offline notice only appears after 3 failed polls in a row (any success clears it). A `404` on the bundle clears the event and returns to the launch screen.
 
 Models tolerate missing and unknown keys everywhere. Coordinates may be `null`: never pin those, and never treat `0,0` as real (`GeoPoint.of`). Schedule items may have no location ("General"). All times are shown in the event's `timezone`.
 
@@ -132,9 +132,9 @@ On a 401 the stored JWT is invalidated and the request is retried once after re-
 ## Server-driven Display
 
 `DisplayConfig` resolves the bundle's `display` object with the documented defaults:
-tabs (order/visibility, Flyer only if listed) and default tab → navigation items; `locations_style` cards/list/grouped; `schedule_style` timeline/by_day/by_location/now_next; `map_clustering` (maps-compose-utils `Clustering`); `map_fit_all` (LatLngBounds on open and on Map-tab reselect); `show_location_images`; `enable_search`; `group_by_category` (filter chips on Locations and Map); `secondary_pane` (beside/below the map on an unfolded foldable); `accent_color` → Material colour scheme `primary`; `logo_url` in the header.
+tabs (order/visibility, Flyer only if listed) and default tab → navigation items; `locations_style` cards/list/grouped; `schedule_style` timeline/by_day/by_location/now_next; `map_clustering` (maps-compose-utils `Clustering`); `map_fit_all` (LatLngBounds on open and on Map-tab reselect); `show_location_images`; `enable_search`; `group_by_category` (filter chips on Locations and Map); `secondary_pane` (beside/below the map on an unfolded foldable); `accent_color` → Material colour scheme `primary` (otherwise the brand purple: `#431F86` light / `#9D7BEA` dark, `ui/theme/Color.kt` + `res/values/colors.xml`; no Material You dynamic colour); `logo_url` in the header.
 
-Banners: **Demo Event** when `event.is_demo` (falls back to `!paid` for old servers); **"This event has ended"** when `status == archived`; an offline notice when the last refresh failed.
+Status: a small floating pill (`EventStatusPills`, overlaid top-centre of the tab content, takes no layout space) shows **Demo event** when `event.is_demo` (falls back to `!paid` for old servers) and **Event ended** when `status == archived`; a slim offline notice row (`OfflineNotice`) sits above the content while `SyncState.error` is set.
 
 ## Foldables (adaptive layouts)
 

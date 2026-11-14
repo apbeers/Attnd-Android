@@ -20,23 +20,23 @@ import java.io.IOException
 import java.time.Instant
 import java.time.OffsetDateTime
 
-/** API-005: hourly aggregation, the request's wire shape, and the reporter's flush/retry rules. */
+/** API-005: 5-minute aggregation, the request's wire shape, and the reporter's flush/retry rules. */
 @OptIn(ExperimentalCoroutinesApi::class)
 class UsageReportingTest {
 
     private val t1605 = Instant.parse("2026-11-14T16:05:00Z")
-    private val t1659 = Instant.parse("2026-11-14T16:59:59Z")
-    private val t1700 = Instant.parse("2026-11-14T17:00:00Z")
+    private val t1609 = Instant.parse("2026-11-14T16:09:59.999Z")
+    private val t1610 = Instant.parse("2026-11-14T16:10:00Z")
 
     // ── Aggregator ───────────────────────────────────────────────────────────
 
     @Test
-    fun aggregator_countsByNameDetailAndUtcHour() {
+    fun aggregator_countsByNameDetailAndUtcFiveMinuteWindow() {
         val aggregator = UsageAggregator()
         aggregator.add("tab_view", "map", t1605)
-        aggregator.add("tab_view", "map", t1659)
+        aggregator.add("tab_view", "map", t1609)
         aggregator.add("tab_view", "schedule", t1605)
-        aggregator.add("tab_view", "map", t1700)
+        aggregator.add("tab_view", "map", t1610)
         aggregator.add("app_open", null, t1605)
         aggregator.add("app_open", null, t1605)
 
@@ -44,15 +44,15 @@ class UsageReportingTest {
 
         assertEquals(
             setOf(
-                UsageEntry("tab_view", "map", 2, "2026-11-14T16:00:00Z"),
-                UsageEntry("tab_view", "schedule", 1, "2026-11-14T16:00:00Z"),
-                UsageEntry("tab_view", "map", 1, "2026-11-14T17:00:00Z"),
-                UsageEntry("app_open", null, 2, "2026-11-14T16:00:00Z"),
+                UsageEntry("tab_view", "map", 2, "2026-11-14T16:05:00Z"),
+                UsageEntry("tab_view", "schedule", 1, "2026-11-14T16:05:00Z"),
+                UsageEntry("tab_view", "map", 1, "2026-11-14T16:10:00Z"),
+                UsageEntry("app_open", null, 2, "2026-11-14T16:05:00Z"),
             ),
             entries.toSet(),
         )
         assertEquals(4, entries.size)
-        assertEquals("oldest hour first", "2026-11-14T17:00:00Z", entries.last().at)
+        assertEquals("oldest window first", "2026-11-14T16:10:00Z", entries.last().at)
     }
 
     @Test
@@ -62,15 +62,24 @@ class UsageReportingTest {
         aggregator.add("search", "", t1605)
         aggregator.add("search", null, t1605)
 
-        assertEquals(listOf(UsageEntry("search", null, 2, "2026-11-14T16:00:00Z")), aggregator.drain())
+        assertEquals(listOf(UsageEntry("search", null, 2, "2026-11-14T16:05:00Z")), aggregator.drain())
         assertTrue(aggregator.isEmpty)
         assertTrue(aggregator.drain().isEmpty())
     }
 
     @Test
-    fun hourStart_isUtcEvenForOffsetInput() {
-        val instant = OffsetDateTime.parse("2026-11-14T10:35:12.345-06:00").toInstant()
-        assertEquals("2026-11-14T16:00:00Z", UsageAggregator.formatHour(instant))
+    fun bucketStart_isUtcEvenForOffsetInput() {
+        val instant = OffsetDateTime.parse("2026-11-14T10:37:12.345-06:00").toInstant()
+        assertEquals("2026-11-14T16:35:00Z", UsageAggregator.formatBucket(instant))
+    }
+
+    @Test
+    fun bucketStart_roundsDownToTheFiveMinuteBoundary() {
+        assertEquals(Instant.parse("2026-11-14T16:05:00Z"), UsageAggregator.bucketStart(t1605))
+        assertEquals(Instant.parse("2026-11-14T16:05:00Z"), UsageAggregator.bucketStart(t1609))
+        assertEquals(Instant.parse("2026-11-14T16:10:00Z"), UsageAggregator.bucketStart(t1610))
+        assertEquals(Instant.parse("2026-11-14T23:55:00Z"), UsageAggregator.bucketStart(Instant.parse("2026-11-14T23:59:59Z")))
+        assertEquals("2026-11-14T00:00:00Z", UsageAggregator.formatBucket(Instant.parse("2026-11-14T00:04:59Z")))
     }
 
     // ── Wire format ─────────────────────────────────────────────────────────
@@ -79,8 +88,8 @@ class UsageReportingTest {
     fun request_matchesApiShape_withoutIdentifiers() {
         val request = UsageRequest(
             events = listOf(
-                UsageEntryDto(name = "tab_view", detail = "map", count = 3, at = "2026-11-14T16:00:00Z"),
-                UsageEntryDto(name = "app_open", at = "2026-11-14T16:00:00Z"),
+                UsageEntryDto(name = "tab_view", detail = "map", count = 3, at = "2026-11-14T16:05:00Z"),
+                UsageEntryDto(name = "app_open", at = "2026-11-14T16:05:00Z"),
             ),
         )
         val json = ApiJson.encodeToString(UsageRequest.serializer(), request)
@@ -93,7 +102,7 @@ class UsageReportingTest {
         assertEquals("tab_view", first["name"]!!.jsonPrimitive.content)
         assertEquals("map", first["detail"]!!.jsonPrimitive.content)
         assertEquals(3, first["count"]!!.jsonPrimitive.int)
-        assertEquals("2026-11-14T16:00:00Z", first["at"]!!.jsonPrimitive.content)
+        assertEquals("2026-11-14T16:05:00Z", first["at"]!!.jsonPrimitive.content)
         val second = events[1].jsonObject
         assertFalse("absent detail is omitted: $json", second.containsKey("detail"))
         assertEquals(1, second["count"]!!.jsonPrimitive.int)
@@ -115,7 +124,7 @@ class UsageReportingTest {
         reporter.flush()
 
         assertEquals(listOf(1, 2), sent.map { it.eventId })
-        assertEquals(listOf(UsageEntryDto("tab_view", "map", 2, "2026-11-14T16:00:00Z")), sent[0].request.events)
+        assertEquals(listOf(UsageEntryDto("tab_view", "map", 2, "2026-11-14T16:05:00Z")), sent[0].request.events)
         assertEquals("android", sent[1].request.platform)
         assertFalse(reporter.hasWork())
     }
