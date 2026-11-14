@@ -109,7 +109,7 @@ Banners: **Demo Event** when `event.is_demo` (falls back to `!paid` for old serv
 
 ## Foldables (adaptive layouts)
 
-Foldables are a supported target; tablets are not a goal (layouts simply also work on large screens). No orientation lock.
+**Phones and foldables only; no tablets.** Tablets are excluded from distribution in Play Console's device catalog (manifest settings can't do it without also excluding unfolded foldables). Don't add tablet-specific layouts; the adaptive layouts below exist for unfolded foldables and simply also work on any large window. No orientation lock (Android 16+ ignores it on large screens anyway).
 - **Folded / cover screen (compact width)**: bottom navigation bar; Locations/Schedule show list *or* detail.
 - **Unfolded inner display (medium width or more)**: `NavigationSuiteScaffold` switches to a rail; `ListDetailPaneScaffold` shows list + detail side by side; the Map tab shows the map beside `display.secondary_pane`, split exactly on the fold when a vertical hinge is reported (`FoldAwareSplit`).
 - **Tabletop posture** (`currentWindowAdaptiveInfo().windowPosture.isTabletop`): map on the top half, pane on the bottom half, split on the horizontal hinge.
