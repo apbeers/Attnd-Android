@@ -149,7 +149,17 @@ KEY_PASSWORD=...
 
 ## Version Management
 
-`version.properties`: increment `VERSION_CODE` before each Play Store release. `versionName` is `1.0.<VERSION_CODE>`.
+CI sets `VERSION_CODE=<run number>000` and `VERSION_NAME=2.0.<run number>` (always increasing, above the last manual build 224). `version.properties` is only used for local builds.
+
+## CI/CD (`.github/workflows/android.yml`)
+
+| Trigger | What happens |
+|---------|--------------|
+| Any push / PR | `testDebugUnitTest lintDebug assembleDebug` on ubuntu-latest (JDK 21; SDK packages installed by AGP) |
+| Push to `develop` | Signed bundle built against the `dev` environment's `ATTND_SERVER` (Heroku dev app) → Play **internal testing** |
+| Push to `master` | Signed bundle against `attnd.app` → Play **production** (staged rollout if `PLAY_ROLLOUT` < 1) |
+
+Publishing uses `scripts/ci/play_publish.py` (Play Developer API v3, service-account JWT) — no third-party actions or Gradle plugins. Release builds never contain the static API key. Server host: `ATTND_SERVER` → `BuildConfig.ATTND_SERVER` (default `attnd.app`). Setup checklist: `DEPLOYMENT.md` in attnd-web.
 
 ## Building
 

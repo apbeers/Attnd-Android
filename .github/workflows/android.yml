@@ -1,37 +1,109 @@
-name: Android CI
+# Android pipeline
+#   every push / PR   → unit tests, lint, debug build
+#   push to develop   → signed bundle → Google Play internal testing (talks to the dev server)
+#   push to master    → signed bundle → Google Play production (rollout set by PLAY_ROLLOUT)
+#
+# Setup: see DEPLOYMENT.md in attnd-web. Uses only GitHub's own actions + Google's APIs.
+name: Android
 
 on:
   push:
-    branches: [main]
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' && github.ref != 'refs/heads/develop' }}
+
+permissions:
+  contents: read
+
+env:
+  GRADLE_OPTS: -Dorg.gradle.daemon=false
 
 jobs:
-  build-and-test:
-    name: Build & Test
+  test:
+    name: Build & test
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-
+    timeout-minutes: 40
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
         with:
+          distribution: temurin
           java-version: '21'
-          distribution: 'temurin'
-
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew
-
-      - name: Run unit & integration tests
+          cache: gradle
+      - name: Accept Android SDK licenses
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
+      - name: Firebase config (optional)
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: if [ -n "$GOOGLE_SERVICES_JSON" ]; then printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json; fi
+      - name: Unit tests, lint, debug build
         env:
           ATTND_API_KEY: ${{ secrets.ATTND_API_KEY }}
-        run: ./gradlew test -PATTND_API_KEY="$ATTND_API_KEY" --no-daemon
-
-      - name: Upload test results
-        uses: actions/upload-artifact@v4
+          MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
+        run: ./gradlew testDebugUnitTest lintDebug assembleDebug
+      - name: Reports
         if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: test-results-${{ github.sha }}
-          path: app/build/reports/tests/
-          retention-days: 14
+          name: android-reports
+          path: app/build/reports/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  deliver:
+    name: ${{ github.ref == 'refs/heads/master' && 'Play production' || 'Play internal testing' }}
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/master')
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment: ${{ github.ref == 'refs/heads/master' && 'production' || 'dev' }}
+    env:
+      # Higher than every version code uploaded before CI existed (last manual build: 224).
+      VERSION_CODE: ${{ github.run_number }}000
+      VERSION_NAME: 2.0.${{ github.run_number }}
+      ATTND_SERVER: ${{ vars.ATTND_SERVER || 'attnd.app' }}
+      MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+      - name: Accept Android SDK licenses
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
+      - name: Signing and Firebase config
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/upload.jks"
+          {
+            echo "STORE_FILE=$RUNNER_TEMP/upload.jks"
+            echo "STORE_PASSWORD=$STORE_PASSWORD"
+            echo "KEY_ALIAS=$KEY_ALIAS"
+            echo "KEY_PASSWORD=$KEY_PASSWORD"
+          } > signing.properties
+          if [ -n "$GOOGLE_SERVICES_JSON" ]; then printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json; fi
+      - name: Build signed bundle
+        run: ./gradlew bundleRelease
+      - name: Publish to Google Play
+        env:
+          GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+          TRACK: ${{ github.ref == 'refs/heads/master' && 'production' || 'internal' }}
+          ROLLOUT: ${{ github.ref == 'refs/heads/master' && (vars.PLAY_ROLLOUT || '1.0') || '1.0' }}
+          NOTES: ${{ vars.RELEASE_NOTES || 'Improvements and fixes.' }}
+        run: |
+          python3 -m pip install --quiet "pyjwt[crypto]"
+          python3 scripts/ci/play_publish.py app/build/outputs/bundle/release/app-release.aab \
+            --track "$TRACK" --rollout "$ROLLOUT" --notes "$NOTES"
+      - name: Remove signing material
+        if: always()
+        run: rm -f signing.properties "$RUNNER_TEMP/upload.jks" app/google-services.json

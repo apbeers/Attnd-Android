@@ -15,7 +15,7 @@ import java.io.IOException
  * that *produce* the bearer token. (They live under /api/v1/ for both API versions.)
  */
 class AttestationApi(
-    private val baseUrl: String = "https://attnd.app/api/v1/attest/",
+    private val baseUrl: String = "https://${com.arcu.attnd.BuildConfig.ATTND_SERVER}/api/v1/attest/",
     private val http: HttpClient = UrlConnectionHttpClient(),
 ) {
     suspend fun nonce(): String =

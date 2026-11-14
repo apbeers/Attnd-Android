@@ -102,6 +102,7 @@ class AttndApi(
     private fun encode(value: String): String = URLEncoder.encode(value, StandardCharsets.UTF_8)
 
     companion object {
-        const val BASE_URL = "https://attnd.app/api/v2/"
+        /** Host comes from the ATTND_SERVER build setting: develop builds use the dev server. */
+        val BASE_URL = "https://${com.arcu.attnd.BuildConfig.ATTND_SERVER}/api/v2/"
     }
 }

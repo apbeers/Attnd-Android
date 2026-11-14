@@ -24,10 +24,11 @@ android {
         if (versionPropsFile.exists()) {
             versionProps.load(new FileInputStream(versionPropsFile))
         }
-        def code = versionProps['VERSION_CODE']?.toInteger() ?: 1
+        // CI passes VERSION_CODE (always increasing); local builds use version.properties.
+        def code = (System.getenv("VERSION_CODE") ?: versionProps['VERSION_CODE'])?.toString()?.toInteger() ?: 1
 
         versionCode = code
-        versionName = "1.0.$code"
+        versionName = System.getenv("VERSION_NAME") ?: "1.0.$code"
 
         resConfigs "en"
 
@@ -39,6 +40,9 @@ android {
 
         def attndKey = localProperties.getProperty("ATTND_API_KEY") ?: System.getenv("ATTND_API_KEY") ?: ""
         def mapsKey = localProperties.getProperty("MAPS_API_KEY") ?: System.getenv("MAPS_API_KEY") ?: ""
+        // API host without scheme; CI sets attnd-dev.herokuapp.com (or similar) for develop builds.
+        def server = System.getenv("ATTND_SERVER") ?: localProperties.getProperty("ATTND_SERVER") ?: "attnd.app"
+        buildConfigField "String", "ATTND_SERVER", "\"$server\""
 
         buildConfigField "String", "ATTND_API_KEY", "\"$attndKey\""
         buildConfigField "String", "MAPS_API_KEY", "\"$mapsKey\""
@@ -71,6 +75,9 @@ android {
         }
         release {
             signingConfig = signingConfigs.getByName("release")
+            // Store builds authenticate with Play Integrity only; never ship the static key.
+            buildConfigField "String", "ATTND_API_KEY", "\"\""
+
             minifyEnabled = true
             shrinkResources = true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
