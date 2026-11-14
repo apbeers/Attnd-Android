@@ -2,6 +2,7 @@ package com.arcu.attnd
 
 import android.content.Intent
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -63,6 +64,8 @@ class MainActivity : ComponentActivity() {
                 locationName = intent.getStringExtra(ScreenshotRequest.EXTRA_LOCATION),
             )
             if (screenshot != null) {
+                // Never show the on-screen keyboard in a store screenshot.
+                window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN)
                 viewModel.startScreenshot(screenshot)
                 return
             }

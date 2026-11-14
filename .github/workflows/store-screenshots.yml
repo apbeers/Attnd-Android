@@ -69,7 +69,8 @@ jobs:
         env:
           ATTND_SERVER: ${{ vars.SCREENSHOT_SERVER || 'attnd-dev-7ab893f37020.herokuapp.com' }}
           ATTND_API_KEY: ${{ secrets.ATTND_API_KEY }}
-          MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
+          # The release key is restricted to the signed apps; a key for this debug build can be set separately.
+          MAPS_API_KEY: ${{ secrets.SCREENSHOT_MAPS_API_KEY || secrets.MAPS_API_KEY }}
         run: |
           if [ -z "$ATTND_API_KEY" ]; then echo "::error::The ATTND_API_KEY secret is needed to join DEMO on $ATTND_SERVER"; exit 1; fi
           if [ -z "$MAPS_API_KEY" ]; then echo "::warning::MAPS_API_KEY is not set: the map screenshot will have no tiles"; fi

@@ -110,7 +110,9 @@ set_avd() {
 }
 set_avd hw.ramSize 4096
 set_avd disk.dataPartition.size 6G
-set_avd hw.keyboard yes
+# No hardware keyboard: with one, Android leaves touch mode and focuses the first text field
+# (the schedule search), which brings up the on-screen keyboard.
+set_avd hw.keyboard no
 set_avd hw.camera.back none
 set_avd hw.camera.front none
 set_avd showDeviceFrame no
@@ -191,6 +193,11 @@ capture() {
     echo "  $screen: the app is not in front ($focus)" >&2
     return 1
   fi
+  # A focused text field can still raise the keyboard: BACK hides it (and does nothing else while it's up).
+  if "$ADB" shell dumpsys input_method | grep -q 'mInputShown=true'; then
+    sh_adb input keyevent KEYCODE_BACK
+    sleep 1
+  fi
   if [ "$screen" != launch ] && grep -q 'Welcome to Attnd' <<< "$(ui_dump)"; then
     echo "  $screen: still on the launch screen; joining the event failed (API key, server or DEMO event?)" >&2
     return 1
@@ -204,5 +211,11 @@ for screen in $SCREENS; do
   # One retry: a system dialog (e.g. "isn't responding") or a slow first map load on CI.
   capture "$screen" || { sh_adb input keyevent KEYCODE_BACK; sleep 5; capture "$screen"; }
 done
+"$ADB" logcat -d > "$LOG_DIR/logcat.txt" 2>/dev/null || true
+# A blank map is almost always the Maps key's app restriction rejecting this debug build.
+if grep -qiE 'Authorization failure|API key not found|Ensure that the "Maps SDK for Android"' "$LOG_DIR/logcat.txt"; then
+  echo "::warning::Google Maps rejected the key in the screenshot build (blank map). Allow package $PACKAGE with this build's signing certificate on the key, or set a SCREENSHOT_MAPS_API_KEY secret. Details:"
+  grep -iE -A3 'Authorization failure|API key not found' "$LOG_DIR/logcat.txt" | head -n 20
+fi
 "$ADB" exec-out screencap -p > /dev/null  # keep adb happy before the emulator is killed
 echo "Raw screenshots in $OUT"
