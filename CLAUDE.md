@@ -1,12 +1,20 @@
 # Attnd Android
 
-Kotlin + Jetpack Compose app that lets attendees discover and follow live events. Consumes the Attnd REST API **v2** served by **[attnd-web](https://github.com/apbeers/Attnd-Web)** (contract: `API_V2.md`).
+Kotlin + Jetpack Compose app that lets attendees discover and follow live events. Consumes the Attnd REST API **v2** served by **[attnd-web](https://github.com/apbeers/Attnd-Web)** (contract: [`API_V2.md`](https://github.com/apbeers/Attnd-Web/blob/develop/API_V2.md) in attnd-web).
 
 
 ## Branching (initial development)
 
 - `main` = production (default branch), `develop` = dev/beta. Pushing to `develop` deploys to the dev server / TestFlight / Play internal testing; pushing to `main` deploys to production.
 - **While there are no real users yet, commit and push straight to `develop`** — no feature branches or PRs needed. Merge `develop` → `main` to release. Revisit this once the apps have users.
+
+
+## API changes start in attnd-web
+
+attnd-web is the coordinating repo. The API contract ([`API_V2.md`](https://github.com/apbeers/Attnd-Web/blob/develop/API_V2.md)) and the cross-repo tracker ([`API_CHANGES.md`](https://github.com/apbeers/Attnd-Web/blob/develop/API_CHANGES.md)) live there only; this repo has no copy.
+- Don't build against API behaviour that isn't in `API_V2.md`. If a feature needs an API change, add it in attnd-web first (tracker entry, server, contract), then implement the app part here.
+- Implement what the tracker entry's app section says. Put its ID in the commit message (e.g. `API-003: …`), then tick this app's column in attnd-web's `API_CHANGES.md`.
+- Keep decoding lenient: ignore unknown keys and default missing ones, so additive server changes never break shipped builds.
 
 ## Tech Stack & Dependency Policy
 
@@ -77,7 +85,7 @@ app/google-services.json          # (not committed) Firebase config for FCM
 
 ## API (v2)
 
-Base `https://attnd.app/api/v2/` — see `API_V2.md`.
+Base `https://attnd.app/api/v2/` — see attnd-web `API_V2.md`.
 
 | Call | Use |
 |------|-----|
@@ -187,5 +195,5 @@ See `RELEASE_SETUP.md` for Play Store upload instructions.
 
 ## Related Repos
 
-- **[attnd-web](https://github.com/apbeers/Attnd-Web)** — Django backend + REST API (`API.md` v1, `API_V2.md` v2)
+- **[attnd-web](https://github.com/apbeers/Attnd-Web)** — Django backend + REST API, and the **coordinating repo**: `API_V2.md` (contract), `API_CHANGES.md` (tracker)
 - **[attnd-ios](https://github.com/apbeers/Attnd-iOS)** — SwiftUI iOS client
