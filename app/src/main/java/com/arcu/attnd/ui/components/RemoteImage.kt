@@ -19,6 +19,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import com.arcu.attnd.data.ImageDiskCache
+import com.arcu.attnd.data.ImageFetch
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
@@ -28,15 +30,22 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.URI
 
 /**
- * Tiny image loader: HttpURLConnection download, BitmapFactory decode (downsampled to
- * [maxDimension]), and an in-memory LruCache sized to 1/8 of the heap. Concurrent requests for
- * the same URL share one download. Images are public (Cloudinary/Google), so no auth header.
+ * Tiny image loader: memory → disk → network. An in-memory LruCache (1/8 of the heap) holds
+ * decoded bitmaps; [ImageDiskCache] (API-007, attached by AppGraph) holds the original files in
+ * `filesDir/images/` so the event's images work offline; BitmapFactory decodes downsampled to
+ * [maxDimension]. Concurrent requests for the same URL share one download. Images are public
+ * (Cloudinary/Google), so no auth header.
  */
 object ImageLoader {
+
+    /** Set once at startup; without it (e.g. previews) images come from the network only. */
+    @Volatile
+    var diskCache: ImageDiskCache? = null
 
     private val cache = object : LruCache<String, Bitmap>((Runtime.getRuntime().maxMemory() / 1024 / 8).toInt()) {
         override fun sizeOf(key: String, value: Bitmap): Int = value.allocationByteCount / 1024
@@ -55,7 +64,7 @@ object ImageLoader {
             inFlight.getOrPut(key) {
                 scope.async {
                     try {
-                        download(url, maxDimension)?.also { cache.put(key, it) }
+                        fetch(url, maxDimension)?.also { cache.put(key, it) }
                     } finally {
                         inFlightLock.withLock { inFlight.remove(key) }
                     }
@@ -66,6 +75,22 @@ object ImageLoader {
     }
 
     private fun key(url: String, maxDimension: Int) = "$maxDimension|$url"
+
+    private suspend fun fetch(url: String, maxDimension: Int): Bitmap? = withContext(Dispatchers.IO) {
+        val disk = diskCache ?: return@withContext download(url, maxDimension)
+        disk.file(url)?.let { file ->
+            decodeFile(file, maxDimension)?.let { return@withContext it }
+            disk.evict(url) // unreadable: fetch it again
+        }
+        when (val result = disk.fetch(url)) {
+            is ImageFetch.Stored -> decodeFile(result.file, maxDimension) ?: run {
+                disk.evict(url)
+                null
+            }
+            ImageFetch.TooLarge -> download(url, maxDimension) // shown, but never stored
+            ImageFetch.Failed -> null
+        }
+    }
 
     private suspend fun download(url: String, maxDimension: Int): Bitmap? = withContext(Dispatchers.IO) {
         if (!url.startsWith("https://") && !url.startsWith("http://")) return@withContext null
@@ -93,13 +118,25 @@ object ImageLoader {
     private fun decode(bytes: ByteArray, maxDimension: Int): Bitmap? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        val options = sampledOptions(bounds, maxDimension) ?: return null
+        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+    }
+
+    private fun decodeFile(file: File, maxDimension: Int): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.path, bounds)
+        val options = sampledOptions(bounds, maxDimension) ?: return null
+        return BitmapFactory.decodeFile(file.path, options)
+    }
+
+    /** Power-of-two downsampling so neither side is needlessly above [maxDimension]; null when undecodable. */
+    private fun sampledOptions(bounds: BitmapFactory.Options, maxDimension: Int): BitmapFactory.Options? {
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
         var sample = 1
         while (bounds.outWidth / (sample * 2) >= maxDimension || bounds.outHeight / (sample * 2) >= maxDimension) {
             sample *= 2
         }
-        val options = BitmapFactory.Options().apply { inSampleSize = sample }
-        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+        return BitmapFactory.Options().apply { inSampleSize = sample }
     }
 }
 

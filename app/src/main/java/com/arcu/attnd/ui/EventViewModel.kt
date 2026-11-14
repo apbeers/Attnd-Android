@@ -21,6 +21,7 @@ import com.arcu.attnd.domain.AppUpdate
 import com.arcu.attnd.domain.Event
 import com.arcu.attnd.domain.EventBundle
 import com.arcu.attnd.domain.JoinLinks
+import com.arcu.attnd.domain.LiveUpdates
 import com.arcu.attnd.domain.NearbyEvent
 import com.arcu.attnd.domain.ScreenshotRequest
 import com.arcu.attnd.domain.ScreenshotScreen
@@ -356,9 +357,11 @@ class EventViewModel(
 
     /**
      * Runs while the activity is resumed: refresh now (the app came to the foreground), then poll
-     * every five seconds while an event is joined, so organizer edits on the web show up live. Polls
-     * are conditional GETs (usually `304`) and silent: no spinner, and one failed poll just retries
-     * on the next tick. Cancelled automatically when the activity pauses.
+     * while an event is joined. API-007: live updates come from `content_updated` pushes, so the poll
+     * is a safety net every 5 minutes, or every 60 s when the server has no push token for this
+     * device ([LiveUpdates.pollIntervalMs]). Polls are conditional GETs (usually `304`) and silent
+     * (no spinner); at these intervals one failed poll shows the offline notice
+     * ([LiveUpdates.failuresBeforeOfflineNotice]). Cancelled automatically when the activity pauses.
      */
     suspend fun foregroundSync() {
         startJob.join()
@@ -370,8 +373,13 @@ class EventViewModel(
         val lastSync = repository.sync.value.lastSyncedAt
         if (lastSync == null || System.currentTimeMillis() - lastSync > RESUME_DEBOUNCE_MS) repository.refresh()
         while (true) {
-            delay(LIVE_POLL_INTERVAL_MS)
-            if (repository.bundle.value != null) repository.refresh(silent = true)
+            val interval = LiveUpdates.pollIntervalMs(repository.hasPushToken)
+            delay(interval)
+            // A token the server hasn't confirmed (registration failed offline): retry, so pushes resume.
+            if (repository.needsDeviceRegistration) repository.registerDevice()
+            if (repository.bundle.value != null) {
+                repository.refresh(silent = true, failuresBeforeError = LiveUpdates.failuresBeforeOfflineNotice(interval))
+            }
         }
     }
 
@@ -470,7 +478,6 @@ class EventViewModel(
     }
 
     companion object {
-        private const val LIVE_POLL_INTERVAL_MS = 5 * 1000L
         private const val RESUME_DEBOUNCE_MS = 30 * 1000L
 
         val Factory: ViewModelProvider.Factory = viewModelFactory {

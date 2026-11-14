@@ -15,16 +15,17 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
+import com.arcu.attnd.domain.ImageCachePlan
 import com.arcu.attnd.ui.components.EmptyState
 import com.arcu.attnd.ui.components.RemoteImage
 
-/** The event flyer: an image shown inline, or a PDF opened in the system viewer. */
+/** The event flyer: an image shown inline (cached for offline use), or a PDF opened in the system viewer (online only). */
 @Composable
 fun FlyerScreen(flyerUrl: String?, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     when {
         flyerUrl == null -> EmptyState("No flyer has been posted for this event.", modifier)
-        flyerUrl.substringBefore('?').endsWith(".pdf", ignoreCase = true) -> {
+        ImageCachePlan.isPdf(flyerUrl) -> {
             Column(
                 modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),

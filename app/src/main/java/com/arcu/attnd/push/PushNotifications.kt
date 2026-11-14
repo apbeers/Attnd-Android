@@ -32,6 +32,7 @@ object PushNotifications {
     const val KEY_TYPE = "type"
     const val KEY_EVENT_ID = "event_id"
     const val KEY_NOTIFICATION_ID = "notification_id"
+    const val KEY_CONTENT_VERSION = "content_version"
     const val TYPE_NOTIFICATION = "notification"
     const val TYPE_CONTENT_UPDATED = "content_updated"
 

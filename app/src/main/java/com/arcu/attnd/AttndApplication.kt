@@ -4,10 +4,12 @@ import android.app.Application
 import android.content.Context
 import com.arcu.attnd.data.AttestedTokenProvider
 import com.arcu.attnd.data.EventRepository
+import com.arcu.attnd.data.ImageDiskCache
 import com.arcu.attnd.data.UsageReporter
 import com.arcu.attnd.data.api.AttndApi
 import com.arcu.attnd.data.prefs.DevicePrefs
 import com.arcu.attnd.push.PushNotifications
+import com.arcu.attnd.ui.components.ImageLoader
 import com.arcu.attnd.util.integrity.AttestationManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -43,6 +45,14 @@ class AppGraph(context: Context, val prefs: DevicePrefs) {
     /** API-005: anonymous usage counts, flushed in the background on [appScope]. */
     val usage = UsageReporter(appScope, sender = { eventId, request -> api.sendUsage(eventId, request) })
 
+    /**
+     * API-007: the event's images in `filesDir/images/` (not the cache dir, which the OS may purge
+     * mid-event). Read by [ImageLoader]; prefetched and cleared by [repository].
+     */
+    private val images = ImageDiskCache(File(appContext.filesDir, "images"), appScope).also {
+        ImageLoader.diskCache = it
+    }
+
     val repository = EventRepository(
         api = api,
         prefs = prefs,
@@ -50,5 +60,6 @@ class AppGraph(context: Context, val prefs: DevicePrefs) {
         appVersion = BuildConfig.VERSION_NAME,
         pushTokenProvider = { PushNotifications.currentToken(appContext) },
         usage = usage,
+        images = images,
     )
 }

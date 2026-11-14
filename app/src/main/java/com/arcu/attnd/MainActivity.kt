@@ -34,7 +34,8 @@ class MainActivity : ComponentActivity() {
         // Only on a fresh start: after a configuration change the intent was already handled.
         if (savedInstanceState == null) handleIntent(intent)
 
-        // Refresh when the app comes to the foreground and every 5 minutes while it stays there.
+        // Refresh when the app comes to the foreground, then a safety poll while it stays there
+        // (live updates arrive as content_updated pushes; see EventViewModel.foregroundSync).
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.RESUMED) { viewModel.foregroundSync() }
         }

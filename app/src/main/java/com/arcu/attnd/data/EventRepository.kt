@@ -9,11 +9,14 @@ import com.arcu.attnd.data.prefs.DevicePrefs
 import com.arcu.attnd.domain.AppUpdate
 import com.arcu.attnd.domain.Event
 import com.arcu.attnd.domain.EventBundle
+import com.arcu.attnd.domain.ImageCachePlan
+import com.arcu.attnd.domain.LiveUpdates
 import com.arcu.attnd.domain.NearbyEvent
 import com.arcu.attnd.domain.UpdateLevel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -33,6 +36,8 @@ data class SyncState(
     val lastSyncedAt: Long? = null,
     /** Message for the last failed refresh; cleared by the next successful one. */
     val error: String? = null,
+    /** The last failure was a connectivity problem (the notice reads "Offline · last updated …"). */
+    val offline: Boolean = false,
 )
 
 sealed interface RefreshResult {
@@ -50,6 +55,8 @@ sealed interface RefreshResult {
  * - [bundle] is the current event bundle, or null when the device is not in an event.
  * - The raw bundle JSON is persisted to [cacheFile] so the app starts offline with the last content.
  * - Refreshes send `If-None-Match` with the stored ETag and treat `304` as "unchanged".
+ * - API-007: the bundle's images are kept on disk by [images] (prefetched after every applied
+ *   bundle and after a restore, deleted with the bundle).
  */
 class EventRepository(
     private val api: AttndApi,
@@ -59,6 +66,8 @@ class EventRepository(
     private val pushTokenProvider: suspend () -> String?,
     /** API-005: flushed before leaving or switching events so counts go to the old event. */
     private val usage: UsageReporter? = null,
+    /** API-007: offline copies of the bundle's images. */
+    private val images: ImageDiskCache? = null,
     private val io: CoroutineDispatcher = Dispatchers.IO,
 ) {
     private val _bundle = MutableStateFlow<EventBundle?>(null)
@@ -71,6 +80,20 @@ class EventRepository(
 
     /** Failed refreshes since the last successful one; lets silent polls ride out a blip. */
     private var consecutiveFailures = 0
+
+    /**
+     * The push token the server last accepted (`POST devices/` or join), or null. API-007: while it
+     * is set, `content_updated` pushes keep the bundle current and the foreground poll slows to a
+     * safety net. In memory only, so each launch re-confirms it with the launch registration.
+     */
+    @Volatile
+    private var registeredToken: String? = null
+
+    /** The server has this device's current push token, so it will get `content_updated` pushes. */
+    val hasPushToken: Boolean get() = registeredToken != null
+
+    /** There is a push token the server hasn't confirmed yet (an earlier `POST devices/` failed). */
+    val needsDeviceRegistration: Boolean get() = prefs.pushToken.let { it != null && it != registeredToken }
 
     private val _appUpdate = MutableStateFlow(AppUpdate())
 
@@ -102,10 +125,15 @@ class EventRepository(
     /** Loads the persisted bundle for the joined event, if any. Safe to call more than once. */
     suspend fun restore(): EventBundle? = withContext(io) {
         _bundle.value?.let { return@withContext it }
-        val eventId = prefs.eventId ?: return@withContext null
+        val eventId = prefs.eventId
+        if (eventId == null) {
+            images?.clear() // nothing joined: no images should be left from an earlier event
+            return@withContext null
+        }
         val cached = readCache()?.takeIf { it.event.id == eventId }
         if (cached == null) prefs.bundleEtag = null
         _bundle.value = cached
+        cached?.let { prefetchImages(it) }
         cached
     }
 
@@ -129,7 +157,9 @@ class EventRepository(
             // Leave the old event gracefully; failure must not block joining the new one.
             runSuspendCatching { api.leave(previous, LeaveRequest(deviceId)) }
         }
-        api.join(event.id, JoinRequest(deviceId = deviceId, pushToken = pushToken(), appVersion = appVersion))
+        val token = pushToken()
+        api.join(event.id, JoinRequest(deviceId = deviceId, pushToken = token, appVersion = appVersion))
+        if (token != null) registeredToken = token
         if (previous != event.id) {
             clearLocal()
             prefs.eventId = event.id
@@ -154,23 +184,23 @@ class EventRepository(
     /**
      * Downloads the bundle unless the server says it is unchanged. Never throws (except cancellation).
      *
-     * [silent] is for the live-update poll: it never shows [SyncState.isRefreshing], and a failure
-     * only sets [SyncState.error] (the offline notice) after [SILENT_FAILURES_BEFORE_ERROR] failures
-     * in a row, so one dropped poll doesn't flash the notice. Any success clears the error.
+     * [silent] is for polls and push-triggered refreshes: it never shows [SyncState.isRefreshing].
+     * A failure only sets [SyncState.error] (the offline notice) once [failuresBeforeError] refreshes
+     * in a row have failed (see [LiveUpdates.failuresBeforeOfflineNotice]). Any success clears it.
      */
-    suspend fun refresh(silent: Boolean = false): RefreshResult = withContext(io) {
+    suspend fun refresh(silent: Boolean = false, failuresBeforeError: Int = 1): RefreshResult = withContext(io) {
         val eventId = prefs.eventId ?: return@withContext RefreshResult.NoEvent
         refreshMutex.withLock {
             if (prefs.eventId != eventId) return@withLock RefreshResult.NotModified
             if (!silent) _sync.update { it.copy(isRefreshing = true) }
             try {
-                fetchBundle(eventId, silent)
+                fetchBundle(eventId, failuresBeforeError)
             } catch (e: CancellationException) {
                 throw e
             } catch (_: IOException) {
-                fail("Can't reach Attnd right now. Showing saved content.", silent)
+                fail("Can't reach Attnd right now. Showing saved content.", failuresBeforeError, offline = true)
             } catch (e: Exception) {
-                fail("Couldn't refresh (${e.javaClass.simpleName}).", silent)
+                fail("Couldn't refresh (${e.javaClass.simpleName}).", failuresBeforeError)
             } finally {
                 if (!silent) _sync.update { it.copy(isRefreshing = false) }
             }
@@ -178,20 +208,46 @@ class EventRepository(
     }
 
     /**
+     * API-007: a `content_updated` push for the joined event. Refreshes silently, after a random
+     * 0–10 s delay (every device in the event gets the push at once), unless the bundle is already
+     * at [pushVersion] or newer. Works with the app in the background too: restores the saved
+     * bundle first when the push started the process.
+     */
+    suspend fun onContentUpdated(pushVersion: Int?) {
+        restore()
+        if (!LiveUpdates.shouldRefreshForPush(pushVersion, _bundle.value?.contentVersion)) return
+        delay(LiveUpdates.pushRefreshDelayMs())
+        // Another refresh (resume, poll, an earlier push) may have fetched it meanwhile.
+        if (!LiveUpdates.shouldRefreshForPush(pushVersion, _bundle.value?.contentVersion)) return
+        refresh(silent = true)
+    }
+
+    /**
      * `POST devices/`: registers the device with its push token, app version and push opt-in.
-     * Called on launch and whenever the token or the preference changes.
+     * Called on launch and whenever the token or the preference changes. API-007: the token is sent
+     * whenever there is one, whatever the opt-in ([DevicePrefs.notificationsEnabled] goes as
+     * `subscribed`), so silent `content_updated` pushes reach every device; without a token the
+     * `push_token` key is left out (never sent empty, which would clear it on the server).
      */
     suspend fun registerDevice(): Boolean = withContext(io) {
+        val token = pushToken()
         val request = DeviceRequest(
             deviceId = deviceId,
-            pushToken = pushToken(),
+            pushToken = token,
             appVersion = appVersion,
             subscribed = prefs.notificationsEnabled,
         )
-        runSuspendCatching { api.registerDevice(request) }.isSuccess
+        val ok = runSuspendCatching { api.registerDevice(request) }.isSuccess
+        when {
+            ok -> registeredToken = token
+            // The server still has the old token, which FCM has replaced: don't count on pushes.
+            token != registeredToken -> registeredToken = null
+        }
+        ok
     }
 
     suspend fun onPushTokenChanged(token: String) {
+        if (token.isBlank()) return
         prefs.pushToken = token
         registerDevice()
     }
@@ -207,24 +263,27 @@ class EventRepository(
     private fun etagFor(eventId: Int): String? =
         prefs.bundleEtag?.takeIf { _bundle.value?.event?.id == eventId }
 
-    private suspend fun fetchBundle(eventId: Int, silent: Boolean): RefreshResult {
+    private suspend fun fetchBundle(eventId: Int, failuresBeforeError: Int): RefreshResult {
         val response = api.bundle(eventId, etagFor(eventId), deviceId)
         return when {
             response.code == 304 -> {
                 markSynced()
+                // Retries images an earlier pass couldn't get (a no-op once they're all on disk).
+                _bundle.value?.let { prefetchImages(it) }
                 RefreshResult.NotModified
             }
             response.code in 200..299 -> {
                 val json = response.json
                 val parsed = json?.let { ApiMapper.parseBundle(it) }
                 when {
-                    json == null || parsed == null -> fail("The server sent content this version can't read.", silent)
+                    json == null || parsed == null -> fail("The server sent content this version can't read.", failuresBeforeError)
                     prefs.eventId != eventId -> RefreshResult.NotModified // left or switched meanwhile
                     else -> {
                         writeCache(json)
                         prefs.bundleEtag = response.etag
                         _bundle.value = parsed
                         markSynced()
+                        prefetchImages(parsed)
                         RefreshResult.Updated
                     }
                 }
@@ -234,7 +293,7 @@ class EventRepository(
                 _sync.update { it.copy(error = "This event is no longer available.") }
                 RefreshResult.EventGone
             }
-            else -> fail("Server error (${response.code}). Showing saved content.", silent)
+            else -> fail("Server error (${response.code}). Showing saved content.", failuresBeforeError)
         }
     }
 
@@ -242,27 +301,33 @@ class EventRepository(
         val now = System.currentTimeMillis()
         prefs.lastSyncedAt = now
         consecutiveFailures = 0
-        _sync.update { it.copy(lastSyncedAt = now, error = null) }
+        _sync.update { it.copy(lastSyncedAt = now, error = null, offline = false) }
     }
 
-    private fun fail(message: String, silent: Boolean = false): RefreshResult {
+    private fun fail(message: String, failuresBeforeError: Int, offline: Boolean = false): RefreshResult {
         consecutiveFailures++
-        if (!silent || consecutiveFailures >= SILENT_FAILURES_BEFORE_ERROR) _sync.update { it.copy(error = message) }
+        if (consecutiveFailures >= failuresBeforeError) _sync.update { it.copy(error = message, offline = offline) }
         return RefreshResult.Failed(message)
+    }
+
+    private fun prefetchImages(bundle: EventBundle) {
+        images?.prefetch(ImageCachePlan.referencedUrls(bundle))
     }
 
     private fun clearLocal() {
         prefs.clearEvent()
         cacheFile.delete()
+        images?.clear()
         _bundle.value = null
         consecutiveFailures = 0
         _sync.value = SyncState()
     }
 
     private suspend fun pushToken(): String? {
-        val fresh = runSuspendCatching { withTimeoutOrNull(PUSH_TOKEN_TIMEOUT_MS) { pushTokenProvider() } }.getOrNull()
+        val fresh = runSuspendCatching { withTimeoutOrNull(PUSH_TOKEN_TIMEOUT_MS) { pushTokenProvider() } }
+            .getOrNull()?.takeIf { it.isNotBlank() }
         if (fresh != null) prefs.pushToken = fresh
-        return fresh ?: prefs.pushToken
+        return fresh ?: prefs.pushToken?.takeIf { it.isNotBlank() }
     }
 
     private fun readCache(): EventBundle? = try {
@@ -287,9 +352,6 @@ class EventRepository(
 
     private companion object {
         const val PUSH_TOKEN_TIMEOUT_MS = 10_000L
-
-        /** Silent polls run every 5 s, so this shows the offline notice after ~15 s without contact. */
-        const val SILENT_FAILURES_BEFORE_ERROR = 3
     }
 }
 

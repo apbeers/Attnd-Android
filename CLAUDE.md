@@ -23,7 +23,7 @@ attnd-web is the coordinating repo. The API contract ([`API_V2.md`](https://gith
 - **Kotlin** with **Jetpack Compose** (Material3) and **Material3 adaptive** (`NavigationSuiteScaffold`, `ListDetailPaneScaffold`, `currentWindowAdaptiveInfo`)
 - **Networking**: `HttpURLConnection` + coroutines (`data/net/HttpClient.kt`)
 - **JSON**: kotlinx.serialization (`ignoreUnknownKeys`, every field defaulted)
-- **Images**: in-house loader (`ui/components/RemoteImage.kt`: HttpURLConnection + BitmapFactory + LruCache)
+- **Images**: in-house loader (`ui/components/RemoteImage.kt`: memory LruCache → disk `data/ImageDiskCache.kt` in `filesDir/images/` → HttpURLConnection; BitmapFactory decode)
 - **AndroidX lifecycle** ViewModel + `collectAsStateWithLifecycle`
 - **Google Maps**: `maps-compose` + `maps-compose-utils` (googlemaps first-party; marker clustering), Play Services location
 - **CameraX + ML Kit** — QR code scanning
@@ -53,12 +53,15 @@ app/
       ScreenshotRequest.kt        #   Debug store-screenshot mode: launch extras → screen to show
       UsageAggregator.kt          #   API-005 counts by (name, detail, UTC 5-minute window) + metric names
       SupportInfo.kt              #   API-004 build/device/event details, support code, copy text
+      ImageCachePlan.kt           #   API-007 image cache: file names, referenced URLs, stale files, budget
+      LiveUpdates.kt              #   API-007 poll interval, push refresh rules + jitter, offline notice text
     data/
       net/HttpClient.kt           #   HttpURLConnection client (no caching, so 304s reach us)
       api/AttndApi.kt             #   v2 endpoints; 401 → re-attest → retry once; ETag/If-None-Match
       api/ApiDtos.kt              #   @Serializable wire format (all fields nullable) + ApiJson config
       api/ApiMapper.kt            #   DTO → domain, applying defaults
-      EventRepository.kt          #   Single source of truth (StateFlow bundle), join/leave/refresh, disk cache
+      EventRepository.kt          #   Single source of truth (StateFlow bundle), join/leave/refresh, disk cache, push token state
+      ImageDiskCache.kt           #   API-007 offline images (filesDir/images/): fetch, prefetch, clean-up
       UsageReporter.kt            #   API-005 anonymous usage counts: aggregate, flush every ~60 s / background / leave
       AttestedTokenProvider.kt    #   Bearer token: attestation JWT or static key
       InstallReferrer.kt          #   Play Install Referrer → event_code
@@ -84,6 +87,7 @@ app/google-services.json          # (not committed) Firebase config for FCM
 ## Architecture
 
 - **`EventRepository`** owns the joined event. `bundle: StateFlow<EventBundle?>` is the single source of truth; `sync: StateFlow<SyncState>` carries refresh progress and the last error. The raw bundle JSON is written to `filesDir/event_bundle.json` (atomic temp-file rename), so the app starts **offline** with the last content and refreshes in the background.
+- **Offline images (API-007)**: `ImageDiskCache` (in `AppGraph`, on `appScope`) keeps the bundle's images in `filesDir/images/<sha256(url)>` (not the cache dir, so the OS doesn't purge them mid-event; excluded from backup by `res/xml/data_extraction_rules.xml`). `ImageLoader` reads memory → disk → network; downloads go to a temp file and are renamed into place. After every applied bundle, after `restore()` and on a `304` (no-op once complete) the repository prefetches `ImageCachePlan.referencedUrls` (header/event logo, flyer unless it is a PDF, location images) 4 at a time; once every image has been attempted, files the bundle no longer references are deleted (new images first, a failed download keeps the old file). Budget ~300 MB per event, files > 15 MB are never stored (shown from memory). Leaving/switching events deletes them with the bundle. URLs are treated as immutable (an existing file is never re-downloaded). A PDF flyer is not cached (no FileProvider; it opens the URL in the system viewer).
 - **`EventViewModel`** combines repository state with UI-local state into one `AppUiState` (phase LOADING / LAUNCH / EVENT, selected tab, join/nearby state, one-shot focus requests and messages). Screens receive state slices + callbacks only; they hold no app state (only UI state like search text).
 - **`UsageReporter`** (in `AppGraph`, runs on `appScope`) collects anonymous usage counts; `EventViewModel` records them with one-line `track(...)` calls, and `EventRepository` flushes it before leaving or switching events.
 - Device ID: a UUID generated on first launch (`DevicePrefs.deviceId`), used for join/leave/devices and as `X-Device-Id`. Never sent with usage counts.
@@ -116,9 +120,9 @@ Base `https://attnd.app/api/v2/` — see attnd-web `API_V2.md`.
 | `GET events/<id>/bundle/` | Everything shown; `If-None-Match` → `304`; `X-Device-Id` header |
 | `POST events/<id>/join/` | `{device_id, platform, push_token, app_version}` |
 | `POST events/<id>/leave/` | `{device_id}` |
-| `POST devices/` | On launch and when push token / notification preference changes |
+| `POST devices/` | On launch and when push token / notification preference changes; `push_token` whenever there is one (omitted, never `""`, without one), `subscribed` = the opt-in |
 
-Bundle refresh: on join, when the app is resumed, pull-to-refresh, on a `content_updated` push, and a **live poll every 5 s** while the activity is resumed and an event is joined (`EventViewModel.foregroundSync`; conditional GET, usually `304`) so organizer edits show up live. Polls use `refresh(silent = true)`: no spinner, and the offline notice only appears after 3 failed polls in a row (any success clears it). A `404` on the bundle clears the event and returns to the launch screen.
+Bundle refresh (API-007): live updates are **push-driven**. A `content_updated` push refreshes silently after a random 0–10 s delay, only when its `content_version` is newer than the bundle's (`EventRepository.onContentUpdated`, works in the background too). Also on join, when the app is resumed, on pull-to-refresh, and a poll while the activity is resumed and an event is joined (`EventViewModel.foregroundSync`; conditional GET, usually `304`): a **5-minute safety poll** when the server has this device's push token (`EventRepository.hasPushToken`), otherwise **every 60 s** (no Firebase config, no Play services, token fetch or registration failed) — `LiveUpdates.pollIntervalMs`. Polls and push refreshes use `refresh(silent = true)` (no spinner); at these intervals the offline notice appears after the first failed poll (`LiveUpdates.failuresBeforeOfflineNotice`; any success clears it) and reads "Offline · last updated 2:14 PM" (last successful refresh, device time zone and 12/24-hour setting). A `404` on the bundle clears the event and returns to the launch screen.
 
 Models tolerate missing and unknown keys everywhere. Coordinates may be `null`: never pin those, and never treat `0,0` as real (`GeoPoint.of`). Schedule items may have no location ("General"). All times are shown in the event's `timezone`.
 
@@ -135,7 +139,7 @@ On a 401 the stored JWT is invalidated and the request is retried once after re-
 `DisplayConfig` resolves the bundle's `display` object with the documented defaults:
 tabs (order/visibility, Flyer only if listed) and default tab → navigation items; `locations_style` cards/list/grouped; `schedule_style` timeline/by_day/by_location/now_next; `map_clustering` (maps-compose-utils `Clustering`); `map_fit_all` (LatLngBounds on open and on Map-tab reselect); `show_location_images`; `enable_search`; `group_by_category` (filter chips on Locations and Map); `secondary_pane` (beside/below the map on an unfolded foldable); `accent_color` → Material colour scheme `primary` (otherwise the brand purple: `#431F86` light / `#9D7BEA` dark, `ui/theme/Color.kt` + `res/values/colors.xml`; no Material You dynamic colour); `logo_url` in the header.
 
-Status: a small floating pill (`EventStatusPills`, overlaid top-centre of the tab content, takes no layout space) shows **Demo event** when `event.is_demo` (falls back to `!paid` for old servers) and **Event ended** when `status == archived`; a slim offline notice row (`OfflineNotice`) sits above the content while `SyncState.error` is set.
+Status: a small floating pill (`EventStatusPills`, overlaid top-centre of the tab content, takes no layout space) shows **Demo event** when `event.is_demo` (falls back to `!paid` for old servers) and **Event ended** when `status == archived`; a slim offline notice row (`OfflineNotice`: "Offline · last updated 2:14 PM", from `SyncState.offline` / `lastSyncedAt`) sits above the content while `SyncState.error` is set.
 
 ## Foldables (adaptive layouts)
 
@@ -149,10 +153,10 @@ Status: a small floating pill (`EventStatusPills`, overlaid top-centre of the ta
 
 `push/AttndMessagingService`:
 - `onNewToken` → `POST devices/`.
-- data `type=notification` → shows a notification on channel `event_updates` (tapping opens the Notifications tab) and refreshes the bundle.
-- data `type=content_updated` → refreshes the bundle (silent).
+- data `type=notification` → shows a notification on channel `event_updates` (tapping opens the Notifications tab) and refreshes the bundle (silent).
+- data `type=content_updated` (`event_id`, `content_version`; FCM data values are strings) → `EventRepository.onContentUpdated`: silent refresh after a random 0–10 s delay if the version is newer (API-007). The server sends it to **every** device in the event with a token, opted in or not (debounced, collapsible, normal priority).
 
-Notifications are opt-in from **Options**, which requests `POST_NOTIFICATIONS`. The preference is sent as `subscribed` to `POST devices/`.
+The FCM token is always fetched and sent with `POST devices/` at launch (and with join) when Firebase is configured, whatever the opt-in; data messages need no permission. Visible notifications are opt-in from **Options**, which requests `POST_NOTIFICATIONS`; the preference is sent as `subscribed`. A token the server hasn't confirmed is re-sent from the foreground poll loop.
 
 **Setup** (not in the repo):
 1. Create/choose a Firebase project and add Android apps `com.arcu.attnd` **and** `com.arcu.attnd.debug` (the google-services plugin fails a variant whose package is missing).

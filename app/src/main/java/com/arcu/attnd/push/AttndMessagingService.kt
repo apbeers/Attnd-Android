@@ -8,8 +8,12 @@ import kotlinx.coroutines.launch
 /**
  * Receives FCM messages (API_V2.md, "Push notifications"):
  * - `type=notification`: an organizer notification. Shown with our channel; tapping opens the Notifications tab.
- * - `type=content_updated`: a silent data message. The bundle is refetched.
+ * - `type=content_updated`: a silent data message (API-007: sent to every device in the event with
+ *   a token, opted in to notifications or not; debounced and collapsible). The bundle is refetched
+ *   silently after a random 0–10 s delay, unless it is already at the pushed `content_version`.
+ *   Data messages need no POST_NOTIFICATIONS permission.
  *
+ * Refreshes run on the app scope, so they also work while the app is in the background.
  * Only runs when Firebase is configured (google-services.json present at build time).
  */
 class AttndMessagingService : FirebaseMessagingService() {
@@ -28,7 +32,9 @@ class AttndMessagingService : FirebaseMessagingService() {
 
         when (data[PushNotifications.KEY_TYPE]) {
             PushNotifications.TYPE_CONTENT_UPDATED -> {
-                if (isForCurrentEvent) graph.appScope.launch { repository.refresh() }
+                // FCM data values are strings.
+                val version = data[PushNotifications.KEY_CONTENT_VERSION]?.trim()?.toIntOrNull()
+                if (isForCurrentEvent) graph.appScope.launch { repository.onContentUpdated(version) }
             }
             else -> {
                 // Organizer notification (or an untyped message with a notification block).
@@ -39,7 +45,7 @@ class AttndMessagingService : FirebaseMessagingService() {
                     val id = serverId ?: (System.currentTimeMillis() % Int.MAX_VALUE).toInt()
                     PushNotifications.show(this, title ?: "Event update", body.orEmpty(), id, serverId)
                 }
-                if (isForCurrentEvent) graph.appScope.launch { repository.refresh() }
+                if (isForCurrentEvent) graph.appScope.launch { repository.refresh(silent = true) }
             }
         }
     }
