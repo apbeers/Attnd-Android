@@ -70,11 +70,10 @@ private const val STREET_ZOOM = 16f
 
 /** A pin for one location with known coordinates. Also a ClusterItem for map clustering. */
 private class LocationPin(val location: EventLocation, point: GeoPoint) : ClusterItem {
-    private val latLng = point.toLatLng()
-    override fun getPosition(): LatLng = latLng
-    override fun getTitle(): String? = location.name
-    override fun getSnippet(): String? = location.snippet.ifBlank { null }
-    override fun getZIndex(): Float? = null
+    override val position: LatLng = point.toLatLng()
+    override val title: String? get() = location.name
+    override val snippet: String? get() = location.snippet.ifBlank { null }
+    override val zIndex: Float? get() = null
 }
 
 private fun GeoPoint.toLatLng() = LatLng(latitude, longitude)
@@ -124,7 +123,7 @@ fun EventMap(
     val paddingPx = with(density) { 48.dp.roundToPx() }
 
     fun homeUpdate(): CameraUpdate? {
-        val points = pins.map { it.getPosition() }
+        val points = pins.map { it.position }
         return when {
             display.mapFitAll && points.size >= 2 -> {
                 val builder = LatLngBounds.builder()
@@ -200,7 +199,7 @@ fun EventMap(
                         items = pins,
                         onClusterClick = { cluster ->
                             val builder = LatLngBounds.builder()
-                            cluster.items.forEach { builder.include(it.getPosition()) }
+                            cluster.items.forEach { builder.include(it.position) }
                             scope.launch {
                                 try {
                                     cameraPositionState.animate(CameraUpdateFactory.newLatLngBounds(builder.build(), paddingPx))
@@ -215,9 +214,9 @@ fun EventMap(
                     pins.forEach { pin ->
                         key(pin.location.id) {
                             Marker(
-                                state = rememberUpdatedMarkerState(position = pin.getPosition()),
-                                title = pin.getTitle(),
-                                snippet = pin.getSnippet(),
+                                state = rememberUpdatedMarkerState(position = pin.position),
+                                title = pin.title,
+                                snippet = pin.snippet,
                                 onInfoWindowClick = { onLocationClick(pin.location.id) },
                             )
                         }
