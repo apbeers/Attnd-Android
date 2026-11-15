@@ -37,7 +37,8 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.SheetValue
+import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
@@ -259,7 +260,8 @@ data class PeekTarget(val kind: SearchKind, val id: Int)
 @Composable
 fun PeekSheet(bundle: EventBundle, target: PeekTarget, now: Instant, onOpen: () -> Unit, onDismiss: () -> Unit) {
     val actions = LocalEventActions.current
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    // Hidden → Expanded only (no half-open state), the replacement for skipPartiallyExpanded = true.
+    val sheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden, enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded))
     val scope = rememberCoroutineScope()
     fun close(then: () -> Unit) {
         scope.launch { sheetState.hide() }.invokeOnCompletion {
