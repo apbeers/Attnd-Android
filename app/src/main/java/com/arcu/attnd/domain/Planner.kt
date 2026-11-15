@@ -92,10 +92,67 @@ data class Plan(
     val days: List<PlanDay>,
     /** Planned item id → [Planner.fingerprint] when planned, to notice content changes. */
     val fingerprints: Map<Int, String>,
+    /** The edits' constraints (assistant spec §4); the planner re-solves with them ([Planner.replan]). */
+    val constraints: PlanConstraints = PlanConstraints.NONE,
+    /** Items the attendee checked off (by tap or auto check-off, spec §6); they stay in re-solves. */
+    val checkedOff: Set<Int> = emptySet(),
 ) {
     val items: List<PlannedItem> get() = days.flatMap { it.items }
     val itemIds: List<Int> get() = items.map { it.itemId }
     val isEmpty: Boolean get() = items.isEmpty()
+}
+
+/** One meal break of one event day ("I already ate" marks the next one done). */
+data class MealSlot(val date: LocalDate, val kind: MealKind) {
+    /** "2026-11-14:lunch". */
+    fun encode(): String = "$date:${kind.name.lowercase()}"
+
+    companion object {
+        fun decode(value: String): MealSlot? {
+            val date = runCatching { LocalDate.parse(value.substringBefore(':')) }.getOrNull() ?: return null
+            val kind = MealKind.entries.firstOrNull { it.name.equals(value.substringAfter(':', ""), ignoreCase = true) } ?: return null
+            return MealSlot(date, kind)
+        }
+    }
+}
+
+/** Where the attendee said they are ("I'm at Taco Row") and when they said it. */
+data class PlanOrigin(val locationId: Int, val at: Instant)
+
+/**
+ * What plan edits add on top of [PlanPreferences] (assistant spec §4, planner rules 13–20). Every
+ * field defaults to "no constraint"; [NONE] makes the planner behave exactly as rules 1–12.
+ */
+data class PlanConstraints(
+    /** Items the attendee kept or added: must-includes ahead of liked items (rule 16). */
+    val pinned: Set<Int> = emptySet(),
+    /** Items the attendee removed or replaced: never candidates, even when liked or pinned (rule 14). */
+    val excluded: Set<Int> = emptySet(),
+    /** "I already ate": food items and meal breaks may not start before this (rules 14, 19). */
+    val noFoodUntil: Instant? = null,
+    /** Meal breaks marked done; they are not planned again (rule 19). */
+    val mealsDone: Set<MealSlot> = emptySet(),
+    /** "Start at 2": the window starts no earlier than this on every day (rule 13). */
+    val startAt: LocalTime? = null,
+    /** "Done by 9": the window ends no later than this on every day (next day when before 06:00; rule 13). */
+    val doneBy: LocalTime? = null,
+    /** "Short walks": no walk between consecutive items longer than this (rule 17). */
+    val maxWalkMinutes: Int? = null,
+    /** "I'm tired": replaces the preferences' pace (rule 18). */
+    val pace: PlanPace? = null,
+    /** "I'm at Taco Row": the plan restarts from there (rule 15). */
+    val origin: PlanOrigin? = null,
+    /** "More bbq" / "less dj": lower-case tags with an extra liked (+1) / disliked (−2) indicator (rule 13 score). */
+    val moreTags: Set<String> = emptySet(),
+    val lessTags: Set<String> = emptySet(),
+    /** Group plans (spec §7): item id → how many people liked or planned it (+1 point each). */
+    val groupLikes: Map<Int, Int> = emptyMap(),
+) {
+    val isEmpty: Boolean get() = this == NONE
+
+    companion object {
+        val NONE = PlanConstraints()
+    }
 }
 
 /**
@@ -142,18 +199,56 @@ data class Plan(
  *    the clipped window end and overlaps no planned item. It suggests a food location (category or a
  *    tag containing "food" after [SearchText.normalize]) nearest the planned item that ended last
  *    before the break (ties: sort order, id), else the first food location by (sort order, id).
- * 11. **Reasons**, first that applies: "You hearted this"; "Because you hearted <name>" (S ≥ 0.2 from
- *    a hearted item); "Because you like <tag>" (first liked tag in the item's tag order); "Because you
- *    like <category, lower case>"; "At <location>, which you hearted"; "Kid-friendly"; "Like <name>"
+ * 11. **Reasons**, first that applies: "Liked by <n> of you" (group plans, rule 20, n ≥ 2); "You liked
+ *    this" (hearted); "You added this" (pinned, rule 16); "Because you liked <name>" (S ≥ 0.2 from a
+ *    hearted item); "Because you like <tag>" (first liked tag in the item's tag order); "Because you
+ *    like <category, lower case>"; "At <location>, which you liked"; "Kid-friendly"; "Like <name>"
  *    (S ≥ 0.2 from a `similarTo` item); "Fits your day". The most similar item: highest S, then lower id.
  * 12. **Swap alternatives** (≤ 3): the item's "or instead" items first, then other candidates of the
  *    day (not planned, not left-out hearted) that fit between the previous and next planned items by
- *    the gap rule, by (score desc, start, id). Swapping ignores the pace cap.
+ *    the gap rule, by (score desc, start, id). Swapping ignores the pace cap. Entries that start before
+ *    the day's window start (frozen by a re-solve, rule 13) are kept as they are.
+ *
+ * Constraints ([PlanConstraints], assistant spec §4). With [PlanConstraints.NONE] none of these rules
+ * changes anything, so rules 1–12 give exactly the results above.
+ * 13. **Window and score with constraints**: window start = max(rule 3 start, day at `startAt`); window
+ *    end = min(rule 3 end, day at `doneBy`, on the next day when `doneBy` < 06:00). With
+ *    `durationMinutes` the end is capped at anchor + duration, where anchor = the window start, or in
+ *    a re-solve ([replan]) the day's previous window start. Score x (rule 5) adds + 1 when a tag is in
+ *    `moreTags`, − 2 when a tag is in `lessTags`, and + `groupLikes[id]` (rule 20); each once.
+ * 14. **Candidates with constraints**: `excluded` items are never candidates (even hearted or pinned);
+ *    pinned items are kept like hearted ones by the kid-friendly and score ≤ 0 filters; with
+ *    `noFoodUntil`, food items ([isFood]: the location's category or a location tag, or an item tag,
+ *    contains "food" after [SearchText.normalize]) starting before it are dropped unless pinned.
+ * 15. **Origin** ("I'm at X"): applies to the day of `origin.at` (event zone) when every frozen item of
+ *    that day started before `origin.at`. Then a candidate b is kept only when origin.at (truncated to
+ *    the minute) + walk(X, b) ≤ b.start (no 5-minute buffer; walk as rule 6 with X as the previous
+ *    location, 0 when unknown), and with `maxWalkMinutes` walk(X, b) must not exceed it; the first
+ *    planned item after the frozen ones shows walk(X, b) as its walk (null when unknown).
+ * 16. **Pinned items are must-includes first**: rule 7 runs on pinned candidates by (start, end, id),
+ *    then on the other hearted candidates by (score desc, start, end, id). In a re-solve the frozen
+ *    items count as already kept (a must-include that clashes with one becomes its "or instead").
+ * 17. **Walk limit**: with `maxWalkMinutes`, b may follow a (rule 6) only when walk(a, b) ≤ the limit;
+ *    unknown walks (no coordinates) are not limited.
+ * 18. **Pace**: `pace` replaces the preferences' pace in rule 8.
+ * 19. **Meals with constraints**: a meal kind whose [MealSlot] is in `mealsDone`, or that a frozen meal
+ *    of the day already covers, is not planned; with `noFoodUntil` the rounded-up `noFoodUntil` is an
+ *    extra start candidate and starts before `noFoodUntil` are skipped. Frozen meals stay.
+ * 20. **Re-solve** ([replan], every plan edit): `from` = now truncated to the minute. Days before
+ *    `from`'s date stay unchanged. Re-solved days = the plan's days on or after that date, plus the
+ *    dates of pinned items that are event days on or after it (ascending); with none, rule 2. On each
+ *    day, **frozen** = its planned items that started before `from` or are checked off (still in the
+ *    bundle, not excluded) and its meal breaks that started before `from`; frozen entries stay
+ *    verbatim and are not candidates; new candidates must fit every frozen item (rule 6 both ways).
+ *    Then rules 3–19 with `from`. A day whose window is empty keeps only its frozen entries. The plan
+ *    keeps its request, preferences, creation time and check-offs, and takes the new constraints and
+ *    fingerprints. Group plans add + `groupLikes[id]` to x and list "Liked by <n> of you".
  */
 class Planner(
     private val bundle: EventBundle,
     private val preferences: PlanPreferences,
     private val hearts: Hearts,
+    private val constraints: PlanConstraints = PlanConstraints.NONE,
     private val similarity: ItemSimilarity = TfIdfSimilarity(bundle),
 ) {
     private val zone: ZoneId = bundle.event.zone
@@ -165,6 +260,9 @@ class Planner(
     private val heartedLiked: List<ScheduleItem> = hearts.scheduleItems.sorted().mapNotNull { itemsById[it] }
     private val namedLiked: List<ScheduleItem> = preferences.similarTo.sorted().mapNotNull { itemsById[it] }
     private val scores = HashMap<Int, Long>()
+    private val moreTags = constraints.moreTags.map { it.lowercase() }.toSet()
+    private val lessTags = constraints.lessTags.map { it.lowercase() }.toSet()
+    private val pace: PlanPace = constraints.pace ?: preferences.pace
 
     // ── Public API ──────────────────────────────────────────────────────────
 
@@ -186,9 +284,61 @@ class Planner(
             request = request,
             preferences = preferences,
             days = days,
-            fingerprints = days.flatMap { it.items }.associate { it.itemId to fingerprint(itemsById.getValue(it.itemId)) },
+            fingerprints = fingerprints(days),
+            constraints = constraints,
         )
     }
+
+    /**
+     * Rule 20: [plan] re-solved at [from] with this planner's preferences and constraints (every plan
+     * edit). Without constraints and at the plan's own `from` this is the same plan.
+     */
+    fun replan(plan: Plan, from: Instant): Plan {
+        val start = from.truncatedTo(ChronoUnit.MINUTES)
+        val today = start.atZone(zone).toLocalDate()
+        val eventDays = TimeMatcher.eventDays(bundle, start)
+        val pinnedDays = constraints.pinned.mapNotNull { itemsById[it]?.startTime?.let { s -> EventTime.localDate(s, zone) } }
+            .filter { it in eventDays && !it.isBefore(today) }
+        val wanted = (plan.days.map { it.date }.filter { !it.isBefore(today) } + pinnedDays).distinct().sorted()
+        val past = plan.days.filter { it.date.isBefore(today) }
+        val solved = if (wanted.isEmpty()) {
+            plan(start, plan.request, plan.createdAt).days
+        } else {
+            val oldDays = plan.days.associateBy { it.date }
+            wanted.mapNotNull { date ->
+                val old = oldDays[date]
+                val frozen = old?.items.orEmpty().filter {
+                    (it.start.isBefore(start) || it.itemId in plan.checkedOff) && it.itemId !in constraints.excluded && itemsById.containsKey(it.itemId)
+                }
+                val frozenMeals = old?.entries.orEmpty().filterIsInstance<MealBreak>().filter { it.start.isBefore(start) }
+                val anchor = old?.windowStart?.takeIf { preferences.durationMinutes != null }
+                planDay(date, start, frozen, frozenMeals, anchor)
+            }
+        }
+        val days = past + solved
+        return plan.copy(days = days, fingerprints = fingerprints(days), constraints = constraints)
+    }
+
+    /** Rule 4 (with 14) for a planned [day]'s window: what could be planned that day. */
+    fun dayCandidates(day: PlanDay): List<ScheduleItem> = candidates(day.date, day.windowStart, day.windowEnd)
+
+    /** Rule 6 (with 17): [b] can come right after [a]. */
+    fun canFollow(a: ScheduleItem, b: ScheduleItem): Boolean = follows(a, b)
+
+    /** Rules 6/17 in either order: both can be planned. */
+    fun fitsWith(a: ScheduleItem, b: ScheduleItem): Boolean = compatible(a, b)
+
+    /** The walk shown between two items (rule 6): 0 at the same location, null without coordinates. */
+    fun walkBetween(a: ScheduleItem, b: ScheduleItem): Int? = walkShown(a, b)
+
+    /** Rule 14: dropped by "I already ate". */
+    fun foodBlocked(item: ScheduleItem): Boolean {
+        val until = constraints.noFoodUntil ?: return false
+        return item.id !in constraints.pinned && isFood(bundle, item) && start(item).isBefore(until)
+    }
+
+    private fun fingerprints(days: List<PlanDay>): Map<Int, String> =
+        days.flatMap { it.items }.filter { itemsById.containsKey(it.itemId) }.associate { it.itemId to fingerprint(itemsById.getValue(it.itemId)) }
 
     /** Replaces [oldId] by [newId] in [plan] (one of its alternatives); null when either is gone. */
     fun swap(plan: Plan, oldId: Int, newId: Int): Plan? {
@@ -201,30 +351,35 @@ class Planner(
         val orInstead = day.items.associate { it.itemId to it.orInstead }.toMutableMap()
         // The swapped-out item's clashing hearted items stay with the slot.
         orInstead[newId] = (orInstead.remove(oldId).orEmpty() + oldId).filter { it != newId && hearts.scheduleItems.contains(it) }
-        val rebuilt = buildDay(day.date, day.windowStart, day.windowEnd, chosen, orInstead, candidates(day.date, day.windowStart, day.windowEnd))
+        val frozen = day.items.filter { it.start.isBefore(day.windowStart) && it.itemId != oldId }.associateBy { it.itemId }
+        val frozenMeals = day.entries.filterIsInstance<MealBreak>().filter { it.start.isBefore(day.windowStart) }
+        val rebuilt = buildDay(day.date, day.windowStart, day.windowEnd, chosen, orInstead, candidates(day.date, day.windowStart, day.windowEnd), frozen, frozenMeals, null)
         val days = plan.days.toMutableList().also { it[dayIndex] = rebuilt }
-        return plan.copy(
-            days = days,
-            fingerprints = days.flatMap { it.items }.associate { it.itemId to fingerprint(itemsById.getValue(it.itemId)) },
-        )
+        return plan.copy(days = days, fingerprints = fingerprints(days))
     }
 
     /** The integer milli-point score of [item] (rule 5). */
     fun score(item: ScheduleItem): Long = scores.getOrPut(item.id) {
         val hearted = if (item.id in hearts.scheduleItems) 1 else 0
         val similar = bestSimilar(item, heartedLiked + namedLiked)?.second ?: 0.0
-        val raw = BASE + 3.0 * hearted + 2.0 * similar + matches(item) + kid(item) - 2.0 * disliked(item)
+        val more = if (item.tags.any { it.lowercase() in moreTags }) 1 else 0
+        val less = if (item.tags.any { it.lowercase() in lessTags }) 1 else 0
+        val group = constraints.groupLikes[item.id] ?: 0
+        val raw = BASE + 3.0 * hearted + 2.0 * similar + matches(item) + kid(item) - 2.0 * disliked(item) + more - 2.0 * less + group
         floor(raw * 1000 + 0.5).toLong()
     }
 
     fun reason(item: ScheduleItem): String {
-        if (item.id in hearts.scheduleItems) return "You hearted this"
-        bestSimilar(item, heartedLiked)?.takeIf { it.second >= SIMILAR_REASON }?.let { return "Because you hearted ${it.first.name}" }
+        val group = constraints.groupLikes[item.id] ?: 0
+        if (group >= 2) return "Liked by $group of you"
+        if (item.id in hearts.scheduleItems) return "You liked this"
+        if (item.id in constraints.pinned) return "You added this"
+        bestSimilar(item, heartedLiked)?.takeIf { it.second >= SIMILAR_REASON }?.let { return "Because you liked ${it.first.name}" }
         item.tags.firstOrNull { it.lowercase() in likedTags }?.let { return "Because you like ${it.lowercase()}" }
         val category = category(item)
         if (category != null && category.lowercase() in likedCategories) return "Because you like ${category.lowercase()}"
         val location = bundle.location(item.locationId)
-        if (location != null && location.id in hearts.locations) return "At ${location.name}, which you hearted"
+        if (location != null && location.id in hearts.locations) return "At ${location.name}, which you liked"
         if (kid(item) == 1) return "Kid-friendly"
         bestSimilar(item, namedLiked)?.takeIf { it.second >= SIMILAR_REASON }?.let { return "Like ${it.first.name}" }
         return "Fits your day"
@@ -232,41 +387,85 @@ class Planner(
 
     // ── Days ────────────────────────────────────────────────────────────────
 
-    private fun window(day: LocalDate, from: Instant): Pair<Instant, Instant>? {
+    private fun window(day: LocalDate, from: Instant, anchor: Instant? = null): Pair<Instant, Instant>? {
         val earliest = preferences.earliest
         val latest = preferences.latest
-        val start = maxOf(from, day.atTime(earliest ?: LocalTime.MIDNIGHT).atZone(zone).toInstant())
+        var start = maxOf(from, day.atTime(earliest ?: LocalTime.MIDNIGHT).atZone(zone).toInstant())
+        constraints.startAt?.let { start = maxOf(start, day.atTime(it).atZone(zone).toInstant()) }
         var end = if (latest == null) {
             day.plusDays(1).atStartOfDay(zone).toInstant()
         } else {
             val nextDay = latest.isBefore(NIGHT_OWL_UNTIL) || (earliest != null && !latest.isAfter(earliest))
             (if (nextDay) day.plusDays(1) else day).atTime(latest).atZone(zone).toInstant()
         }
-        preferences.durationMinutes?.takeIf { it > 0 }?.let { end = minOf(end, start.plus(Duration.ofMinutes(it.toLong()))) }
+        constraints.doneBy?.let { doneBy ->
+            end = minOf(end, (if (doneBy.isBefore(NIGHT_OWL_UNTIL)) day.plusDays(1) else day).atTime(doneBy).atZone(zone).toInstant())
+        }
+        preferences.durationMinutes?.takeIf { it > 0 }?.let { end = minOf(end, (anchor ?: start).plus(Duration.ofMinutes(it.toLong()))) }
         return if (end.isAfter(start)) start to end else null
     }
 
-    private fun candidates(day: LocalDate, windowStart: Instant, windowEnd: Instant): List<ScheduleItem> =
+    private fun candidates(
+        day: LocalDate,
+        windowStart: Instant,
+        windowEnd: Instant,
+        frozen: Set<Int> = emptySet(),
+        origin: PlanOrigin? = null,
+    ): List<ScheduleItem> =
         bundle.schedule.filter { item ->
             val start = item.startTime ?: return@filter false
             val end = TimeMatcher.effectiveEnd(item) ?: return@filter false
-            val hearted = item.id in hearts.scheduleItems
-            EventTime.localDate(start, zone) == day &&
+            val kept = item.id in hearts.scheduleItems || item.id in constraints.pinned
+            item.id !in constraints.excluded && item.id !in frozen &&
+                EventTime.localDate(start, zone) == day &&
                 !start.toInstant().isBefore(windowStart) && !end.isAfter(windowEnd) &&
-                (hearted || !(preferences.kidFriendly && item.tags.any { it.lowercase() in ADULT_TAGS })) &&
-                (hearted || score(item) > 0)
+                (kept || !(preferences.kidFriendly && item.tags.any { it.lowercase() in ADULT_TAGS })) &&
+                (kept || score(item) > 0) &&
+                !foodBlocked(item) &&
+                (origin == null || reachableFrom(origin, item))
         }.sortedWith(ITEM_ORDER)
 
-    private fun planDay(day: LocalDate, from: Instant): PlanDay? {
-        val (windowStart, windowEnd) = window(day, from) ?: return null
-        val candidates = candidates(day, windowStart, windowEnd)
-        if (candidates.isEmpty()) return PlanDay(day, windowStart, windowEnd, emptyList())
+    /** Rule 15: [item] can be reached from where the attendee said they are. */
+    private fun reachableFrom(origin: PlanOrigin, item: ScheduleItem): Boolean {
+        val walk = originWalk(origin, item)
+        val limit = constraints.maxWalkMinutes
+        if (walk != null && limit != null && walk > limit) return false
+        val at = origin.at.truncatedTo(ChronoUnit.MINUTES)
+        return !at.plus(Duration.ofMinutes((walk ?: 0).toLong())).isAfter(start(item))
+    }
 
-        // Rule 7: hearted items are must-include unless they clash with a better hearted item.
-        val kept = mutableListOf<ScheduleItem>()
+    private fun originWalk(origin: PlanOrigin, item: ScheduleItem): Int? {
+        if (item.locationId != null && item.locationId == origin.locationId) return 0
+        val from = bundle.location(origin.locationId)?.coordinate ?: return null
+        val to = bundle.location(item.locationId)?.coordinate ?: return null
+        return Walking.minutes(Walking.estimateSeconds(Geo.distanceMeters(from, to))).toInt()
+    }
+
+    private fun planDay(
+        day: LocalDate,
+        from: Instant,
+        frozen: List<PlannedItem> = emptyList(),
+        frozenMeals: List<MealBreak> = emptyList(),
+        anchor: Instant? = null,
+    ): PlanDay? {
+        val frozenItems = frozen.mapNotNull { itemsById[it.itemId] }.sortedWith(ITEM_ORDER)
+        val frozenEntries: List<PlanEntry> = (frozen + frozenMeals).sortedWith(compareBy<PlanEntry> { it.start }.thenBy { it.end })
+        val (windowStart, windowEnd) = window(day, from, anchor)
+            ?: return if (frozenEntries.isEmpty()) null else PlanDay(day, from, from, frozenEntries)
+        // Rule 15: the origin applies on its day when it is newer than every frozen start.
+        val origin = constraints.origin?.takeIf { o ->
+            o.at.atZone(zone).toLocalDate() == day && frozenItems.all { start(it).isBefore(o.at) }
+        }
+        val candidates = candidates(day, windowStart, windowEnd, frozen.map { it.itemId }.toSet(), origin)
+        if (candidates.isEmpty() && frozenItems.isEmpty()) return PlanDay(day, windowStart, windowEnd, frozenMeals.sortedBy { it.start })
+
+        // Rules 7 and 16: pinned, then hearted items are must-include unless they clash with a kept one.
+        val kept = frozenItems.toMutableList()
         val orInstead = HashMap<Int, MutableList<Int>>()
-        candidates.filter { it.id in hearts.scheduleItems }
+        val pinned = candidates.filter { it.id in constraints.pinned }.sortedWith(ITEM_ORDER)
+        val heartedMust = candidates.filter { it.id in hearts.scheduleItems && it.id !in constraints.pinned }
             .sortedWith(compareByDescending<ScheduleItem> { score(it) }.then(ITEM_ORDER))
+        (pinned + heartedMust)
             .forEach { item ->
                 val clashes = kept.filter { !compatible(it, item) }
                 if (clashes.isEmpty()) {
@@ -277,18 +476,26 @@ class Planner(
                 }
             }
         val leftOut = orInstead.values.flatten().toSet()
-        val pool = candidates.filter { it.id !in leftOut }
-        val must = kept.map { it.id }.toSet()
+        val frozenIds = frozenItems.map { it.id }.toSet()
+        val pool = candidates.filter { it.id !in leftOut && frozenItems.all { f -> compatible(f, it) } }
+        val newKept = kept.filter { it.id !in frozenIds }
+        val must = newKept.map { it.id }.toSet()
 
         // Rule 8: pace cap.
-        val spanStart = maxOf(windowStart, candidates.minOf { start(it) })
-        val spanEnd = minOf(windowEnd, candidates.maxOf { end(it) })
-        val span = Duration.between(spanStart, spanEnd).toMinutes().coerceAtLeast(0)
-        val mustMinutes = kept.sumOf { minutes(it) }
-        val cap = maxOf(span * preferences.pace.bookedPercent / 100, mustMinutes)
-
-        val chosen = choose(pool, must, cap)
-        return buildDay(day, windowStart, windowEnd, chosen, orInstead.mapValues { it.value.toList() }, candidates)
+        val chosen = if (candidates.isEmpty()) {
+            emptyList()
+        } else {
+            val spanStart = maxOf(windowStart, candidates.minOf { start(it) })
+            val spanEnd = minOf(windowEnd, candidates.maxOf { end(it) })
+            val span = Duration.between(spanStart, spanEnd).toMinutes().coerceAtLeast(0)
+            val mustMinutes = newKept.sumOf { minutes(it) }
+            val cap = maxOf(span * pace.bookedPercent / 100, mustMinutes)
+            choose(pool, must, cap)
+        }
+        return buildDay(
+            day, windowStart, windowEnd, (frozenItems + chosen).sortedWith(ITEM_ORDER), orInstead.mapValues { it.value.toList() }, candidates,
+            frozen.associateBy { it.itemId }, frozenMeals, origin,
+        )
     }
 
     /** Rule 9: the best chain by dynamic programming over (last item, booked minutes). */
@@ -361,10 +568,15 @@ class Planner(
         chosen: List<ScheduleItem>,
         orInstead: Map<Int, List<Int>>,
         candidates: List<ScheduleItem>,
+        frozen: Map<Int, PlannedItem> = emptyMap(),
+        frozenMeals: List<MealBreak> = emptyList(),
+        origin: PlanOrigin? = null,
     ): PlanDay {
         val chosenIds = chosen.map { it.id }.toSet()
         val leftOut = orInstead.values.flatten().toSet()
+        val firstNew = chosen.firstOrNull { it.id !in frozen }?.id
         val planned = chosen.mapIndexed { index, item ->
+            frozen[item.id]?.let { return@mapIndexed it }
             val previous = chosen.getOrNull(index - 1)
             val next = chosen.getOrNull(index + 1)
             val clashing = orInstead[item.id].orEmpty()
@@ -378,17 +590,19 @@ class Planner(
                 start = start(item),
                 end = end(item),
                 reason = reason(item),
-                walkMinutes = previous?.let { walkShown(it, item) },
+                walkMinutes = if (origin != null && item.id == firstNew) originWalk(origin, item) else previous?.let { walkShown(it, item) },
                 alternatives = (clashing + others).distinct().take(MAX_ALTERNATIVES),
                 orInstead = clashing,
             )
         }
         val meals = if (preferences.includeMeals && chosen.isNotEmpty()) {
-            MealKind.entries.mapNotNull { meal(it, day, windowStart, windowEnd, chosen) }
+            MealKind.entries
+                .filter { kind -> MealSlot(day, kind) !in constraints.mealsDone && frozenMeals.none { it.kind == kind } }
+                .mapNotNull { meal(it, day, windowStart, windowEnd, chosen) }
         } else {
             emptyList()
         }
-        val entries = (planned + meals).sortedWith(compareBy<PlanEntry> { it.start }.thenBy { it.end })
+        val entries = (planned + frozenMeals + meals).sortedWith(compareBy<PlanEntry> { it.start }.thenBy { it.end })
         return PlanDay(day, windowStart, windowEnd, entries)
     }
 
@@ -396,13 +610,15 @@ class Planner(
         val from = maxOf(windowStart, day.atTime(kind.from).atZone(zone).toInstant())
         val until = minOf(windowEnd, day.atTime(kind.until).atZone(zone).toInstant())
         if (Duration.between(from, until) < MEAL_LENGTH) return null
-        val starts = (listOf(from) + chosen.map { end(it) }.filter { !it.isBefore(from) && it.isBefore(until) })
+        val noFood = constraints.noFoodUntil
+        val extra = listOfNotNull(noFood?.takeIf { !it.isBefore(from) && it.isBefore(until) })
+        val starts = (listOf(from) + chosen.map { end(it) }.filter { !it.isBefore(from) && it.isBefore(until) } + extra)
             .map { roundUpToFiveMinutes(it) }
             .distinct()
             .sorted()
         val start = starts.firstOrNull { s ->
             val e = s.plus(MEAL_LENGTH)
-            !e.isAfter(until) && chosen.none { start(it).isBefore(e) && end(it).isAfter(s) }
+            (noFood == null || !s.isBefore(noFood)) && !e.isAfter(until) && chosen.none { start(it).isBefore(e) && end(it).isAfter(s) }
         } ?: return null
         val before = chosen.filter { !end(it).isAfter(start) }.maxWithOrNull(compareBy<ScheduleItem> { end(it) }.then(ITEM_ORDER))
         return MealBreak(kind, start, start.plus(MEAL_LENGTH), foodLocation(bundle.location(before?.locationId)?.coordinate))
@@ -469,6 +685,8 @@ class Planner(
 
     /** Rule 6: [b] can come right after [a]. */
     private fun follows(a: ScheduleItem, b: ScheduleItem): Boolean {
+        val limit = constraints.maxWalkMinutes
+        if (limit != null) walkShown(a, b)?.let { if (it > limit) return false }
         val gap = Duration.ofMinutes(walkMinutes(a, b) + BUFFER_MINUTES)
         return !end(a).plus(gap).isAfter(start(b))
     }
@@ -501,6 +719,16 @@ class Planner(
         val ITEM_ORDER: Comparator<ScheduleItem> = compareBy<ScheduleItem> { it.startTime?.toInstant() }
             .thenBy { TimeMatcher.effectiveEnd(it) }
             .thenBy { it.id }
+
+        /**
+         * Rule 14: a food item: its location's category or one of the location's tags, or one of the
+         * item's tags, contains "food" after [SearchText.normalize].
+         */
+        fun isFood(bundle: EventBundle, item: ScheduleItem): Boolean {
+            val location = bundle.location(item.locationId)
+            fun food(text: String?) = text != null && SearchText.normalize(text).contains("food")
+            return food(location?.category) || location?.tags.orEmpty().any { food(it) } || item.tags.any { food(it) }
+        }
 
         /** What a planned item looked like when planned; a different value means the plan changed. */
         fun fingerprint(item: ScheduleItem): String =

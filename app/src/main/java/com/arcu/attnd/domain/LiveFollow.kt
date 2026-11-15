@@ -217,7 +217,7 @@ object LiveFollow {
                 title = "That's a wrap for today"
                 text = when (source) {
                     LiveSource.PLAN -> "${items.size} ${if (items.size == 1) "item" else "items"} in your plan today"
-                    LiveSource.HEARTS -> "${items.size} hearted ${if (items.size == 1) "item" else "items"} today"
+                    LiveSource.HEARTS -> "${items.size} liked ${if (items.size == 1) "item" else "items"} today"
                     LiveSource.EVENT -> bundle.event.name
                 }
                 chip = null

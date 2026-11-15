@@ -32,6 +32,31 @@ object JoinLinks {
         return segments[1].trim().takeIf { it.isNotEmpty() }
     }
 
+    /** A shared plan / item link (API-015): the event code and the still-encoded payload ([PlanShare.decode]). */
+    data class ShareLink(val eventCode: String, val payload: String)
+
+    /**
+     * `https://attnd.app/p/<code>/<payload>` (with or without `www.`, a trailing slash, query or
+     * fragment) → its code and payload; null for anything else (also `/p/<code>/<payload>/qr.svg`).
+     */
+    fun parseShareLink(raw: String?): ShareLink? {
+        val value = raw?.trim().orEmpty()
+        if (value.isEmpty()) return null
+        val uri = try {
+            URI(if (value.contains("://")) value else "https://$value")
+        } catch (_: Exception) {
+            return null
+        }
+        val host = uri.host?.lowercase()?.removePrefix("www.") ?: return null
+        if (host != HOST) return null
+        val segments = uri.rawPath.orEmpty().split('/').filter { it.isNotEmpty() }
+        if (segments.size != 3 || segments[0] != "p") return null
+        val code = decode(segments[1]).trim()
+        val payload = segments[2].trim()
+        if (code.isEmpty() || payload.isEmpty()) return null
+        return ShareLink(code, payload)
+    }
+
     /**
      * Extracts `event_code` from a Play install referrer string such as `event_code=FWFM2026`
      * (the server links to the Play Store with `referrer=event_code%3D<code>`).

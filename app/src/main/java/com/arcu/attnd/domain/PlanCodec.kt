@@ -37,6 +37,8 @@ object PlanCodec {
         val preferences: StoredPreferences = StoredPreferences(),
         val days: List<StoredDay> = emptyList(),
         val fingerprints: Map<String, String> = emptyMap(),
+        val constraints: StoredConstraints = StoredConstraints(),
+        val checkedOff: List<Int> = emptyList(),
     ) {
         fun toPlan(): Plan? {
             if (eventId == 0) return null
@@ -47,6 +49,8 @@ object PlanCodec {
                 preferences = preferences.toPreferences(),
                 days = days.mapNotNull { it.toDay() },
                 fingerprints = fingerprints.mapNotNull { (k, v) -> k.toIntOrNull()?.let { it to v } }.toMap(),
+                constraints = constraints.toConstraints(),
+                checkedOff = checkedOff.toSet(),
             )
         }
 
@@ -58,6 +62,8 @@ object PlanCodec {
                 preferences = StoredPreferences.of(plan.preferences),
                 days = plan.days.map { StoredDay.of(it) },
                 fingerprints = plan.fingerprints.mapKeys { it.key.toString() },
+                constraints = StoredConstraints.of(plan.constraints),
+                checkedOff = plan.checkedOff.sorted(),
             )
         }
     }
@@ -106,6 +112,57 @@ object PlanCodec {
                 pace = p.pace.key,
                 includeMeals = p.includeMeals,
                 kidFriendly = p.kidFriendly,
+            )
+        }
+    }
+
+    /** [PlanConstraints]; times as ISO instants / "HH:MM", meal slots as "2026-11-14:lunch". */
+    @Serializable
+    private data class StoredConstraints(
+        val pinned: List<Int> = emptyList(),
+        val excluded: List<Int> = emptyList(),
+        val noFoodUntil: String? = null,
+        val mealsDone: List<String> = emptyList(),
+        val startAt: String? = null,
+        val doneBy: String? = null,
+        val maxWalkMinutes: Int? = null,
+        val pace: String? = null,
+        val originLocationId: Int? = null,
+        val originAt: String? = null,
+        val moreTags: List<String> = emptyList(),
+        val lessTags: List<String> = emptyList(),
+        val groupLikes: Map<String, Int> = emptyMap(),
+    ) {
+        fun toConstraints() = PlanConstraints(
+            pinned = pinned.toSet(),
+            excluded = excluded.toSet(),
+            noFoodUntil = noFoodUntil?.let { instant(it) },
+            mealsDone = mealsDone.mapNotNull { MealSlot.decode(it) }.toSet(),
+            startAt = startAt?.let { runCatching { LocalTime.parse(it) }.getOrNull() },
+            doneBy = doneBy?.let { runCatching { LocalTime.parse(it) }.getOrNull() },
+            maxWalkMinutes = maxWalkMinutes?.takeIf { it > 0 },
+            pace = pace?.let { p -> PlanPace.entries.firstOrNull { it.key == p } },
+            origin = originLocationId?.let { id -> originAt?.let { instant(it) }?.let { PlanOrigin(id, it) } },
+            moreTags = moreTags.toSet(),
+            lessTags = lessTags.toSet(),
+            groupLikes = groupLikes.mapNotNull { (k, v) -> k.toIntOrNull()?.let { it to v } }.toMap(),
+        )
+
+        companion object {
+            fun of(c: PlanConstraints) = StoredConstraints(
+                pinned = c.pinned.sorted(),
+                excluded = c.excluded.sorted(),
+                noFoodUntil = c.noFoodUntil?.toString(),
+                mealsDone = c.mealsDone.map { it.encode() }.sorted(),
+                startAt = c.startAt?.toString(),
+                doneBy = c.doneBy?.toString(),
+                maxWalkMinutes = c.maxWalkMinutes,
+                pace = c.pace?.key,
+                originLocationId = c.origin?.locationId,
+                originAt = c.origin?.at?.toString(),
+                moreTags = c.moreTags.sorted(),
+                lessTags = c.lessTags.sorted(),
+                groupLikes = c.groupLikes.mapKeys { it.key.toString() },
             )
         }
     }

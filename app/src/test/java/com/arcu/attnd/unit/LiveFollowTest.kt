@@ -79,7 +79,7 @@ class LiveFollowTest {
         val wrap = LiveFollow.state(bundle, null, hearts, at("21:10"), locale = Locale.US)!!
         assertEquals(LiveMode.END_OF_DAY, wrap.mode)
         assertEquals("That's a wrap for today", wrap.title)
-        assertEquals("2 hearted items today", wrap.text)
+        assertEquals("2 liked items today", wrap.text)
         assertNull(LiveFollow.state(bundle, null, hearts, at("21:31"), locale = Locale.US))
     }
 

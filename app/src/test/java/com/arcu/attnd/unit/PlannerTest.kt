@@ -80,7 +80,7 @@ class PlannerTest {
         val prairie = plan.items.single { it.itemId == 101 }
         assertEquals(listOf(114), prairie.orInstead)
         assertEquals(listOf(114), prairie.alternatives)
-        assertEquals("You hearted this", prairie.reason)
+        assertEquals("You liked this", prairie.reason)
         assertEquals(4, prairie.walkMinutes)
         // The lunch break suggests the food location nearest to where the attendee was.
         val lunch = day.entries.filterIsInstance<MealBreak>().single()
@@ -88,7 +88,7 @@ class PlannerTest {
         assertEquals(6, lunch.locationId)
         assertEquals(Duration.ofMinutes(45), Duration.between(lunch.start, lunch.end))
         // Reasons and walks.
-        assertEquals("Because you hearted The Prairie Lights", plan.items.single { it.itemId == 103 }.reason)
+        assertEquals("Because you liked The Prairie Lights", plan.items.single { it.itemId == 103 }.reason)
         assertEquals("Because you like live music", plan.items.single { it.itemId == 104 }.reason)
         assertNull(plan.items.first().walkMinutes) // first item of the day
         assertNull(plan.items[1].walkMinutes) // Gates open has no location

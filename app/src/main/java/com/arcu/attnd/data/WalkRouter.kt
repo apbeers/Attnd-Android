@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import com.arcu.attnd.data.net.HttpClient
 import com.arcu.attnd.data.net.UrlConnectionHttpClient
 import com.arcu.attnd.domain.AppLog
+import com.arcu.attnd.domain.DayRoutes
 import com.arcu.attnd.domain.EncodedPolyline
 import com.arcu.attnd.domain.Geo
 import com.arcu.attnd.domain.GeoPoint
@@ -70,6 +71,66 @@ class WalkRouter(
         return route
     }
 
+    private val dayCache = object : LinkedHashMap<String, List<WalkRoute?>>(8, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<WalkRoute?>>?): Boolean = size > MAX_DAYS_CACHED
+    }
+
+    /**
+     * The day's walking legs in one `computeRoutes` call (assistant spec §5): [stops] in order (2–25,
+     * [DayRoutes.waypoints]) as origin, intermediates and destination; one entry per leg (null = keep
+     * the estimate for that leg). The answer is cached per [key] (e.g. event + day + stops) for the day;
+     * a failure returns all nulls and isn't cached. Pass the result to [DayRoutes.withServiceLegs],
+     * which applies the 2.5 × plausibility rule per leg.
+     */
+    suspend fun dayLegs(key: String, stops: List<GeoPoint>): List<WalkRoute?> {
+        val legs = stops.size - 1
+        if (legs < 1 || stops.size > DayRoutes.MAX_STOPS) return List(legs.coerceAtLeast(0)) { null }
+        synchronized(dayCache) { dayCache[key] }?.let { return it }
+        val started = System.nanoTime()
+        val result = try {
+            fetchDay(stops)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            AppLog.debug(
+                LogCategory.NET, LogEvent.ROUTE_FETCHED, "Day route failed (${AppLog.errorKind(e)}): estimates",
+                mapOf("ms" to (System.nanoTime() - started) / 1_000_000, "ok" to false, "fallback" to true, "legs" to legs),
+            )
+            return List(legs) { null }
+        }
+        AppLog.debug(
+            LogCategory.NET, LogEvent.ROUTE_FETCHED, "Day route",
+            mapOf("ms" to (System.nanoTime() - started) / 1_000_000, "ok" to true, "fallback" to result.any { it == null }, "legs" to legs),
+        )
+        synchronized(dayCache) { dayCache[key] = result }
+        return result
+    }
+
+    /** Per-leg routes from one multi-waypoint request; throws on network / HTTP errors. */
+    private suspend fun fetchDay(stops: List<GeoPoint>): List<WalkRoute?> {
+        if (apiKey.isBlank()) throw IllegalStateException("No Maps API key in this build")
+        fun waypoint(p: GeoPoint) = Waypoint(WaypointLocation(LatLngDto(p.latitude, p.longitude)))
+        val body = routesJson.encodeToString(
+            ComputeDayRouteRequest.serializer(),
+            ComputeDayRouteRequest(
+                origin = waypoint(stops.first()),
+                destination = waypoint(stops.last()),
+                intermediates = stops.subList(1, stops.size - 1).map { waypoint(it) },
+            ),
+        )
+        val headers = buildMap {
+            put("X-Goog-Api-Key", apiKey)
+            put("X-Goog-FieldMask", DAY_FIELD_MASK)
+            put("X-Android-Package", appContext.packageName)
+            AppSignature.sha1(appContext)?.let { put("X-Android-Cert", it) }
+        }
+        val response = http.execute("POST", ENDPOINT, headers, body)
+        if (!response.isSuccessful) throw IllegalStateException("Routes API HTTP ${response.code}")
+        val parsed = routesJson.decodeFromString(ComputeDayRouteResponse.serializer(), response.body.orEmpty().ifBlank { "{}" })
+        val legs = parsed.routes.firstOrNull()?.legs.orEmpty()
+        return List(stops.size - 1) { index -> legs.getOrNull(index)?.toWalkRoute() }
+    }
+
     /** The service's route, null when it has none; throws on network / HTTP errors. */
     private suspend fun fetch(origin: GeoPoint, destination: GeoPoint): WalkRoute? {
         if (apiKey.isBlank()) throw IllegalStateException("No Maps API key in this build")
@@ -100,7 +161,9 @@ class WalkRouter(
     companion object {
         const val ENDPOINT = "https://routes.googleapis.com/directions/v2:computeRoutes"
         const val FIELD_MASK = "routes.duration,routes.distanceMeters,routes.polyline.encodedPolyline"
+        const val DAY_FIELD_MASK = "routes.legs.duration,routes.legs.distanceMeters,routes.legs.polyline.encodedPolyline"
         private const val MAX_CACHED = 64
+        private const val MAX_DAYS_CACHED = 8
 
         private val routesJson = Json {
             ignoreUnknownKeys = true
@@ -127,6 +190,37 @@ private data class ComputeRoutesRequest(
     val travelMode: String = "WALK",
     val languageCode: String = "en-US",
 )
+
+@Serializable
+private data class ComputeDayRouteRequest(
+    val origin: Waypoint,
+    val destination: Waypoint,
+    val intermediates: List<Waypoint> = emptyList(),
+    val travelMode: String = "WALK",
+    val languageCode: String = "en-US",
+)
+
+@Serializable
+private data class ComputeDayRouteResponse(val routes: List<DayRouteDto> = emptyList())
+
+@Serializable
+private data class DayRouteDto(val legs: List<LegDto> = emptyList())
+
+@Serializable
+private data class LegDto(
+    val distanceMeters: Int? = null,
+    val duration: String? = null,
+    val polyline: PolylineDto? = null,
+) {
+    /** A leg as a service route; null when incomplete (that leg keeps its estimate). */
+    fun toWalkRoute(): WalkRoute? {
+        val meters = distanceMeters ?: return null
+        val seconds = Walking.parseDurationSeconds(duration) ?: return null
+        val points = polyline?.encodedPolyline?.let(EncodedPolyline::decode).orEmpty()
+        if (points.size < 2) return null
+        return WalkRoute(meters.toDouble(), seconds, points, isEstimate = false)
+    }
+}
 
 @Serializable
 private data class ComputeRoutesResponse(val routes: List<RouteDto> = emptyList())

@@ -336,10 +336,10 @@ object EventSearch {
     /** A chip shown for an empty query; tapping it searches [query]. */
     data class Suggestion(val label: String, val query: String)
 
-    const val HEARTED_TITLE = "Hearted"
+    const val HEARTED_TITLE = "Liked"
 
     /**
-     * The search screen's "Hearted" entry (shown once anything is hearted; it opens this list, it is
+     * The search screen's "Liked" entry (shown once anything is hearted; it opens this list, it is
      * not a query): hearted schedule items in time order (with their Now/Next/Ended), then hearted
      * locations in the organizer's order. Ids no longer in the bundle are skipped.
      */
