@@ -278,7 +278,7 @@ fun RefreshBox(
 }
 
 /**
- * Horizontally scrolling filter chips: "Hearted" first when [onHeartedChange] is set, then "All" +
+ * Horizontally scrolling filter chips: "Liked" first when [onHeartedChange] is set, then "All" +
  * one per category (none when [categories] is empty). Emits nothing when there is neither.
  */
 @Composable
@@ -308,13 +308,13 @@ fun CategoryChips(
     }
 }
 
-/** "Hearted": show only hearted items / places. */
+/** "Liked": show only liked items / places. */
 @Composable
 fun HeartedChip(selected: Boolean, onChange: (Boolean) -> Unit, modifier: Modifier = Modifier) {
     FilterChip(
         selected = selected,
         onClick = { onChange(!selected) },
-        label = { Text("Hearted") },
+        label = { Text("Liked") },
         leadingIcon = {
             Icon(
                 if (selected) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,

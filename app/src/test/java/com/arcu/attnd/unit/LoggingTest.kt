@@ -115,8 +115,9 @@ class LoggingTest {
         val shape = Regex("""^[a-z][a-z0-9_]*(\.[a-z0-9_]+){1,4}$""")
         LogEvent.ALL.forEach { assertTrue(it, shape.matches(it) && it.length <= 64) }
         assertEquals(LogEvent.ALL.size, LogEvent.ALL.toSet().size)
-        // Each name starts with its category (except error.caught, logged under the failing area).
-        val categories = LogCategory.entries.map { it.wire }.toSet()
+        // Each name starts with its category (except error.caught, logged under the failing area, and
+        // the plan.* / share.* names LOG_EVENTS.md files under planner / ui).
+        val categories = LogCategory.entries.map { it.wire }.toSet() + setOf("plan", "share")
         LogEvent.ALL.filter { it != LogEvent.ERROR_CAUGHT }.forEach { assertTrue(it, it.substringBefore('.') in categories) }
     }
 

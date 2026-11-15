@@ -2,6 +2,8 @@
 
 package com.arcu.attnd.ui.screens
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -34,17 +36,26 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.ui.platform.LocalContext
+import com.arcu.attnd.domain.AppLog
+import com.arcu.attnd.domain.CalendarEntries
+import com.arcu.attnd.domain.LogCategory
+import com.arcu.attnd.domain.LogEvent
+import com.arcu.attnd.domain.PlanShare
+import com.arcu.attnd.ui.assistant.AssistantIntents
+import com.arcu.attnd.ui.components.AskAboutButton
+import com.arcu.attnd.ui.components.LocalScreenshotMode
 import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -216,7 +227,7 @@ fun ScheduleList(
                 EmptyState(
                     when {
                         bundle.schedule.isEmpty() -> "No schedule has been posted yet."
-                        heartedOnly && query.isBlank() && hearts.scheduleItems.isEmpty() -> "Nothing hearted yet. Tap the heart on an item to keep it here."
+                        heartedOnly && query.isBlank() && hearts.scheduleItems.isEmpty() -> "Nothing liked yet. Tap the heart on an item to keep it here."
                         query.isNotBlank() -> "Nothing on the schedule matches your search."
                         style == ScheduleStyle.NOW_NEXT -> "Nothing is happening now or coming up."
                         else -> "No upcoming items. Tap \"Show past\" to see earlier ones."
@@ -390,6 +401,7 @@ fun ScheduleItemDetail(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            ItemExtras(bundle, item)
             if (item.description.isNotBlank()) {
                 Text(item.description, style = MaterialTheme.typography.bodyLarge)
             }
@@ -398,6 +410,41 @@ fun ScheduleItemDetail(
                     item.tags.forEach { tag -> SuggestionChip(onClick = {}, label = { Text(Tags.display(tag)) }) }
                 }
             }
+        }
+    }
+}
+
+/**
+ * The schedule detail's extras (assistant spec §7–8): "Ask about this" (the assistant with the item as
+ * context), "Add to calendar" (the calendar app's insert screen, no permission) and "Share" (an
+ * API-015 item link). Not in screenshot mode.
+ */
+@Composable
+private fun ItemExtras(bundle: EventBundle, item: ScheduleItem) {
+    if (LocalScreenshotMode.current) return
+    val context = LocalContext.current
+    val ask = LocalEventActions.current.onAskAbout
+    val entry = remember(item, bundle) { CalendarEntries.forItem(item.id, bundle) }
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        if (ask != null) AskAboutButton { ask(SearchKind.SCHEDULE, item.id) }
+        if (entry != null) {
+            OutlinedButton(onClick = { AssistantIntents.addToCalendar(context, entry) }) {
+                Icon(Icons.Filled.CalendarMonth, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Add to calendar")
+            }
+        }
+        OutlinedButton(onClick = {
+            val link = PlanShare.itemLink(item.id, bundle)
+            AppLog.info(
+                LogCategory.UI, LogEvent.SHARE_CREATED, "Share link made (item)",
+                mapOf("target" to "item", "items" to 1, "payload_len" to link.substringAfterLast('/').length, "via" to "share_sheet"),
+            )
+            AssistantIntents.share(context, link, item.name)
+        }) {
+            Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("Share")
         }
     }
 }

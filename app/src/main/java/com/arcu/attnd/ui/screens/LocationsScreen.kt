@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Map
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.ButtonGroup
+import com.arcu.attnd.ui.components.AskAboutButton
 import androidx.compose.material3.ButtonGroupDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -179,7 +180,7 @@ fun LocationsList(
                 EmptyState(
                     when {
                         bundle.locations.isEmpty() -> "No locations have been added yet."
-                        heartedOnly && query.isBlank() && category == null -> "No hearted locations yet. Tap the heart on a location to keep it here."
+                        heartedOnly && query.isBlank() && category == null -> "No liked locations yet. Tap the heart on a location to keep it here."
                         else -> "No locations match your search."
                     }
                 )
@@ -434,6 +435,7 @@ fun LocationDetail(
                         }
                     }
                 }
+                actions.onAskAbout?.let { ask -> AskAboutButton { ask(SearchKind.LOCATION, location.id) } }
                 if (location.description.isNotBlank()) {
                     Text(location.description, style = MaterialTheme.typography.bodyLarge)
                 }

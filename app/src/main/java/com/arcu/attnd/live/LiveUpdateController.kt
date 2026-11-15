@@ -13,9 +13,19 @@ import com.arcu.attnd.data.hasLocationPermission
 import com.arcu.attnd.data.log.PerfRecorder
 import com.arcu.attnd.domain.AppLog
 import com.arcu.attnd.domain.EventBundle
+import com.arcu.attnd.domain.EventTime
+import com.arcu.attnd.domain.Geo
 import com.arcu.attnd.domain.GeoPoint
 import com.arcu.attnd.domain.Hearts
+import com.arcu.attnd.domain.LateState
+import com.arcu.attnd.domain.LiveAssist
 import com.arcu.attnd.domain.LiveFollow
+import com.arcu.attnd.domain.LiveMode
+import com.arcu.attnd.domain.LiveState
+import com.arcu.attnd.domain.Plan
+import com.arcu.attnd.domain.Planner
+import com.arcu.attnd.domain.RunningLate
+import com.arcu.attnd.domain.Walking
 import com.arcu.attnd.domain.LogCategory
 import com.arcu.attnd.domain.LogEvent
 import com.arcu.attnd.domain.LogJson
@@ -42,8 +52,10 @@ import java.time.Instant
  * change (AppGraph), on each alarm, on a `content_updated` push (the bundle changes), on boot, on the
  * notification actions and when the geofence reports an arrival.
  *
- * Only while "Follow on Lock Screen" is on for the joined event ([PlanStore.follows]); never in
- * screenshot mode ([suspended]).
+ * The Live Update only while "Follow on Lock Screen" is on for the joined event ([PlanStore.follows]),
+ * reminders while they are on ([PlanStore.reminders], default: the same); never in screenshot mode
+ * ([suspended]). With a plan and the user's position, the next item's departure time switches the
+ * Live Update to "Leave now" (assistant spec §6, [LiveAssist.runningLate]).
  */
 class LiveUpdateController(
     context: Context,
@@ -94,7 +106,9 @@ class LiveUpdateController(
         val eventId = bundle.event.id
         val heartsNow = hearts.hearts(eventId)
         val plan = plans.plan(eventId)
-        if (!plans.follows(eventId, heartsNow)) {
+        val follows = plans.follows(eventId, heartsNow)
+        val remindersOn = plans.reminders(eventId, heartsNow)
+        if (!follows && !remindersOn) {
             stop(clearGeofence = true, reason = "unfollowed")
             return
         }
@@ -108,7 +122,7 @@ class LiveUpdateController(
 
         // Reminders for hearted / planned items (shown once each).
         val shown = plans.remindersShown(eventId)
-        val reminders = LiveFollow.reminders(bundle, plan, heartsNow, now, user, skipped).filter { it.first !in shown }
+        val reminders = if (!remindersOn) emptyList() else LiveFollow.reminders(bundle, plan, heartsNow, now, user, skipped).filter { it.first !in shown }
         val (due, later) = reminders.partition { !it.second.isAfter(now.plus(REMINDER_EARLY)) }
         due.forEach { (itemId, _) ->
             val item = bundle.scheduleItem(itemId) ?: return@forEach
@@ -119,7 +133,9 @@ class LiveUpdateController(
 
         // The Live Update itself; not reposted on a day the user swiped it away (unless urgent changed).
         val dismissedToday = plans.liveDismissedOn(eventId) == today.toString()
-        val state = LiveFollow.state(bundle, plan, heartsNow, now, skipped, urgent, dismissedUrgent, user, arrived)
+        val late = if (follows && plan != null) LiveAssist.runningLate(plan, bundle, now, user, skipped) else null
+        val state = if (!follows) null else LiveFollow.state(bundle, plan, heartsNow, now, skipped, urgent, dismissedUrgent, user, arrived)
+            ?.let { withRunningLate(it, late, bundle) }
         if (state != null && !dismissedToday) {
             var failure: Pair<String, Throwable?>? = null
             val posted = try {
@@ -154,9 +170,50 @@ class LiveUpdateController(
             cancelLive(if (dismissedToday) "user" else "day_over")
         }
 
-        val wake = LiveFollow.nextWake(bundle, plan, heartsNow, now, skipped, urgent, dismissedUrgent, later, arrived)
-        schedule(wake)
-        geofence.ensure(bundle)
+        val wake = if (!follows) later.minOfOrNull { it.second.minus(REMINDER_EARLY) }
+        else LiveFollow.nextWake(bundle, plan, heartsNow, now, skipped, urgent, dismissedUrgent, later, arrived)
+        // Assistant spec §6: also wake at the next planned item's departure time (running late).
+        val leaveBy = if (follows && plan != null && late == null) nextLeaveBy(plan, bundle, now, user, skipped) else null
+        schedule(listOfNotNull(wake, leaveBy).minOrNull())
+        if (follows) geofence.ensure(bundle) else geofence.clear()
+    }
+
+    /**
+     * "Leave now" in the Live Update (assistant spec §6): from the next planned item's departure time,
+     * the title says to leave (LEAVE_NOW) or that it can't be made in time; the chip reads "Leave".
+     * Urgent mode is never replaced.
+     */
+    private fun withRunningLate(state: LiveState, late: RunningLate?, bundle: EventBundle): LiveState {
+        if (late == null || state.mode == LiveMode.URGENT) return state
+        val item = bundle.scheduleItem(late.itemId) ?: return state
+        if (lateShownFor != late.itemId) {
+            lateShownFor = late.itemId
+            val left = Duration.between(Instant.now(), item.startTime!!.toInstant()).toMinutes()
+            AppLog.notice(
+                LogCategory.LIVE, LogEvent.LIVE_RUNNING_LATE, "Running late: ${late.state}",
+                mapOf("item_id" to late.itemId, "minutes_left" to left, "walk_min" to late.walkMinutes, "action" to "shown"),
+            )
+        }
+        return state.copy(
+            title = late.text,
+            text = listOfNotNull(EventTime.formatTimeRange(item.startTime, item.endTime, bundle.event.zone), bundle.location(item.locationId)?.name).joinToString(" · "),
+            chip = if (late.state == LateState.LEAVE_NOW) "Leave" else state.chip,
+            focus = item,
+        )
+    }
+
+    @Volatile
+    private var lateShownFor: Int? = null
+
+    /** When the next planned item's departure time comes (start − walk − 5 min), with the user's position. */
+    private fun nextLeaveBy(plan: Plan, bundle: EventBundle, now: Instant, user: GeoPoint?, skipped: Set<Int>): Instant? {
+        user ?: return null
+        val next = LiveAssist.nextPlanned(plan, bundle, now, skipped) ?: return null
+        val target = bundle.location(next.locationId)?.coordinate ?: return null
+        val meters = Geo.distanceMeters(user, target)
+        if (meters <= LiveAssist.THERE_METERS || !Walking.isNearby(meters)) return null
+        val walk = Walking.minutes(Walking.estimateSeconds(meters))
+        return next.startTime!!.toInstant().minus(Duration.ofMinutes(walk + Planner.BUFFER_MINUTES)).takeIf { it.isAfter(now) }
     }
 
     /** The urgent block: the newest of the last urgent push and the bundle's urgent updates. */

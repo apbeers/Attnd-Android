@@ -240,6 +240,9 @@ dependencies {
     // availability check, falls back to plain search).
     implementation 'com.google.mlkit:genai-prompt:1.0.0-beta5'
 
+    // Home-screen widget "Now / Next in my plan" (Jetpack Glance, first-party AndroidX).
+    implementation 'androidx.glance:glance-appwidget:1.2.0'
+
     // Push (FCM)
     implementation platform('com.google.firebase:firebase-bom:35.2.0')
     implementation 'com.google.firebase:firebase-messaging'

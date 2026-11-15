@@ -104,6 +104,28 @@ class OnDeviceAssistant {
      */
     suspend fun extractPreferences(prompt: String): String = generate(prompt, 0f, MAX_JSON_TOKENS)
 
+    /**
+     * One event-assistant turn ([com.arcu.attnd.domain.AssistantModel.prompt]): the reply JSON, streamed.
+     * Emits the reply so far (accumulated) after each chunk, so complete blocks can be shown early
+     * ([com.arcu.attnd.domain.AssistantModel.completeBlocks]); the last emission is the whole reply.
+     * Throws on failure; the caller falls back to the rule-based router.
+     */
+    fun turn(prompt: String): Flow<String> = flow {
+        val model = model() ?: throw IllegalStateException("On-device AI isn't available on this device.")
+        val request = generateContentRequest(TextPart(prompt)) {
+            temperature = TURN_TEMPERATURE
+            topK = TOP_K
+            maxOutputTokens = MAX_TURN_TOKENS
+        }
+        var text = ""
+        model.generateContentStream(request).collect { chunk ->
+            val part = chunk.candidates.firstOrNull()?.text.orEmpty()
+            // Chunks are deltas; tolerate an implementation that resends the whole text so far.
+            text = if (part.startsWith(text) && text.isNotEmpty()) part else text + part
+            emit(text)
+        }
+    }
+
     private suspend fun generate(prompt: String, temperature: Float, maxTokens: Int): String {
         val model = model() ?: throw IllegalStateException("On-device AI isn't available on this device.")
         val response = model.generateContent(
@@ -121,5 +143,7 @@ class OnDeviceAssistant {
         const val TOP_K = 16
         const val MAX_OUTPUT_TOKENS = 256
         const val MAX_JSON_TOKENS = 320
+        const val TURN_TEMPERATURE = 0.1f
+        const val MAX_TURN_TOKENS = 512
     }
 }

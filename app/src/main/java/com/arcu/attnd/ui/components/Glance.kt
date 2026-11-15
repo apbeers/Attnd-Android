@@ -2,6 +2,7 @@
 
 package com.arcu.attnd.ui.components
 
+import androidx.compose.runtime.getValue
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -20,6 +21,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Favorite
@@ -46,7 +48,6 @@ import androidx.compose.runtime.State
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.staticCompositionLocalOf
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -95,6 +96,8 @@ class EventActions(
     val hearts: Hearts = Hearts.NONE,
     val onToggleHeart: (SearchKind, Int) -> Unit = { _, _ -> },
     val onShowOnMap: ((Int) -> Unit)? = null,
+    /** "Ask about this" (assistant spec §8): opens the assistant about an item, place or update; null in screenshot mode. */
+    val onAskAbout: ((SearchKind, Int) -> Unit)? = null,
 )
 
 val LocalEventActions = compositionLocalOf { EventActions() }
@@ -220,7 +223,17 @@ fun WalkTime(target: GeoPoint?, modifier: Modifier = Modifier, color: Color = Ma
 
 // ── Hearts ──────────────────────────────────────────────────────────────────
 
-/** Heart toggle for a schedule item or location (stored on the device per event). */
+/** "Ask about this" on a detail screen (opens the event assistant with the item as context). */
+@Composable
+fun AskAboutButton(modifier: Modifier = Modifier, onClick: () -> Unit) {
+    OutlinedButton(onClick = onClick, modifier = modifier) {
+        Icon(Icons.Filled.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(8.dp))
+        Text("Ask about this")
+    }
+}
+
+/** Like (heart) toggle for a schedule item or location (stored on the device per event). */
 @Composable
 fun HeartButton(kind: SearchKind, id: Int, modifier: Modifier = Modifier, name: String? = null) {
     val actions = LocalEventActions.current
@@ -228,7 +241,12 @@ fun HeartButton(kind: SearchKind, id: Int, modifier: Modifier = Modifier, name: 
     IconToggleButton(checked = hearted, onCheckedChange = { actions.onToggleHeart(kind, id) }, modifier = modifier) {
         Icon(
             if (hearted) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
-            contentDescription = if (name != null) "Heart $name" else "Heart",
+            contentDescription = when {
+                name != null && hearted -> "Unlike $name"
+                name != null -> "Like $name"
+                hearted -> "Unlike"
+                else -> "Like"
+            },
             tint = if (hearted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
@@ -319,7 +337,7 @@ fun PeekSheet(bundle: EventBundle, target: PeekTarget, now: Instant, onOpen: () 
                 FilledTonalButton(onClick = { actions.onToggleHeart(target.kind, target.id) }) {
                     Icon(if (hearted) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
-                    Text(if (hearted) "Hearted" else "Heart")
+                    Text(if (hearted) "Liked" else "Like")
                 }
                 val showOnMap = actions.onShowOnMap
                 if (showOnMap != null && location?.coordinate != null) {

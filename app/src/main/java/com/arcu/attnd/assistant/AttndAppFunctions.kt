@@ -12,6 +12,14 @@ import androidx.appfunctions.AppFunctionServiceEntryPoint
 import com.arcu.attnd.AppGraph
 import com.arcu.attnd.AttndApplication
 import com.arcu.attnd.domain.AppLog
+import com.arcu.attnd.domain.AssistantContext
+import com.arcu.attnd.domain.AssistantIntent
+import com.arcu.attnd.domain.AssistantRouter
+import com.arcu.attnd.domain.LiveAssist
+import com.arcu.attnd.domain.Plan
+import com.arcu.attnd.domain.PlanEdit
+import com.arcu.attnd.domain.PlanEditor
+import com.arcu.attnd.domain.PlanOp
 import com.arcu.attnd.domain.EventBundle
 import com.arcu.attnd.domain.EventFact
 import com.arcu.attnd.domain.EventFacts
@@ -149,10 +157,10 @@ abstract class BaseAttndAppFunctionService : AppFunctionService() {
     }
 
     /**
-     * Lists what the user has hearted (saved) in the joined event: schedule items first, in time order,
+     * Lists what the user has liked (saved) in the joined event: schedule items first, in time order,
      * then places.
      *
-     * @return The hearted items; empty when nothing is hearted.
+     * @return The liked items; empty when nothing is liked.
      */
     @AppFunctionDeclaration(isDescribedByKDoc = true)
     suspend fun getHeartedItems(): List<AttndEventItem> = appFunction("getHeartedItems", null) {
@@ -162,12 +170,12 @@ abstract class BaseAttndAppFunctionService : AppFunctionService() {
     }
 
     /**
-     * Hearts (saves) or un-hearts a schedule item or a place in the joined event, e.g. "heart the
+     * Likes (saves) or unlikes a schedule item or a place in the joined event, e.g. "like the
      * fireworks show". Find the item's kind and id with the other functions first.
      *
      * @param kind "schedule_item" or "location", as in the item's kind.
      * @param id The item's id.
-     * @param hearted True to heart the item, false to remove the heart.
+     * @param hearted True to like the item, false to unlike it.
      * @return The item.
      */
     @AppFunctionDeclaration(isDescribedByKDoc = true)
@@ -176,7 +184,7 @@ abstract class BaseAttndAppFunctionService : AppFunctionService() {
         val searchKind = when (kind.trim().lowercase(Locale.ROOT)) {
             "schedule_item", "schedule" -> SearchKind.SCHEDULE
             "location", "place" -> SearchKind.LOCATION
-            else -> throw AppFunctionInvalidArgumentException("Only schedule items and locations can be hearted.")
+            else -> throw AppFunctionInvalidArgumentException("Only schedule items and locations can be liked.")
         }
         val fact = when (searchKind) {
             SearchKind.SCHEDULE -> bundle.scheduleItem(id)?.let { EventFacts.schedule(it, bundle, Instant.now()) }
@@ -188,6 +196,87 @@ abstract class BaseAttndAppFunctionService : AppFunctionService() {
         }
         fact.toItem(bundle)
     }
+
+    /**
+     * Gets what is next in the user's plan for the joined event ("what's next on my plan?"): the
+     * upcoming planned items in time order, the next one first.
+     *
+     * @param limit Maximum number of items (default 10).
+     * @return The upcoming planned items; empty when the user has no plan or it is over.
+     */
+    @AppFunctionDeclaration(isDescribedByKDoc = true)
+    suspend fun getNextInPlan(limit: Int = EventFacts.DEFAULT_LIMIT): List<AttndEventItem> = appFunction("getNextInPlan", null) {
+        val bundle = bundle()
+        val now = Instant.now()
+        val plan = graph().plans.plan(bundle.event.id)?.takeIf { !it.isEmpty } ?: return@appFunction emptyList()
+        plan.items.filter { it.end.isAfter(now) && it.itemId !in plan.checkedOff }
+            .mapNotNull { bundle.scheduleItem(it.itemId) }
+            .take(EventFacts.limit(limit))
+            .map { EventFacts.schedule(it, bundle, now).toItem(bundle) }
+    }
+
+    /**
+     * Swaps the next item in the user's plan for its best alternative ("swap my next thing"). The
+     * plan is re-arranged on the phone; the user can undo it in the app.
+     *
+     * @return The plan's upcoming items after the swap.
+     */
+    @AppFunctionDeclaration(isDescribedByKDoc = true)
+    suspend fun swapNextPlanItem(): List<AttndEventItem> = appFunction("swapNextPlanItem", null) {
+        val bundle = bundle()
+        val now = Instant.now()
+        val plans = graph().plans
+        val plan = plans.plan(bundle.event.id)?.takeIf { !it.isEmpty }
+            ?: throw AppFunctionElementNotFoundException("The user has no plan for this event. They can make one in Attnd.")
+        val next = LiveAssist.nextPlanned(plan, bundle, now)
+            ?: throw AppFunctionElementNotFoundException("Nothing else is in the user's plan.")
+        val alternative = plan.items.firstOrNull { it.itemId == next.id }?.alternatives?.firstOrNull { it !in plan.itemIds }
+            ?: throw AppFunctionElementNotFoundException("Nothing else fits in place of ${next.name}.")
+        val edit = PlanEditor.preview(plan, listOf(PlanOp.Replace(next.id, with = alternative)), bundle, graph().hearts.hearts(bundle.event.id), now)
+        plans.applyPlan(bundle.event.id, edit.after)
+        logEdit(listOf("replace"), edit)
+        upcoming(edit.after, bundle, now)
+    }
+
+    /**
+     * Changes the user's plan for the joined event from a short instruction, e.g. "I already ate",
+     * "done by 9", "start at 2", "short walks", "more bbq", "less comedy", "remove the 3pm thing",
+     * "add the fireworks", "replace the 3pm thing with something like the jazz set", "I'm tired". The
+     * plan is re-arranged on the phone; the user can undo it in the app.
+     *
+     * @param instruction What to change, in the user's words.
+     * @return The plan's upcoming items after the change.
+     */
+    @AppFunctionDeclaration(isDescribedByKDoc = true)
+    suspend fun editPlan(instruction: String): List<AttndEventItem> = appFunction("editPlan", instruction) {
+        if (instruction.isBlank()) throw AppFunctionInvalidArgumentException("The instruction is empty.")
+        val bundle = bundle()
+        val now = Instant.now()
+        val graph = graph()
+        val hearts = graph.hearts.hearts(bundle.event.id)
+        val plan = graph.plans.plan(bundle.event.id)?.takeIf { !it.isEmpty }
+            ?: throw AppFunctionElementNotFoundException("The user has no plan for this event. They can make one in Attnd.")
+        val ctx = AssistantContext(bundle, hearts, plan, now, canPlan = false, history = graph.plans.history(bundle.event.id))
+        val routed = AssistantRouter.route(instruction, ctx)
+        val edit = routed.edit?.takeIf { routed.intent == AssistantIntent.PLAN_EDIT || routed.intent == AssistantIntent.PLAN_VERSION }
+            ?: throw AppFunctionInvalidArgumentException("That isn't a plan change Attnd understands. Try \"done by 9\" or \"remove <item>\".")
+        graph.plans.applyPlan(bundle.event.id, edit.after)
+        logEdit(routed.actions.flatMap { a -> a.ops(bundle, now).orEmpty().map { it.javaClass.simpleName.lowercase() } }.ifEmpty { listOf("constraint") }, edit)
+        upcoming(edit.after, bundle, now)
+    }
+
+    private fun logEdit(ops: List<String>, edit: PlanEdit) {
+        AppLog.info(
+            LogCategory.PLANNER, LogEvent.PLAN_EDIT, "Plan edit applied (AppFunction)",
+            mapOf(
+                "ops" to ops.map { if (it in PLAN_OPS) it else "constraint" }, "source" to "appfunction", "applied" to true,
+                "removed" to edit.diff.removed.size, "added" to edit.diff.added.size, "moved" to edit.diff.moved.size,
+            ),
+        )
+    }
+
+    private fun upcoming(plan: Plan, bundle: EventBundle, now: Instant): List<AttndEventItem> =
+        plan.items.filter { it.end.isAfter(now) }.mapNotNull { bundle.scheduleItem(it.itemId) }.map { EventFacts.schedule(it, bundle, now).toItem(bundle) }
 
     private fun graph(): AppGraph = (application as AttndApplication).graph
 
@@ -231,6 +320,8 @@ abstract class BaseAttndAppFunctionService : AppFunctionService() {
 
     private fun EventFact.toItem(bundle: EventBundle): AttndEventItem = toAttndItem(this, applicationContext, bundle.event.id)
 }
+
+private val PLAN_OPS = setOf("replace", "remove", "add", "move", "keep", "unkeep")
 
 internal fun toAttndItem(fact: EventFact, context: Context, eventId: Int): AttndEventItem = AttndEventItem(
     kind = when (fact.kind) {

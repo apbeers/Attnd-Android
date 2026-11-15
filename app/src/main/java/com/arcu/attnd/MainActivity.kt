@@ -27,7 +27,7 @@ import kotlinx.coroutines.launch
 
 /**
  * Single activity. All state lives in [EventViewModel] / EventRepository; this class only wires
- * up intents (App Links, notification taps, shortcuts / assistant results, debug store-screenshot extras)
+ * up intents (App Links incl. shared plans, notification taps, shortcuts / assistant results, debug store-screenshot extras)
  * and the foreground refresh loop.
  */
 class MainActivity : ComponentActivity() {
@@ -135,8 +135,13 @@ class MainActivity : ComponentActivity() {
             viewModel.open(it)
             return
         }
-        // App Link: https://attnd.app/join/<code>/
+        // App Links: https://attnd.app/join/<code>/ and shared plans https://attnd.app/p/<code>/<payload> (API-015)
         if (intent.action == Intent.ACTION_VIEW) {
+            JoinLinks.parseShareLink(intent.dataString)?.let {
+                AppLog.info(LogCategory.LIFECYCLE, LogEvent.DEEP_LINK, "Opened by a shared plan link", mapOf("kind" to "share", "target" to "/p/{id}/{payload}"))
+                viewModel.openShareLink(it)
+                return
+            }
             JoinLinks.parseJoinCode(intent.dataString)?.let {
                 AppLog.info(LogCategory.LIFECYCLE, LogEvent.DEEP_LINK, "Opened by a join link", mapOf("kind" to "join", "target" to "/join/{id}/"))
                 viewModel.joinByCode(it)

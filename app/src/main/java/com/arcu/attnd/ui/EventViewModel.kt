@@ -1,7 +1,10 @@
 package com.arcu.attnd.ui
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Build
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -25,13 +28,21 @@ import com.arcu.attnd.data.log.DiagnosticsState
 import com.arcu.attnd.data.log.PerfRecorder
 import com.arcu.attnd.data.net.ApiException
 import com.arcu.attnd.data.prefs.DevicePrefs
+import com.arcu.attnd.domain.ActionName
+import com.arcu.attnd.domain.ActionSource
 import com.arcu.attnd.domain.AppLog
 import com.arcu.attnd.domain.AppUpdate
-import com.arcu.attnd.domain.AssistantPrompt
+import com.arcu.attnd.domain.Chip
+import com.arcu.attnd.domain.DistanceUnits
+import com.arcu.attnd.domain.EntityRef
+import com.arcu.attnd.domain.GeoPoint
+import com.arcu.attnd.domain.LiveAssist
+import com.arcu.attnd.domain.PlanShare
+import com.arcu.attnd.domain.RefKind
+import com.arcu.attnd.domain.JoinLinks.ShareLink
 import com.arcu.attnd.domain.Event
 import com.arcu.attnd.domain.EventBundle
 import com.arcu.attnd.domain.EventNotification
-import com.arcu.attnd.domain.EventSearch
 import com.arcu.attnd.domain.Hearts
 import com.arcu.attnd.domain.JoinLinks
 import com.arcu.attnd.domain.LiveUpdates
@@ -54,13 +65,14 @@ import com.arcu.attnd.domain.Redact
 import com.arcu.attnd.domain.ScreenshotRequest
 import com.arcu.attnd.domain.ScreenshotScreen
 import com.arcu.attnd.domain.SearchKind
-import com.arcu.attnd.domain.SearchResult
 import com.arcu.attnd.domain.SupportInfo
 import com.arcu.attnd.domain.Tab
 import com.arcu.attnd.domain.UnreadUpdates
 import com.arcu.attnd.domain.UpdateLevel
 import com.arcu.attnd.domain.UsageMetric
 import com.arcu.attnd.live.LiveUpdateController
+import com.arcu.attnd.ui.assistant.AssistantController
+import com.arcu.attnd.ui.assistant.AssistantHost
 import com.arcu.attnd.ui.screens.SearchEntry
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -77,6 +89,7 @@ import kotlinx.coroutines.launch
 import java.io.File
 import java.io.IOException
 import java.time.Instant
+import java.util.Locale
 
 enum class AppPhase { LOADING, LAUNCH, EVENT }
 
@@ -109,24 +122,14 @@ data class PlanUiState(
  * A one-shot request to open the search screen with [query] and, optionally, an item's [detail] on its
  * back stack (shortcuts and assistants; items whose tab is hidden open this way).
  */
-data class SearchRequest(val query: String, val serial: Int, val detail: SearchEntry? = null, val ask: Boolean = false)
+data class SearchRequest(val query: String, val serial: Int, val detail: SearchEntry? = null, val ask: Boolean = false, val about: EntityRef? = null)
 
-/** "Ask about this event" (on-device Gemini Nano). */
+/** On-device Gemini Nano for the event assistant and the planner: availability and the model download. */
 data class AssistantUiState(
     val availability: AssistantAvailability = AssistantAvailability.UNKNOWN,
     val downloadedBytes: Long? = null,
     val totalBytes: Long? = null,
     val downloadError: String? = null,
-    val question: String? = null,
-    val isAnswering: Boolean = false,
-    /** The answer without citation markers. */
-    val answer: String? = null,
-    /** The items the answer cites (or the context it was given when it cites none), tappable. */
-    val sources: List<SearchResult> = emptyList(),
-    /** The model failed; the screen shows plain search results instead. */
-    val error: String? = null,
-    /** The request made a plan (shown in Schedule → My plan); the answer is its summary. */
-    val madePlan: Boolean = false,
 )
 
 /** Everything the UI renders. Screens receive slices of this plus callbacks; they hold no app state. */
@@ -146,8 +149,14 @@ data class AppUiState(
     val focusScheduleItemId: Int? = null,
     /** Scroll the Notifications tab to this notification and highlight it (from search / an assistant). */
     val focusNotificationId: Int? = null,
-    /** Open the search screen with a query (shortcut / assistant). */
+    /** Open the assistant with a query, an item or "Ask about this" (shortcut / assistant / detail). */
     val searchRequest: SearchRequest? = null,
+    /** The event assistant (the search FAB's target) is open. */
+    val assistantOpen: Boolean = false,
+    /** A follow-up for the snackbar's action button (e.g. "Add to plan instead of X?" after a like). */
+    val messageChip: Chip? = null,
+    /** Reminders before liked and planned items (assistant `reminders` setting). */
+    val remindersOn: Boolean = false,
     val assistant: AssistantUiState = AssistantUiState(),
     /** Incremented when the Map tab is reselected, to recenter the camera. */
     val recenterRequest: Int = 0,
@@ -190,9 +199,11 @@ private data class LocalState(
     val focusScheduleItemId: Int? = null,
     val focusNotificationId: Int? = null,
     val searchRequest: SearchRequest? = null,
+    val assistantOpen: Boolean = false,
     val assistant: AssistantUiState = AssistantUiState(),
     val recenterRequest: Int = 0,
     val message: String? = null,
+    val messageChip: Chip? = null,
     val dismissedUpdateVersion: String? = null,
     /** Store-screenshot mode (debug builds): see [ScreenshotRequest]. */
     val screenshot: ScreenshotRequest? = null,
@@ -241,8 +252,7 @@ class EventViewModel(
     @Volatile
     private var screenshotMode = false
 
-    /** The on-device assistant's current answer and model download (see [ask], [downloadAssistant]). */
-    private var answerJob: Job? = null
+    /** A plan being made and the model download (see [makePlan], [downloadAssistant]). */
     private var planJob: Job? = null
     private var downloadJob: Job? = null
 
@@ -295,6 +305,10 @@ class EventViewModel(
                 focusScheduleItemId = state.focusScheduleItemId,
                 focusNotificationId = state.focusNotificationId,
                 searchRequest = state.searchRequest.takeIf { bundle != null },
+                // Never in screenshot mode (assistant spec §8).
+                assistantOpen = (state.assistantOpen || state.searchRequest != null) && bundle != null && screenshot == null,
+                messageChip = state.messageChip.takeIf { screenshot == null && state.message != null },
+                remindersOn = eventId != null && planStore.reminders(eventId, hearts),
                 // Store screenshots never show the on-device assistant.
                 assistant = if (screenshot != null) AssistantUiState(availability = AssistantAvailability.UNAVAILABLE) else state.assistant,
                 recenterRequest = state.recenterRequest,
@@ -423,6 +437,11 @@ class EventViewModel(
     /** From the code field, a QR scan or an App Link. Accepts a bare code or a /join/<code>/ URL. */
     fun joinByCode(input: String, via: String = "search") {
         val trimmed = input.trim()
+        // A shared plan's link or QR (API-015) joins its event and shows the plan.
+        JoinLinks.parseShareLink(trimmed)?.let {
+            openShareLink(it)
+            return
+        }
         val code = JoinLinks.parseJoinCode(trimmed)
             // Not a /join/ link: treat it as a code or exact event name, unless it is some other URL.
             ?: trimmed.takeIf { it.isNotEmpty() && !it.contains("://") }
@@ -463,7 +482,7 @@ class EventViewModel(
                     focusNotificationId = null,
                     mapFocusLocationId = null,
                     searchRequest = null,
-                    assistant = it.assistant.copy(question = null, answer = null, sources = emptyList(), error = null, isAnswering = false),
+                    assistantOpen = false,
                     message = when (result) {
                         is RefreshResult.Failed -> "Joined, but the event couldn't be downloaded. ${result.message}"
                         RefreshResult.EventGone -> "This event is no longer available."
@@ -497,7 +516,6 @@ class EventViewModel(
     fun leaveEvent() {
         viewModelScope.launch {
             repository.leave()
-            answerJob?.cancel()
             local.update {
                 it.copy(
                     showOptions = false,
@@ -508,7 +526,7 @@ class EventViewModel(
                     focusScheduleItemId = null,
                     focusNotificationId = null,
                     searchRequest = null,
-                    assistant = it.assistant.copy(question = null, answer = null, sources = emptyList(), error = null, isAnswering = false),
+                    assistantOpen = false,
                 )
             }
         }
@@ -695,9 +713,31 @@ class EventViewModel(
     fun toggleHeart(kind: SearchKind, id: Int) {
         val eventId = repository.bundle.value?.event?.id ?: return
         val hearted = !heartStore.hearts(eventId).has(kind, id)
-        if (heartStore.set(eventId, kind, id, hearted)) {
-            Hearts.metric(kind, hearted)?.let { track(it, id.toString()) }
+        setLiked(kind, id, hearted)
+        // Assistant spec §6, like clash: a liked item that overlaps the plan → "Add to plan instead of X?".
+        val bundle = repository.bundle.value ?: return
+        val plan = planStore.plan(eventId)?.takeIf { !it.isEmpty }
+        if (hearted && kind == SearchKind.SCHEDULE && plan != null && !screenshotMode) {
+            LiveAssist.likeClash(id, plan, bundle)?.let { chip ->
+                local.update { it.copy(message = chip.label, messageChip = chip) }
+            }
         }
+    }
+
+    private fun setLiked(kind: SearchKind, id: Int, liked: Boolean): Boolean {
+        val eventId = repository.bundle.value?.event?.id ?: return false
+        if (!heartStore.set(eventId, kind, id, liked)) return false
+        Hearts.metric(kind, liked)?.let { track(it, id.toString()) }
+        assistantController.refreshLive()
+        return true
+    }
+
+    /** The snackbar's action for [AppUiState.messageChip]. */
+    fun runMessageChip() {
+        val chip = local.value.messageChip ?: return
+        local.update { it.copy(messageChip = null) }
+        val result = assistantController.run(chip.action, chip.label, ActionSource.MANUAL)
+        if (result != null) local.update { it.copy(message = result) }
     }
 
     // ── Search & assistant ──────────────────────────────────────────────────
@@ -752,7 +792,117 @@ class EventViewModel(
     }
 
     fun consumeSearchRequest() {
-        local.update { it.copy(searchRequest = null) }
+        local.update { it.copy(searchRequest = null, assistantOpen = it.assistantOpen || it.searchRequest != null) }
+    }
+
+    // ── Event assistant (assistant spec) ────────────────────────────────────
+
+    /** The assistant: conversation, actions, live hints (see [AssistantController]). */
+    val assistantController: AssistantController = AssistantController(viewModelScope, repository, heartStore, planStore, assistant, object : AssistantHost {
+        override fun modelAvailable(): Boolean = !screenshotMode && local.value.assistant.availability == AssistantAvailability.AVAILABLE
+        override fun setLiked(kind: SearchKind, id: Int, liked: Boolean): Boolean = this@EventViewModel.setLiked(kind, id, liked)
+        override suspend fun makePlan(request: String, source: String): Plan? = buildPlan(request, source)
+        override fun planError(): String? = local.value.planError
+        override fun open(screen: String, ref: EntityRef?) = openScreen(screen, ref)
+        override fun setSetting(name: ActionName, on: Boolean): Boolean {
+            if (on && !hasNotificationPermission()) return false
+            when (name) {
+                ActionName.FOLLOW_LOCK_SCREEN -> setFollowLive(on)
+                ActionName.REMINDERS -> setReminders(on)
+                ActionName.NOTIFICATIONS -> setNotificationsEnabled(on)
+                else -> Unit
+            }
+            return true
+        }
+        override fun settingOn(name: ActionName): Boolean = when (name) {
+            ActionName.FOLLOW_LOCK_SCREEN -> uiState.value.followLive
+            ActionName.REMINDERS -> uiState.value.remindersOn
+            ActionName.NOTIFICATIONS -> uiState.value.notificationsEnabled
+            else -> false
+        }
+        override fun userLocation(): GeoPoint? = if (screenshotMode) null else userLocationSource()
+        override fun units(): DistanceUnits = DistanceUnits.forRegion(Locale.getDefault().country)
+    })
+
+    private fun hasNotificationPermission(): Boolean =
+        ContextCompat.checkSelfPermission(appContext, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+
+    private fun userLocationSource(): GeoPoint? =
+        (appContext.applicationContext as? AttndApplication)?.graph?.userLocation?.location?.value
+
+    /** The search FAB: opens the assistant. */
+    fun openAssistant() {
+        if (screenshotMode) return
+        AppLog.debug(LogCategory.UI, LogEvent.SCREEN, "Screen assistant", mapOf("name" to "assistant"))
+        local.update { it.copy(assistantOpen = true, showOptions = false) }
+    }
+
+    fun closeAssistant() {
+        local.update { it.copy(assistantOpen = false, searchRequest = null) }
+    }
+
+    /** "Ask about this" on a detail screen: the assistant with that item as context. */
+    fun askAbout(kind: SearchKind, id: Int) {
+        val ref = when (kind) {
+            SearchKind.SCHEDULE -> EntityRef(RefKind.SCHEDULE, id)
+            SearchKind.LOCATION -> EntityRef(RefKind.LOCATION, id)
+            SearchKind.NOTIFICATION -> EntityRef(RefKind.UPDATE, id)
+            SearchKind.EVENT -> return
+        }
+        local.update { it.copy(assistantOpen = true, showOptions = false, searchRequest = SearchRequest("", (it.searchRequest?.serial ?: 0) + 1, about = ref)) }
+    }
+
+    /** `reminders(on)`: reminders before liked and planned items (the caller holds POST_NOTIFICATIONS to turn on). */
+    fun setReminders(on: Boolean) {
+        val eventId = repository.bundle.value?.event?.id ?: return
+        AppLog.debug(LogCategory.UI, LogEvent.UI_ACTION, "Reminders ${if (on) "on" else "off"}", mapOf("name" to if (on) "reminders_on" else "reminders_off"))
+        planStore.setReminders(eventId, on)
+    }
+
+    /** `open(screen, id?)` from the assistant: closes it and shows the manual screen. */
+    private fun openScreen(screen: String, ref: EntityRef?) {
+        val bundle = repository.bundle.value ?: return
+        val tabs = bundle.display.tabs
+        closeAssistant()
+        when (screen) {
+            "map" -> when {
+                ref?.kind == RefKind.LOCATION && Tab.MAP in tabs -> showOnMap(ref.id)
+                Tab.MAP in tabs -> selectTab(Tab.MAP)
+            }
+            "locations" -> if (ref?.kind == RefKind.LOCATION) focusLocation(ref.id) else if (Tab.LOCATIONS in tabs) selectTab(Tab.LOCATIONS)
+            "schedule" -> if (ref?.kind == RefKind.SCHEDULE) focusScheduleItem(ref.id) else if (Tab.SCHEDULE in tabs) selectTab(Tab.SCHEDULE)
+            "updates" -> if (ref?.kind == RefKind.UPDATE && Tab.NOTIFICATIONS in tabs) focusNotification(ref.id) else if (Tab.NOTIFICATIONS in tabs) selectTab(Tab.NOTIFICATIONS)
+            "flyer" -> if (Tab.FLYER in tabs) selectTab(Tab.FLYER)
+            "options" -> showOptions(true)
+            "tour" -> showTour()
+            "plan" -> showPlan()
+        }
+    }
+
+    /**
+     * A shared plan link (API-015, `https://attnd.app/p/<code>/<payload>`): joins its event (unless
+     * already in it), then shows the shared plan in the assistant (a payload this build can't read only
+     * joins).
+     */
+    fun openShareLink(link: ShareLink) {
+        viewModelScope.launch {
+            startJob.join()
+            val current = repository.bundle.value?.event
+            val already = current != null && current.eventCode.equals(link.eventCode, ignoreCase = true)
+            if (!already) join(silent = false, via = "share") { repository.lookup(link.eventCode) }
+            val bundle = repository.bundle.value ?: return@launch
+            if (!bundle.event.eventCode.equals(link.eventCode, ignoreCase = true)) return@launch
+            val payload = PlanShare.decode(link.payload)
+            if (payload == null || !payload.isReadable || screenshotMode) {
+                AppLog.notice(
+                    LogCategory.UI, LogEvent.SHARE_OPENED, "Shared link opened (join only)",
+                    mapOf("target" to "plan", "items" to 0, "known" to 0, "action" to "viewed", "joined" to !already),
+                )
+                return@launch
+            }
+            local.update { it.copy(assistantOpen = true, showOptions = false, showOnboarding = false) }
+            assistantController.openShared(payload, joined = !already)
+        }
     }
 
     /** Checks once (when the search screen opens) whether the on-device model can be used. */
@@ -800,91 +950,6 @@ class EventViewModel(
         }
     }
 
-    /**
-     * Answers [question] with the on-device model from the local bundle only (the prompt and its
-     * context are built by [AssistantPrompt]; nothing is sent to a server). The question text is
-     * never reported; the search screen counts a `search` like any other search.
-     */
-    fun ask(question: String) {
-        val trimmed = question.trim()
-        val bundle = repository.bundle.value ?: return
-        if (trimmed.isEmpty() || local.value.assistant.availability != AssistantAvailability.AVAILABLE) return
-        if (PlanRequest.looksLikePlan(trimmed) && !screenshotMode) {
-            askForPlan(trimmed)
-            return
-        }
-        answerJob?.cancel()
-        answerJob = viewModelScope.launch {
-            local.update {
-                it.copy(assistant = it.assistant.copy(question = trimmed, isAnswering = true, answer = null, sources = emptyList(), error = null, madePlan = false))
-            }
-            val now = Instant.now()
-            val context = AssistantPrompt.context(bundle, trimmed, now)
-            val prompt = AssistantPrompt.build(bundle, trimmed, context, now)
-            val started = System.nanoTime()
-            val update = try {
-                val raw = assistant.answer(prompt)
-                val cited = AssistantPrompt.citations(raw, context, bundle)
-                val text = AssistantPrompt.displayText(raw)
-                logAsk(started, ok = text.isNotEmpty(), trimmed, results = cited.size.takeIf { it > 0 } ?: context.size, citations = cited.size)
-                if (text.isEmpty()) {
-                    AssistantUiState(error = "No answer this time. Here's what matches your question.", sources = context)
-                } else {
-                    AssistantUiState(answer = text, sources = cited.ifEmpty { context.take(MAX_UNCITED_SOURCES) })
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                AppLog.warning(
-                    LogCategory.ASSISTANT, LogEvent.ASSISTANT_ERROR, "Ask failed (${e.javaClass.simpleName})",
-                    mapOf("kind" to "ask", "error" to AppLog.errorKind(e), "domain" to e.javaClass.simpleName),
-                )
-                logAsk(started, ok = false, trimmed, results = context.size, citations = 0)
-                AssistantUiState(error = "On-device AI couldn't answer right now. Here's what matches your question.", sources = context)
-            }
-            local.update {
-                it.copy(
-                    assistant = it.assistant.copy(
-                        isAnswering = false,
-                        answer = update.answer,
-                        sources = update.sources,
-                        error = update.error,
-                    )
-                )
-            }
-        }
-    }
-
-    /** Ask with a plan request ("Plan my Saturday around …"): makes the plan, answers with its summary. */
-    private fun askForPlan(request: String) {
-        answerJob?.cancel()
-        answerJob = viewModelScope.launch {
-            local.update {
-                it.copy(assistant = it.assistant.copy(question = request, isAnswering = true, answer = null, sources = emptyList(), error = null, madePlan = false))
-            }
-            val plan = buildPlan(request, source = "ask")
-            val bundle = repository.bundle.value
-            local.update { state ->
-                state.copy(
-                    assistant = state.assistant.copy(
-                        isAnswering = false,
-                        answer = plan?.takeIf { !it.isEmpty && bundle != null }?.let { "Here's your plan: ${Planner.summary(it, bundle!!.event.zone)}. It's in Schedule → My plan." },
-                        error = if (plan == null || plan.isEmpty) state.planError ?: "Nothing on the schedule fits that. Try another day or fewer limits." else null,
-                        sources = if (plan != null && bundle != null) {
-                            val now = Instant.now()
-                            plan.itemIds.mapNotNull { bundle.scheduleItem(it) }.map { item ->
-                                SearchResult(SearchKind.SCHEDULE, item.id, item.name, emptyList(), 0.0, EventSearch.timing(item, now))
-                            }
-                        } else {
-                            emptyList()
-                        },
-                        madePlan = plan != null && !plan.isEmpty,
-                    )
-                )
-            }
-        }
-    }
-
     // ── Planner ─────────────────────────────────────────────────────────────
 
     /**
@@ -927,7 +992,7 @@ class EventViewModel(
                 local.update { it.copy(planError = "Nothing on the schedule fits that. Try another day or fewer limits.") }
                 return plan
             }
-            planStore.setPlan(bundle.event.id, plan)
+            planStore.applyPlan(bundle.event.id, plan)
             return plan
         } finally {
             local.update { it.copy(isPlanning = false) }
@@ -946,13 +1011,13 @@ class EventViewModel(
         val bundle = repository.bundle.value ?: return
         val plan = planStore.plan(bundle.event.id) ?: return
         val replanned = timedPlan {
-            Planner(bundle, plan.preferences, heartStore.hearts(bundle.event.id)).plan(Instant.now(), plan.request)
+            Planner(bundle, plan.preferences, heartStore.hearts(bundle.event.id), plan.constraints).replan(plan, Instant.now())
         }
         if (replanned.isEmpty) {
             local.update { it.copy(planError = "Nothing left on the schedule fits this plan.") }
         } else {
             local.update { it.copy(planError = null) }
-            planStore.setPlan(bundle.event.id, replanned)
+            planStore.applyPlan(bundle.event.id, replanned.copy(constraints = plan.constraints, checkedOff = plan.checkedOff))
         }
     }
 
@@ -961,7 +1026,7 @@ class EventViewModel(
         val plan = planStore.plan(bundle.event.id) ?: return
         val swapped = Planner(bundle, plan.preferences, heartStore.hearts(bundle.event.id)).swap(plan, oldId, newId) ?: return
         AppLog.info(LogCategory.PLANNER, LogEvent.PLANNER_SWAP, "Plan item swapped", mapOf("item_id" to oldId))
-        planStore.setPlan(bundle.event.id, swapped)
+        planStore.applyPlan(bundle.event.id, swapped)
     }
 
     /** "Keep my plan" after a content change: the changed items are accepted as they are now. */
@@ -974,13 +1039,13 @@ class EventViewModel(
             fingerprints = kept.flatMap { it.items }.mapNotNull { bundle.scheduleItem(it.itemId) }.associate { it.id to Planner.fingerprint(it) },
         )
         AppLog.debug(LogCategory.UI, LogEvent.UI_ACTION, "Changed plan kept", mapOf("name" to "plan_keep"))
-        planStore.setPlan(bundle.event.id, updated)
+        planStore.applyPlan(bundle.event.id, updated)
     }
 
     fun clearPlan() {
         val eventId = repository.bundle.value?.event?.id ?: return
         AppLog.debug(LogCategory.UI, LogEvent.UI_ACTION, "Plan cleared", mapOf("name" to "plan_clear"))
-        planStore.setPlan(eventId, null)
+        planStore.applyPlan(eventId, null)
         local.update { it.copy(planError = null) }
     }
 
@@ -1017,14 +1082,9 @@ class EventViewModel(
             showPlan()
         } else {
             local.update {
-                it.copy(showOptions = false, searchRequest = SearchRequest(example.text, (it.searchRequest?.serial ?: 0) + 1, ask = true))
+                it.copy(showOptions = false, assistantOpen = true, searchRequest = SearchRequest(example.text, (it.searchRequest?.serial ?: 0) + 1, ask = true))
             }
         }
-    }
-
-    fun clearAnswer() {
-        answerJob?.cancel()
-        local.update { it.copy(assistant = it.assistant.copy(question = null, isAnswering = false, answer = null, sources = emptyList(), error = null, madePlan = false)) }
     }
 
     // ── Usage reporting (API-005) ───────────────────────────────────────────
@@ -1054,8 +1114,12 @@ class EventViewModel(
         local.update { it.copy(showOptions = show) }
     }
 
+    fun showMessage(message: String) {
+        local.update { it.copy(message = message, messageChip = null) }
+    }
+
     fun consumeMessage() {
-        local.update { it.copy(message = null) }
+        local.update { it.copy(message = null, messageChip = null) }
     }
 
     fun clearJoinError() {
@@ -1111,23 +1175,8 @@ class EventViewModel(
         return plan
     }
 
-    /** Ask finished: `assistant.request` (lengths only; dev builds also the text) and `assistant.answer`. */
-    private fun logAsk(started: Long, ok: Boolean, question: String, results: Int, citations: Int) {
-        val ms = (System.nanoTime() - started) / 1_000_000
-        AppLog.log(
-            if (ok) LogLevel.INFO else LogLevel.WARNING, LogCategory.ASSISTANT, LogEvent.ASSISTANT_REQUEST,
-            "Ask: ${if (ok) "answered" else "no answer"} in $ms ms",
-            mapOf("kind" to "ask", "name" to "ask", "ms" to ms, "ok" to ok, "results" to results) +
-                Redact.textFields("query", question, AppLog.allowText),
-        )
-        if (ok) {
-            AppLog.debug(LogCategory.ASSISTANT, LogEvent.ASSISTANT_ANSWER, "Answer with $citations citations", mapOf("ms" to ms, "citations" to citations, "fallback" to (citations == 0)))
-        }
-    }
-
     companion object {
         private const val RESUME_DEBOUNCE_MS = 30 * 1000L
-        private const val MAX_UNCITED_SOURCES = 5
 
         val Factory: ViewModelProvider.Factory = viewModelFactory {
             initializer {

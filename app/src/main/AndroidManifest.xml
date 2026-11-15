@@ -56,7 +56,11 @@
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="https" android:host="attnd.app" android:pathPrefix="/join/" />
+                <!-- https://attnd.app/join/<code>/ and API-015 shared plans https://attnd.app/p/<code>/<payload> -->
+                <data android:scheme="https" />
+                <data android:host="attnd.app" />
+                <data android:pathPrefix="/join/" />
+                <data android:pathPrefix="/p/" />
             </intent-filter>
         </activity>
 
@@ -84,6 +88,19 @@
         <property
             android:name="android.app.appfunctions.app_metadata"
             android:resource="@xml/app_functions_metadata" />
+
+        <!-- Home-screen widget "Now / Next in my plan" (assistant spec §6, Jetpack Glance). -->
+        <receiver
+            android:name=".widget.PlanWidgetReceiver"
+            android:exported="false"
+            android:label="@string/plan_widget_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/plan_widget_info" />
+        </receiver>
 
         <!--
             Live Update wake-ups (shared spec §8): inexact alarms, notification actions, the venue

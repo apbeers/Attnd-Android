@@ -143,7 +143,7 @@ private fun GeoPoint.toLatLng() = LatLng(latitude, longitude)
 /**
  * The event map. Pins only for locations with real coordinates (null and 0,0 are skipped).
  * Honours `display.map_clustering`, `map_fit_all` and `group_by_category` (filter chips), plus a
- * "Hearted" chip when anything is hearted. Pins show a live dot when something is on there now and
+ * "Liked" chip when anything is liked. Pins show a live dot when something is on there now and
  * "Next 7:30" when something starts within 3 h; a "Now playing" strip lists what is on. Tapping a pin
  * selects it: a card with its now/next, distance + arrow, heart, Details and Directions, and (within
  * 8 km, with location permission) a walking route drawn on the map ([WalkRouter]: the Routes API,

@@ -34,6 +34,7 @@ import com.arcu.attnd.live.LiveUpdateController
 import com.arcu.attnd.push.PushNotifications
 import com.arcu.attnd.ui.components.ImageLoader
 import com.arcu.attnd.util.integrity.AttestationManager
+import com.arcu.attnd.widget.PlanWidget
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -172,7 +173,10 @@ class AppGraph(context: Context, val prefs: DevicePrefs, logStore: LogStore, val
         // The Live Update follows the bundle (joins, refreshes, content_updated pushes), hearts and plans.
         appScope.launch {
             combine(repository.bundle, hearts.version, plans.version) { bundle, _, _ -> bundle?.contentVersion to bundle?.event?.id }
-                .collect { liveUpdates.refresh() }
+                .collect {
+                    liveUpdates.refresh()
+                    PlanWidget.refresh(appContext)
+                }
         }
     }
 }

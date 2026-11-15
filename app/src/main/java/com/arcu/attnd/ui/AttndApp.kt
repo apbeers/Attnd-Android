@@ -2,6 +2,8 @@
 
 package com.arcu.attnd.ui
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -34,13 +36,11 @@ import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteItem
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffoldDefaults
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteType
-import androidx.compose.material3.rememberSearchBarState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -62,7 +62,6 @@ import com.arcu.attnd.ui.components.LocalEventActions
 import com.arcu.attnd.ui.components.LocalScreenshotMode
 import com.arcu.attnd.ui.components.OfflineNotice
 import com.arcu.attnd.ui.components.UpdateBanner
-import com.arcu.attnd.ui.screens.EventSearch
 import com.arcu.attnd.ui.screens.EventTopBar
 import com.arcu.attnd.ui.screens.FlyerScreen
 import com.arcu.attnd.ui.screens.LaunchScreen
@@ -79,7 +78,39 @@ import com.arcu.attnd.ui.screens.SearchFab
 import com.arcu.attnd.ui.screens.UpdateAvailableBanner
 import com.arcu.attnd.ui.screens.UpdateRequiredScreen
 import com.arcu.attnd.ui.theme.AttndTheme
-import kotlinx.coroutines.launch
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import com.arcu.attnd.domain.ActionName
+import com.arcu.attnd.domain.ActionSource
+import com.arcu.attnd.domain.AssistantAction
+import com.arcu.attnd.domain.GeoPoint
+import com.arcu.attnd.domain.LateState
+import com.arcu.attnd.domain.PlanVersionKind
+import com.arcu.attnd.domain.RefKind
+import com.arcu.attnd.ui.assistant.AssistantController
+import com.arcu.attnd.ui.assistant.AssistantEffect
+import com.arcu.attnd.ui.assistant.AssistantIntents
+import com.arcu.attnd.ui.assistant.AssistantScreen
+import com.arcu.attnd.ui.assistant.BlockActions
+import com.arcu.attnd.ui.assistant.RunningLateCard
+import com.arcu.attnd.ui.components.rememberUserLocation
+import kotlinx.coroutines.delay
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 /** Root composable: theme (with the event's accent colour) and launch vs. event UI. */
 @Composable
@@ -141,16 +172,26 @@ fun AttndApp(viewModel: EventViewModel = viewModel(factory = EventViewModel.Fact
                         } else {
                             // Hearts and "Show on map" for every row, detail, card and the search screen.
                             val hasMap = Tab.MAP in bundle.display.tabs
-                            val actions = remember(state.hearts, hasMap, viewModel) {
+                            val actions = remember(state.hearts, hasMap, viewModel, state.isScreenshot) {
                                 EventActions(
                                     hearts = state.hearts,
                                     onToggleHeart = viewModel::toggleHeart,
-                                    onShowOnMap = if (hasMap) viewModel::showOnMap else null,
+                                    onShowOnMap = if (hasMap) { id -> viewModel.closeAssistant(); viewModel.showOnMap(id) } else null,
+                                    onAskAbout = if (state.isScreenshot) null else viewModel::askAbout,
                                 )
                             }
                             CompositionLocalProvider(LocalEventActions provides actions) {
                                 EventShell(state, bundle, viewModel)
+                                // The event assistant over the tabs (the search FAB's target; never in screenshot mode).
+                                AnimatedVisibility(
+                                    visible = state.assistantOpen,
+                                    enter = slideInVertically { it / 3 } + fadeIn(),
+                                    exit = slideOutVertically { it / 3 } + fadeOut(),
+                                ) {
+                                    Surface(Modifier.fillMaxSize()) { AssistantOverlay(state, bundle, viewModel) }
+                                }
                             }
+                            AssistantEffects(viewModel.assistantController)
                             // First join of an event (or Options → Tour); never in screenshot mode.
                             if (state.showOnboarding) {
                                 OnboardingScreen(
@@ -209,8 +250,9 @@ private fun EventShell(state: AppUiState, bundle: EventBundle, viewModel: EventV
 
     LaunchedEffect(state.message) {
         val message = state.message ?: return@LaunchedEffect
-        snackbar.showSnackbar(message)
-        viewModel.consumeMessage()
+        val chip = state.messageChip
+        val result = snackbar.showSnackbar(message, actionLabel = if (chip != null) "Add" else null, withDismissAction = chip != null)
+        if (result == SnackbarResult.ActionPerformed && chip != null) viewModel.runMessageChip() else viewModel.consumeMessage()
     }
 
     // A location/schedule item requested while its tab is hidden is shown full screen instead.
@@ -251,9 +293,20 @@ private fun EventShell(state: AppUiState, bundle: EventBundle, viewModel: EventV
     // patterns for each navigation: in the wide navigation rail's header on the unfolded display;
     // on the Map tab (bar or no navigation) as the FAB of the map's vertical floating toolbar, so the
     // two never overlap; elsewhere in the Scaffold's FAB slot, bottom-end above the navigation bar.
-    val searchBarState = rememberSearchBarState()
-    val scope = rememberCoroutineScope()
-    val openSearch: () -> Unit = { scope.launch { searchBarState.animateToExpanded() } }
+    val openSearch: () -> Unit = viewModel::openAssistant
+    val assistantState by viewModel.assistantController.state.collectAsStateWithLifecycle()
+    // Live plan hints (assistant spec §6): position samples only while this is visible and a plan item
+    // is on now or soon; recomputed once a minute.
+    if (assistantState.wantsLocation && !state.isScreenshot) LiveLocationSampler(viewModel.assistantController::onLocation)
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(bundle.event.id, lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            while (true) {
+                viewModel.assistantController.refreshLive()
+                delay(60_000)
+            }
+        }
+    }
     val isRail = navType == NavigationSuiteType.WideNavigationRailCollapsed ||
         navType == NavigationSuiteType.WideNavigationRailExpanded ||
         navType == NavigationSuiteType.NavigationRail
@@ -306,6 +359,18 @@ private fun EventShell(state: AppUiState, bundle: EventBundle, viewModel: EventV
                     .consumeWindowInsets(padding),
             ) {
                 OfflineNotice(state.sync)
+                // Running late (assistant spec §6): "Leave now for X" / "You can't make X in time" on every tab.
+                assistantState.live.runningLate?.takeIf { !state.isScreenshot }?.let { late ->
+                    RunningLateCard(
+                        late.text,
+                        cantMake = late.state == LateState.CANT_MAKE_IT,
+                        chips = late.chips,
+                        onChip = { chip ->
+                            viewModel.assistantController.run(chip.action, chip.label, ActionSource.MANUAL)?.let { message -> viewModel.showMessage(message) }
+                        },
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                    )
+                }
                 // The newest unread organizer update, on the other tabs, for 24 h (dismissible).
                 state.updateBanner?.takeIf { state.selectedTab != Tab.NOTIFICATIONS }?.let { update ->
                     UpdateBanner(
@@ -329,24 +394,6 @@ private fun EventShell(state: AppUiState, bundle: EventBundle, viewModel: EventV
         }
     }
 
-    EventSearch(
-        state = searchBarState,
-        bundle = bundle,
-        request = state.searchRequest,
-        assistant = state.assistant,
-        onRequestConsumed = viewModel::consumeSearchRequest,
-        onSearch = viewModel::onSearch,
-        onLocationShown = viewModel::onLocationShown,
-        onScheduleItemShown = viewModel::onScheduleItemShown,
-        onCheckAssistant = viewModel::checkAssistant,
-        onDownloadAssistant = viewModel::downloadAssistant,
-        onAsk = viewModel::ask,
-        onClearAnswer = viewModel::clearAnswer,
-        onOpenPlan = {
-            scope.launch { searchBarState.animateToCollapsed() }
-            viewModel.showPlan()
-        },
-    )
 }
 
 @Composable
@@ -381,6 +428,8 @@ private fun TabContent(state: AppUiState, bundle: EventBundle, viewModel: EventV
                     onKeepChanged = viewModel::keepChangedPlan,
                     onClear = viewModel::clearPlan,
                     onExample = viewModel::useExample,
+                    onCheck = viewModel.assistantController::toggleCheckOff,
+                    onOpenAssistant = viewModel::openAssistant,
                 )
             },
         )
@@ -393,5 +442,113 @@ private fun TabContent(state: AppUiState, bundle: EventBundle, viewModel: EventV
             highlightId = state.focusNotificationId,
             onHighlightShown = viewModel::consumeFocusNotification,
         )
+    }
+}
+
+/** The assistant screen wired to the view model. */
+@Composable
+private fun AssistantOverlay(state: AppUiState, bundle: EventBundle, viewModel: EventViewModel) {
+    val controller = viewModel.assistantController
+    val tabs = bundle.display.tabs
+    val blockActions = remember(bundle, state.planner.plan, state.hearts, state.followLive, state.remindersOn, state.notificationsEnabled, viewModel) {
+        BlockActions(
+            bundle = bundle,
+            plan = state.planner.plan?.takeIf { !it.isEmpty },
+            hearts = state.hearts,
+            onChip = controller::chip,
+            onOpenTab = { tab, ref ->
+                viewModel.closeAssistant()
+                when {
+                    tab == Tab.SCHEDULE && ref?.kind == RefKind.SCHEDULE -> viewModel.focusScheduleItem(ref.id)
+                    tab == Tab.LOCATIONS && ref?.kind == RefKind.LOCATION -> viewModel.focusLocation(ref.id)
+                    else -> viewModel.selectTab(tab)
+                }
+            },
+            onShowOnMap = { id ->
+                if (Tab.MAP in tabs) {
+                    viewModel.closeAssistant()
+                    if (id != null) viewModel.showOnMap(id) else viewModel.selectTab(Tab.MAP)
+                }
+            },
+            onDirections = { id -> controller.run(AssistantAction.directions(id), null, ActionSource.MANUAL) },
+            onShare = { target, via -> controller.shareFromBlock(target, via) },
+            shareLink = controller::shareLink,
+            onCalendar = { ids, plan ->
+                val action = if (plan) AssistantAction.calendarPlan()
+                else AssistantAction(ActionName.ADD_TO_CALENDAR, buildJsonObject { put("ids", JsonArray(ids.map { JsonPrimitive("s$it") })) })
+                controller.run(action, null, ActionSource.MANUAL)
+            },
+            onSetting = { name, on -> controller.run(AssistantAction.toggle(name, on), null, ActionSource.MANUAL) },
+            settingOn = { name ->
+                when (name) {
+                    ActionName.FOLLOW_LOCK_SCREEN -> state.followLive
+                    ActionName.REMINDERS -> state.remindersOn
+                    else -> state.notificationsEnabled
+                }
+            },
+            onCheck = controller::toggleCheckOff,
+            onUseVersion = { kind ->
+                PlanVersionKind.of(kind)?.let { controller.run(AssistantAction.planVersion(it), "Use the ${it.label.lowercase()} version", ActionSource.MANUAL) }
+            },
+            onOpenFlyer = {
+                if (Tab.FLYER in tabs) {
+                    viewModel.closeAssistant()
+                    viewModel.selectTab(Tab.FLYER)
+                }
+            },
+            onOpenPlan = { controller.run(AssistantAction(ActionName.PLAN), "Show my plan") },
+        )
+    }
+    AssistantScreen(
+        controller = controller,
+        bundle = bundle,
+        model = state.assistant,
+        planner = state.planner,
+        request = state.searchRequest,
+        actions = blockActions,
+        onRequestConsumed = viewModel::consumeSearchRequest,
+        onClose = viewModel::closeAssistant,
+        onSearch = viewModel::onSearch,
+        onDownloadModel = viewModel::downloadAssistant,
+        onLocationShown = viewModel::onLocationShown,
+        onScheduleItemShown = viewModel::onScheduleItemShown,
+        onOpenPlanTab = {
+            viewModel.closeAssistant()
+            viewModel.showPlan()
+        },
+        onReplan = viewModel::replanFromNow,
+        onKeepChanged = viewModel::keepChangedPlan,
+    )
+    LaunchedEffect(Unit) { viewModel.checkAssistant() }
+}
+
+/** Takes position samples for the live plan hints while composed (and resumed); none without permission. */
+@Composable
+private fun LiveLocationSampler(onSample: (GeoPoint) -> Unit) {
+    val user = rememberUserLocation()
+    LaunchedEffect(user) { user?.let(onSample) }
+}
+
+/** Carries out the assistant's OS hand-offs: share sheet, calendar insert, Maps, the notification permission. */
+@Composable
+private fun AssistantEffects(controller: AssistantController) {
+    val context = LocalContext.current
+    var pending by remember { mutableStateOf<AssistantAction?>(null) }
+    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        pending?.let { controller.onNotificationPermission(granted, it) }
+        pending = null
+    }
+    LaunchedEffect(controller) {
+        controller.effects.collect { effect ->
+            when (effect) {
+                is AssistantEffect.Share -> AssistantIntents.share(context, effect.text, effect.title)
+                is AssistantEffect.Calendar -> AssistantIntents.addToCalendar(context, effect.entry)
+                is AssistantEffect.Directions -> AssistantIntents.directions(context, effect.point)
+                is AssistantEffect.RequestNotifications -> {
+                    pending = effect.action
+                    permission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
+            }
+        }
     }
 }

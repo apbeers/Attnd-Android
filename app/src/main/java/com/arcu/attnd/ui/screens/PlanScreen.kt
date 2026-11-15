@@ -2,6 +2,8 @@
 
 package com.arcu.attnd.ui.screens
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,6 +21,10 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material3.IconToggleButton
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material.icons.filled.Restaurant
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.Button
@@ -39,11 +45,9 @@ import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -73,6 +77,10 @@ class PlanActions(
     val onKeepChanged: () -> Unit = {},
     val onClear: () -> Unit = {},
     val onExample: (PlanExample) -> Unit = {},
+    /** Check off (or un-check) a planned item that has started (assistant spec §6). */
+    val onCheck: (Int) -> Unit = {},
+    /** "Open in assistant" (the same plan, with the assistant's tools). */
+    val onOpenAssistant: () -> Unit = {},
 )
 
 /**
@@ -111,8 +119,12 @@ fun MyPlanPane(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     FilledTonalButton(onClick = actions.onReplan) { Text("Re-plan from now") }
+                    OutlinedButton(onClick = actions.onOpenAssistant) {
+                        Icon(Icons.Filled.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Text("Open in assistant", modifier = Modifier.padding(start = 8.dp))
+                    }
                     if (planner.available) TextButton(onClick = actions.onClear) { Text("New plan") }
                 }
                 planner.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
@@ -129,7 +141,13 @@ fun MyPlanPane(
                             item(key = "walk-${day.date}-${entry.itemId}") { WalkLeg(walk) }
                         }
                         item(key = "item-${entry.itemId}") {
-                            PlanItemRow(bundle, entry, now, onClick = { onItemClick(entry.itemId) }, onSwap = { actions.onSwap(entry.itemId, it) })
+                            PlanItemRow(
+                                bundle, entry, now,
+                                checked = entry.itemId in plan.checkedOff,
+                                onClick = { onItemClick(entry.itemId) },
+                                onSwap = { actions.onSwap(entry.itemId, it) },
+                                onCheck = { actions.onCheck(entry.itemId) },
+                            )
                         }
                         previousWasItem = true
                     }
@@ -142,7 +160,7 @@ fun MyPlanPane(
         }
         item(key = "footer") {
             Text(
-                "Planned on your phone. Hearted items are always included when they fit.",
+                "Planned on your phone. Liked items are always included when they fit.",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(16.dp),
@@ -171,7 +189,7 @@ private fun PlanRequestCard(planner: PlanUiState, actions: PlanActions) {
                 return@Column
             }
             Text(
-                "Say what you'd like and your phone builds a plan from the schedule, with your hearts and walking times. Nothing leaves your phone.",
+                "Say what you'd like and your phone builds a plan from the schedule, with your likes and walking times. Nothing leaves your phone.",
                 style = MaterialTheme.typography.bodyMedium,
             )
             OutlinedTextField(
@@ -237,7 +255,7 @@ private fun WalkLeg(minutes: Int) {
 }
 
 @Composable
-private fun PlanItemRow(bundle: EventBundle, entry: PlannedItem, now: Instant, onClick: () -> Unit, onSwap: (Int) -> Unit) {
+private fun PlanItemRow(bundle: EventBundle, entry: PlannedItem, now: Instant, checked: Boolean, onClick: () -> Unit, onSwap: (Int) -> Unit, onCheck: () -> Unit) {
     val item = bundle.scheduleItem(entry.itemId)
     var menu by remember { mutableStateOf(false) }
     val zone = bundle.event.zone
@@ -259,6 +277,15 @@ private fun PlanItemRow(bundle: EventBundle, entry: PlannedItem, now: Instant, o
         },
         trailingContent = {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                if (item != null && item.startTime?.toInstant()?.isAfter(now) == false) {
+                    IconToggleButton(checked = checked, onCheckedChange = { onCheck() }) {
+                        Icon(
+                            if (checked) Icons.Filled.CheckCircle else Icons.Outlined.CheckCircle,
+                            contentDescription = if (checked) "Seen ${item.name}" else "Mark ${item.name} as seen",
+                            tint = if (checked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
                 if (item != null) HeartButton(SearchKind.SCHEDULE, item.id, name = item.name)
                 if (entry.alternatives.isNotEmpty()) {
                     Box {
@@ -274,7 +301,7 @@ private fun PlanItemRow(bundle: EventBundle, entry: PlannedItem, now: Instant, o
                                             Text(
                                                 EventTime.formatTimeRange(alternative.startTime, alternative.endTime, zone) +
                                                     (bundle.location(alternative.locationId)?.name?.let { " · $it" } ?: "") +
-                                                    (if (alternative.id in entry.orInstead) " · hearted" else ""),
+                                                    (if (alternative.id in entry.orInstead) " · liked" else ""),
                                                 style = MaterialTheme.typography.bodySmall,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             )

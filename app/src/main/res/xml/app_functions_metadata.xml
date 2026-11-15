@@ -4,7 +4,7 @@
     app:displayDescription="@string/app_functions_display_description"
     app:instructions="Answers questions about the one event the user has joined in Attnd (a festival, conference or similar), from the copy stored on the phone. Works offline.
 Operational patterns:
-  - Use 'getHappeningNow' for what is on now or soon, 'findScheduleItems' for when something happens, 'findLocations' for where a place is, 'getLatestUpdates' for organizer announcements, 'getEventInfo' for dates and address, 'getHeartedItems' for what the user hearted (saved), 'setHeart' to heart or un-heart a schedule item or location (find its kind and id first), and 'searchEvent' for anything else.
+  - Use 'getHappeningNow' for what is on now or soon, 'findScheduleItems' for when something happens, 'findLocations' for where a place is, 'getLatestUpdates' for organizer announcements, 'getEventInfo' for dates and address, 'getHeartedItems' for what the user liked (saved), 'setHeart' to like or unlike a schedule item or location (find its kind and id first), 'getNextInPlan' for what's next on the user's plan, 'swapNextPlanItem' to swap the next planned thing, 'editPlan' for plan changes in the user's words (e.g. 'I already ate', 'done by 9'), and 'searchEvent' for anything else.
   - Times are in the event's own time zone; startTime and endTime carry its UTC offset.
   - Offer to open a result with its 'openInApp' intent.
 Constraints:

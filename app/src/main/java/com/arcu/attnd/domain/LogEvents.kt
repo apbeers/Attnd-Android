@@ -58,6 +58,8 @@ object LogEvent {
     const val LIVE_REMINDER_SHOWN = "live.reminder.shown"
     const val LIVE_ARRIVAL = "live.arrival"
     const val LIVE_FOLLOW_CHANGED = "live.follow.changed"
+    const val LIVE_RUNNING_LATE = "live.running_late"
+    const val LIVE_CHECKOFF = "live.checkoff"
 
     // location
     const val LOCATION_PERMISSION = "location.permission"
@@ -75,6 +77,10 @@ object LogEvent {
     const val PLANNER_SWAP = "planner.swap"
     const val PLANNER_AVAILABILITY = "planner.availability"
 
+    // Logged under the planner category (attnd-web LOG_EVENTS.md).
+    const val PLAN_EDIT = "plan.edit"
+    const val PLAN_UNDO = "plan.undo"
+
     // assistant (Gemini AppFunctions, shortcuts, Ask)
     const val ASSISTANT_REQUEST = "assistant.request"
     const val MODEL_STATUS = "assistant.model.status"
@@ -82,6 +88,9 @@ object LogEvent {
     const val ASSISTANT_ANSWER = "assistant.answer"
     const val ASSISTANT_ERROR = "assistant.error"
     const val ASSISTANT_INDEX = "assistant.index"
+    const val ASSISTANT_TURN = "assistant.turn"
+    const val ASSISTANT_BLOCK = "assistant.block"
+    const val ASSISTANT_ACTION = "assistant.action"
 
     // search
     const val SEARCH_QUERY = "search.query"
@@ -96,6 +105,10 @@ object LogEvent {
     const val SCREEN = "ui.screen"
     const val UI_ACTION = "ui.action"
     const val UI_ERROR_SHOWN = "ui.error.shown"
+
+    // Logged under the ui category (attnd-web LOG_EVENTS.md).
+    const val SHARE_CREATED = "share.created"
+    const val SHARE_OPENED = "share.opened"
 
     // perf
     const val SIGNPOST = "perf.signpost"
@@ -125,14 +138,14 @@ object LogEvent {
         PUSH_TOKEN, PUSH_TOKEN_FAILED, PUSH_PERMISSION, PUSH_RECEIVED, PUSH_HANDLED, PUSH_DROPPED, PUSH_OPENED,
         WAKE, REFRESH_STARTED, REFRESH_FINISHED, REFRESH_FAILED,
         LIVE_START, LIVE_START_FAILED, LIVE_UPDATE, LIVE_END, LIVE_ACTION, LIVE_WAKE_SCHEDULED, LIVE_REMINDER_SHOWN,
-        LIVE_ARRIVAL, LIVE_FOLLOW_CHANGED,
+        LIVE_ARRIVAL, LIVE_FOLLOW_CHANGED, LIVE_RUNNING_LATE, LIVE_CHECKOFF,
         LOCATION_PERMISSION, LOCATION_UPDATES, HEADING_SOURCE, LOCATION_ERROR,
         MAP_FIRST_RENDER,
-        PLANNER_REQUEST, PLANNER_EXTRACT, PLANNER_RUN, PLANNER_SWAP, PLANNER_AVAILABILITY,
-        ASSISTANT_REQUEST, MODEL_STATUS, MODEL_DOWNLOAD, ASSISTANT_ANSWER, ASSISTANT_ERROR, ASSISTANT_INDEX,
+        PLANNER_REQUEST, PLANNER_EXTRACT, PLANNER_RUN, PLANNER_SWAP, PLANNER_AVAILABILITY, PLAN_EDIT, PLAN_UNDO,
+        ASSISTANT_REQUEST, MODEL_STATUS, MODEL_DOWNLOAD, ASSISTANT_ANSWER, ASSISTANT_ERROR, ASSISTANT_INDEX, ASSISTANT_TURN, ASSISTANT_BLOCK, ASSISTANT_ACTION,
         SEARCH_QUERY,
         BUNDLE_SAVED, BUNDLE_RESTORED, BUNDLE_FAILED, IMAGES_PREFETCH,
-        SCREEN, UI_ACTION, UI_ERROR_SHOWN,
+        SCREEN, UI_ACTION, UI_ERROR_SHOWN, SHARE_CREATED, SHARE_OPENED,
         SIGNPOST, PERF_METRIC,
         ATTEST_STARTED, ATTEST_FINISHED, ATTEST_FAILED, TOKEN_EXPIRED,
         DEBUG_MODE, UPLOAD, UPLOAD_FAILED, DROPPED, EXPORT, REPORT_SENT,

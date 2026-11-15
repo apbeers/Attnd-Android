@@ -130,6 +130,40 @@ class DevicePrefs(context: Context) {
 
     fun setOnboardingSeen(eventId: Int) = prefs.edit { putBoolean("$KEY_ONBOARDING$eventId", true) }
 
+    // Event assistant (assistant spec §4, §7): stored with the plan per event, kept after leaving.
+
+    /** The plan's undo stack (`PlanHistory.encode`). */
+    fun planHistory(eventId: Int): String? = prefs.getString("$KEY_PLAN_HISTORY$eventId", null)
+
+    fun setPlanHistory(eventId: Int, value: String?) = prefs.edit {
+        if (value == null) remove("$KEY_PLAN_HISTORY$eventId") else putString("$KEY_PLAN_HISTORY$eventId", value)
+    }
+
+    /** The model's conversation (`AssistantConversation.encode`). */
+    fun assistantConversation(eventId: Int): String? = prefs.getString("$KEY_CONVERSATION$eventId", null)
+
+    fun setAssistantConversation(eventId: Int, value: String?) = prefs.edit {
+        if (value == null) remove("$KEY_CONVERSATION$eventId") else putString("$KEY_CONVERSATION$eventId", value)
+    }
+
+    /** The assistant screen's transcript (`AssistantTranscript.encode`). */
+    fun assistantTranscript(eventId: Int): String? = prefs.getString("$KEY_TRANSCRIPT$eventId", null)
+
+    fun setAssistantTranscript(eventId: Int, value: String?) = prefs.edit {
+        if (value == null) remove("$KEY_TRANSCRIPT$eventId") else putString("$KEY_TRANSCRIPT$eventId", value)
+    }
+
+    /** Reminders before liked / planned items; null = not chosen (follows "Follow on Lock Screen"). */
+    fun reminders(eventId: Int): Boolean? =
+        if (prefs.contains("$KEY_REMINDERS_ON$eventId")) prefs.getBoolean("$KEY_REMINDERS_ON$eventId", true) else null
+
+    fun setReminders(eventId: Int, on: Boolean) = prefs.edit { putBoolean("$KEY_REMINDERS_ON$eventId", on) }
+
+    /** Shared plans opened for the event (API-015): one line of comma-separated ids per plan. */
+    fun sharedPlans(eventId: Int): String? = prefs.getString("$KEY_SHARED$eventId", null)
+
+    fun setSharedPlans(eventId: Int, value: String) = prefs.edit { putString("$KEY_SHARED$eventId", value) }
+
     fun clearEvent() = prefs.edit {
         remove(KEY_EVENT_ID)
         remove(KEY_EVENT_CODE)
@@ -161,6 +195,11 @@ class DevicePrefs(context: Context) {
         private const val KEY_URGENT_DISMISSED = "urgent_dismissed_"
         private const val KEY_REMINDERS = "reminders_shown_"
         private const val KEY_ONBOARDING = "onboarding_seen_"
+        private const val KEY_PLAN_HISTORY = "plan_history_"
+        private const val KEY_CONVERSATION = "assistant_conversation_"
+        private const val KEY_TRANSCRIPT = "assistant_transcript_"
+        private const val KEY_REMINDERS_ON = "reminders_on_"
+        private const val KEY_SHARED = "shared_plans_"
         private const val NO_EVENT = -1
     }
 }
