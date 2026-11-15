@@ -141,9 +141,11 @@ jobs:
             echo "KEY_PASSWORD=$KEY_PASSWORD"
           } > signing.properties
           if [ -n "$GOOGLE_SERVICES_JSON" ]; then printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json; fi
+      # lintVital (release lint for fatal issues) is skipped: "Unit tests & lint" runs the full lintDebug in
+      # parallel. The release Kotlin compile and R8 always run (the version code changes BuildConfig).
       - name: Signed bundle
         id: bundle
-        run: ./gradlew bundleRelease
+        run: ./gradlew bundleRelease -x lintVitalRelease
       - name: Remove signing material
         if: always()
         run: rm -f signing.properties "$RUNNER_TEMP/upload.jks" app/google-services.json
