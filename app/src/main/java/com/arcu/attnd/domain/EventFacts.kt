@@ -25,6 +25,8 @@ data class EventFact(
     val latitude: Double?,
     val longitude: Double?,
     val target: OpenTarget,
+    /** The event's website (API-016), for the event only. */
+    val website: String? = null,
 )
 
 object EventFacts {
@@ -92,6 +94,7 @@ object EventFacts {
             latitude = event.coordinate?.latitude,
             longitude = event.coordinate?.longitude,
             target = OpenTarget.EventInfo,
+            website = event.websiteUrl,
         )
     }
 

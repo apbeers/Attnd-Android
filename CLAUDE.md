@@ -49,7 +49,8 @@ app/
     AttndApplication.kt           # App init (attestation, notification channel) + AppGraph (manual DI: repository, app scope)
     MainActivity.kt               # Single activity: intents (App Links, notification taps, debug screenshot extras), foreground refresh loop
     domain/                       # Pure Kotlin, unit tested — no Android imports
-      Models.kt                   #   Event, EventLocation, ScheduleItem, EventNotification, EventBundle, GeoPoint
+      Models.kt                   #   Event (+ API-016 `websiteUrl`), EventLocation, ScheduleItem, EventNotification, EventBundle, GeoPoint
+      WebLinks.kt                 #   `httpsUrl`: absolute https URLs only (API-016 `website_url`)
       DisplayConfig.kt            #   Server-driven `display` object + client defaults
       EventTime.kt                #   ISO parsing and formatting in the EVENT's time zone
       ScheduleGrouping.kt         #   timeline / by_day / by_location / now_next, search, ended/now
@@ -340,6 +341,8 @@ Base `https://attnd.app/api/v2/` — see attnd-web `API_V2.md`.
 | `POST devices/` | On launch and when push token / notification preference changes; `push_token` whenever there is one (omitted, never `""`, without one), `subscribed` = the opt-in |
 
 Bundle refresh (API-007): live updates are **push-driven**. A `content_updated` push refreshes silently after a random 0–10 s delay, only when its `content_version` is newer than the bundle's (`EventRepository.onContentUpdated`, works in the background too). Also on join, when the app is resumed, on pull-to-refresh, and a poll while the activity is resumed and an event is joined (`EventViewModel.foregroundSync`; conditional GET, usually `304`): a **5-minute safety poll** when the server has this device's push token (`EventRepository.hasPushToken`), otherwise **every 60 s** (no Firebase config, no Play services, token fetch or registration failed) — `LiveUpdates.pollIntervalMs`. Polls and push refreshes use `refresh(silent = true)` (no spinner); at these intervals the offline notice appears after the first failed poll (`LiveUpdates.failuresBeforeOfflineNotice`; any success clears it) and reads "Offline · last updated 2:14 PM" (last successful refresh, device time zone and 12/24-hour setting). A `404` on the bundle clears the event and returns to the launch screen.
+
+**Event website (API-016)**: `event.website_url` (the organizer's Attnd Studio site, or null) → `Event.websiteUrl` via `WebLinks.httpsUrl` (missing, null, blank, non-`https` or host-less → null). When set, `EventInfoCard` (Options' event card and the search screen's event detail) shows a **Website** button that opens it with `Intent.ACTION_VIEW` + `CATEGORY_BROWSABLE` (the browser, never a WebView; nothing from the app is sent to it); AppFunctions' `getEventInfo` returns it as `website`. Not on the top bar, so store screenshots don't change.
 
 Models tolerate missing and unknown keys everywhere. Coordinates may be `null`: never pin those, and never treat `0,0` as real (`GeoPoint.of`). Schedule items may have no location ("General"). All times are shown in the event's `timezone`.
 

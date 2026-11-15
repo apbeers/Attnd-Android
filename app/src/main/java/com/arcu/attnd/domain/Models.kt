@@ -49,6 +49,8 @@ data class Event(
     val logoUrl: String?,
     val contentVersion: Int,
     val joinUrl: String?,
+    /** API-016: the event's website (Attnd Studio), only an absolute `https` URL; null when there is none. */
+    val websiteUrl: String? = null,
 ) {
     /** The zone every time in this event is displayed in. */
     val zone: ZoneId get() = EventTime.zoneOf(timezone)

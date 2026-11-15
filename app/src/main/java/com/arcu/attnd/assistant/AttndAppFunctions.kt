@@ -60,6 +60,8 @@ data class AttndEventItem(
     val latitude: Double?,
     /** Longitude of the place, if known. */
     val longitude: Double?,
+    /** For the event: its website (https), if the organizer has one. */
+    val website: String?,
     /** Opens this item in the Attnd app. */
     val openInApp: PendingIntent,
 )
@@ -341,5 +343,6 @@ internal fun toAttndItem(fact: EventFact, context: Context, eventId: Int): Attnd
     address = fact.address,
     latitude = fact.latitude,
     longitude = fact.longitude,
+    website = fact.website,
     openInApp = OpenIntents.pendingIntent(context, OpenRequest(eventId, fact.target)),
 )

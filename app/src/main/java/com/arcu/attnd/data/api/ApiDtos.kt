@@ -43,6 +43,8 @@ data class EventDto(
     @SerialName("logo_url") val logoUrl: String? = null,
     @SerialName("content_version") val contentVersion: Int? = null,
     @SerialName("join_url") val joinUrl: String? = null,
+    /** API-016: the event's Attnd Studio website, or null. */
+    @SerialName("website_url") val websiteUrl: String? = null,
 )
 
 @Serializable

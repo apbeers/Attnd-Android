@@ -38,6 +38,7 @@ class ApiMapperTest {
         assertFalse(event.isArchived)
         assertEquals("https://attnd.app/media/flyer.png", event.flyerUrl)
         assertNotNull(event.endTime)
+        assertEquals("https://sites.attnd-example.com/fw-fair/", event.websiteUrl)
 
         assertEquals(listOf("Food", "Stage"), bundle.categories)
         assertEquals(listOf(5, 6, 7), bundle.locations.map { it.id })
@@ -168,5 +169,27 @@ class ApiMapperTest {
         assertEquals("Live music", com.arcu.attnd.domain.Tags.display("live music"))
         assertEquals("Kid-friendly", com.arcu.attnd.domain.Tags.display("kid-friendly"))
         assertEquals("21+", com.arcu.attnd.domain.Tags.display("21+"))
+    }
+
+    @Test
+    fun websiteUrl_api016_onlyHttpsUrls() {
+        fun website(json: String): String? =
+            ApiMapper.parseBundle("""{"event": {"id": 1, "name": "E"$json}}""")!!.event.websiteUrl
+        assertNull(website(""))
+        assertNull(website(""", "website_url": null"""))
+        assertNull(website(""", "website_url": """""))
+        assertNull(website(""", "website_url": "   """"))
+        assertNull(website(""", "website_url": "http://sites.attnd-example.com/fw-fair/""""))
+        assertNull(website(""", "website_url": "javascript:alert(1)""""))
+        assertNull(website(""", "website_url": "/fw-fair/""""))
+        assertNull(website(""", "website_url": "https://""""))
+        assertNull(website(""", "website_url": "https://bad host/""""))
+        assertNull(website(""", "website_url": 42"""))
+        assertEquals("https://sites.attnd-example.com/fw-fair/", website(""", "website_url": " https://sites.attnd-example.com/fw-fair/ """"))
+        assertEquals("HTTPS://sites.attnd-example.com/x/", website(""", "website_url": "HTTPS://sites.attnd-example.com/x/""""))
+        // AppFunctions' getEventInfo carries it.
+        val full = ApiMapper.parseBundle(SampleBundles.FULL)!!
+        assertEquals("https://sites.attnd-example.com/fw-fair/", com.arcu.attnd.domain.EventFacts.eventInfo(full).website)
+        assertNull(com.arcu.attnd.domain.EventFacts.eventInfo(ApiMapper.parseBundle("""{"event": {"id": 1}}""")!!).website)
     }
 }

@@ -1,20 +1,36 @@
 package com.arcu.attnd.ui.components
 
+import android.content.ActivityNotFoundException
+import android.content.Intent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.net.toUri
+import com.arcu.attnd.domain.AppLog
+import com.arcu.attnd.domain.LogCategory
 import com.arcu.attnd.domain.Event
 import com.arcu.attnd.domain.EventSearch
 
-/** The event header (Options, and the event result in search): name, dates, address, code, description. */
+/**
+ * The event header (Options, and the event result in search): name, dates, address, code, description,
+ * and a **Website** button when the event has an Attnd Studio site (API-016).
+ */
 @Composable
 fun EventInfoCard(event: Event, modifier: Modifier = Modifier) {
     Card(
@@ -34,6 +50,26 @@ fun EventInfoCard(event: Event, modifier: Modifier = Modifier) {
             }
             if (event.description.isNotBlank()) {
                 Text(event.description, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 4.dp))
+            }
+            event.websiteUrl?.let { url ->
+                val context = LocalContext.current
+                OutlinedButton(
+                    onClick = {
+                        // The system browser (or the user's Custom Tab default), never a WebView: nothing from the
+                        // app (device id, tokens, cookies) goes to the site, which is on another domain.
+                        val intent = Intent(Intent.ACTION_VIEW, url.toUri()).addCategory(Intent.CATEGORY_BROWSABLE)
+                        try {
+                            context.startActivity(intent)
+                        } catch (e: ActivityNotFoundException) {
+                            AppLog.caught(LogCategory.UI, "event_website", e)
+                        }
+                    },
+                    modifier = Modifier.padding(top = 8.dp),
+                ) {
+                    Icon(Icons.Filled.Language, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Website")
+                }
             }
         }
     }

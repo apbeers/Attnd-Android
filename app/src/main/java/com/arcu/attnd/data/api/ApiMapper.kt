@@ -13,6 +13,7 @@ import com.arcu.attnd.domain.NearbyEvent
 import com.arcu.attnd.domain.NotificationPriority
 import com.arcu.attnd.domain.ScheduleItem
 import com.arcu.attnd.domain.UpdateLevel
+import com.arcu.attnd.domain.WebLinks
 
 /**
  * Converts v2 DTOs into domain models, applying the documented default for every missing key.
@@ -74,6 +75,7 @@ object ApiMapper {
             logoUrl = dto.logoUrl?.takeIf { it.isNotBlank() },
             contentVersion = dto.contentVersion ?: 0,
             joinUrl = dto.joinUrl?.takeIf { it.isNotBlank() },
+            websiteUrl = WebLinks.httpsUrl(dto.websiteUrl),
         )
     }
 

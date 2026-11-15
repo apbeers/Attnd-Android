@@ -20,6 +20,7 @@ object SampleBundles {
         "flyer_url": "https://attnd.app/media/flyer.png",
         "accent_color": "#FF5A1F", "logo_url": "https://attnd.app/media/logo.png",
         "content_version": 15, "join_url": "https://attnd.app/join/FWFM2026/",
+        "website_url": "https://sites.attnd-example.com/fw-fair/",
         "organizer_note": "unknown key"
       },
       "display": {
