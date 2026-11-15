@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Map
@@ -27,6 +28,9 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -55,6 +59,8 @@ import com.arcu.attnd.domain.EventBundle
 import com.arcu.attnd.domain.OpenRequest
 import com.arcu.attnd.domain.OpenTarget
 import com.arcu.attnd.domain.Tab
+import com.arcu.attnd.domain.NavItem
+import com.arcu.attnd.domain.EventTabModel
 import com.arcu.attnd.domain.UpdateLevel
 import com.arcu.attnd.ui.components.EventActions
 import com.arcu.attnd.ui.components.EventStatusPills
@@ -71,7 +77,6 @@ import com.arcu.attnd.ui.screens.LogViewerSource
 import com.arcu.attnd.ui.screens.NotificationsScreen
 import com.arcu.attnd.ui.screens.OnboardingScreen
 import com.arcu.attnd.ui.screens.OptionsScreen
-import com.arcu.attnd.ui.screens.PlanActions
 import com.arcu.attnd.ui.screens.ScheduleItemDetail
 import com.arcu.attnd.ui.screens.ScheduleTab
 import com.arcu.attnd.ui.screens.SearchFab
@@ -81,11 +86,6 @@ import com.arcu.attnd.ui.theme.AttndTheme
 import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -99,7 +99,8 @@ import com.arcu.attnd.domain.RefKind
 import com.arcu.attnd.ui.assistant.AssistantController
 import com.arcu.attnd.ui.assistant.AssistantEffect
 import com.arcu.attnd.ui.assistant.AssistantIntents
-import com.arcu.attnd.ui.assistant.AssistantScreen
+import com.arcu.attnd.ui.assistant.AssistantBarOverlay
+import com.arcu.attnd.ui.assistant.MyPlanTab
 import com.arcu.attnd.ui.assistant.BlockActions
 import com.arcu.attnd.ui.assistant.RunningLateCard
 import com.arcu.attnd.ui.components.rememberUserLocation
@@ -182,14 +183,6 @@ fun AttndApp(viewModel: EventViewModel = viewModel(factory = EventViewModel.Fact
                             }
                             CompositionLocalProvider(LocalEventActions provides actions) {
                                 EventShell(state, bundle, viewModel)
-                                // The event assistant over the tabs (the search FAB's target; never in screenshot mode).
-                                AnimatedVisibility(
-                                    visible = state.assistantOpen,
-                                    enter = slideInVertically { it / 3 } + fadeIn(),
-                                    exit = slideOutVertically { it / 3 } + fadeOut(),
-                                ) {
-                                    Surface(Modifier.fillMaxSize()) { AssistantOverlay(state, bundle, viewModel) }
-                                }
                             }
                             AssistantEffects(viewModel.assistantController)
                             // First join of an event (or Options → Tour); never in screenshot mode.
@@ -218,40 +211,46 @@ fun AttndApp(viewModel: EventViewModel = viewModel(factory = EventViewModel.Fact
     }
 }
 
-private val Tab.label: String
+private val NavItem.label: String
     get() = when (this) {
-        Tab.MAP -> "Map"
-        Tab.LOCATIONS -> "Locations"
-        Tab.SCHEDULE -> "Schedule"
-        Tab.FLYER -> "Flyer"
-        Tab.NOTIFICATIONS -> "Updates"
+        NavItem.PLAN -> "My plan"
+        NavItem.EXPLORE -> "Explore"
+        NavItem.MAP -> "Map"
+        NavItem.LOCATIONS -> "Locations"
+        NavItem.SCHEDULE -> "Schedule"
+        NavItem.FLYER -> "Flyer"
+        NavItem.UPDATES -> "Updates"
     }
 
-private val Tab.icon: ImageVector
+/** Distinct icons: My plan `AutoAwesome`, Explore `Map` (the legacy Map tab never sits beside Explore). */
+private val NavItem.icon: ImageVector
     get() = when (this) {
-        Tab.MAP -> Icons.Filled.Map
-        Tab.LOCATIONS -> Icons.AutoMirrored.Filled.List
-        Tab.SCHEDULE -> Icons.Filled.CalendarMonth
-        Tab.FLYER -> Icons.Filled.Description
-        Tab.NOTIFICATIONS -> Icons.Filled.Notifications
+        NavItem.PLAN -> Icons.Filled.AutoAwesome
+        NavItem.EXPLORE, NavItem.MAP -> Icons.Filled.Map
+        NavItem.LOCATIONS -> Icons.AutoMirrored.Filled.List
+        NavItem.SCHEDULE -> Icons.Filled.CalendarMonth
+        NavItem.FLYER -> Icons.Filled.Description
+        NavItem.UPDATES -> Icons.Filled.Notifications
     }
 
 /**
- * The joined-event UI. Tabs come from `display.tabs` (order, visibility, default; at most
- * [DisplayConfig.MAX_TABS], never a "more" item). The navigation is a bottom bar on the
+ * The joined-event UI (plan tab spec): My plan, Explore (Map | Schedule | Places), Flyer and
+ * Updates ([AppUiState.tabs]; today's tabs in screenshot mode). The navigation is a bottom bar on the
  * folded/cover screen and a rail on the unfolded inner display (NavigationSuiteScaffold picks this
- * from the window size class and posture). Options sits in the top bar, search behind a FAB.
+ * from the window size class and posture). Options sits in the top bar; My plan has its own input
+ * bar, the other tabs a search FAB that opens the same bar over them.
  */
 @Composable
 private fun EventShell(state: AppUiState, bundle: EventBundle, viewModel: EventViewModel) {
     val tabs = bundle.display.tabs
+    val items = state.tabs.items
     val snackbar = remember { SnackbarHostState() }
     val tabStates = rememberSaveableStateHolder()
 
     LaunchedEffect(state.message) {
         val message = state.message ?: return@LaunchedEffect
         val chip = state.messageChip
-        val result = snackbar.showSnackbar(message, actionLabel = if (chip != null) "Add" else null, withDismissAction = chip != null)
+        val result = snackbar.showSnackbar(message, actionLabel = if (chip != null) "Preview" else null, withDismissAction = chip != null)
         if (result == SnackbarResult.ActionPerformed && chip != null) viewModel.runMessageChip() else viewModel.consumeMessage()
     }
 
@@ -279,7 +278,7 @@ private fun EventShell(state: AppUiState, bundle: EventBundle, viewModel: EventV
     // items side by side with their labels when the height is compact or in tabletop posture) and a
     // collapsed wide navigation rail on the unfolded inner display.
     val adaptiveInfo = currentWindowAdaptiveInfoV2()
-    val navType = if (tabs.size < 2) NavigationSuiteType.None else NavigationSuiteScaffoldDefaults.navigationSuiteType(adaptiveInfo)
+    val navType = if (items.size < 2) NavigationSuiteType.None else NavigationSuiteScaffoldDefaults.navigationSuiteType(adaptiveInfo)
     // The bottom bar pads itself for the system bars; with a rail (or nothing) the content must.
     val isBar = navType == NavigationSuiteType.ShortNavigationBarCompact || navType == NavigationSuiteType.ShortNavigationBarMedium
     val contentInsets = if (isBar) {
@@ -288,12 +287,13 @@ private fun EventShell(state: AppUiState, bundle: EventBundle, viewModel: EventV
         WindowInsets.safeDrawing.only(WindowInsetsSides.End + WindowInsetsSides.Bottom)
     }
 
-    // App-wide search: a FAB opens the full-screen search (EventSearch, always composed so shortcut /
-    // AppFunctions / attnd-open requests can open it too). Where the FAB sits follows the Material
-    // patterns for each navigation: in the wide navigation rail's header on the unfolded display;
-    // on the Map tab (bar or no navigation) as the FAB of the map's vertical floating toolbar, so the
-    // two never overlap; elsewhere in the Scaffold's FAB slot, bottom-end above the navigation bar.
+    // The search FAB (every tab but My plan, whose input bar is always there) opens the same bar over
+    // the tab. Where it sits follows the Material patterns for each navigation: in the wide navigation
+    // rail's header on the unfolded display; with the map showing (bar or no navigation) as the FAB of
+    // the map's vertical floating toolbar, so the two never overlap; elsewhere in the Scaffold's FAB
+    // slot, bottom-end above the navigation bar.
     val openSearch: () -> Unit = viewModel::openAssistant
+    val onPlan = state.selectedItem == NavItem.PLAN
     val assistantState by viewModel.assistantController.state.collectAsStateWithLifecycle()
     // Live plan hints (assistant spec §6): position samples only while this is visible and a plan item
     // is on now or soon; recomputed once a minute.
@@ -310,19 +310,21 @@ private fun EventShell(state: AppUiState, bundle: EventBundle, viewModel: EventV
     val isRail = navType == NavigationSuiteType.WideNavigationRailCollapsed ||
         navType == NavigationSuiteType.WideNavigationRailExpanded ||
         navType == NavigationSuiteType.NavigationRail
-    val fabInMapToolbar = !isRail && state.selectedTab == Tab.MAP
-    val fabInScaffold = !isRail && !fabInMapToolbar
+    val showFab = !onPlan && !state.assistantOpen
+    val fabInMapToolbar = showFab && !isRail && state.selectedTab == Tab.MAP
+    val fabInScaffold = showFab && !isRail && !fabInMapToolbar
+    val blockActions = rememberBlockActions(state, bundle, viewModel)
 
     NavigationSuiteScaffold(
         navigationSuiteType = navType,
         navigationItems = {
-            tabs.forEach { tab ->
-                val unread = if (tab == Tab.NOTIFICATIONS && tab != state.selectedTab) state.unreadUpdates else 0
+            items.forEach { item ->
+                val unread = if (item == NavItem.UPDATES && item != state.selectedItem) state.unreadUpdates else 0
                 NavigationSuiteItem(
-                    selected = tab == state.selectedTab,
-                    onClick = { viewModel.selectTab(tab) },
-                    icon = { Icon(tab.icon, contentDescription = null) },
-                    label = { Text(tab.label) },
+                    selected = item == state.selectedItem,
+                    onClick = { viewModel.selectItem(item) },
+                    icon = { Icon(item.icon, contentDescription = null) },
+                    label = { Text(item.label) },
                     navigationSuiteType = navType,
                     badge = if (unread > 0) {
                         {
@@ -338,7 +340,7 @@ private fun EventShell(state: AppUiState, bundle: EventBundle, viewModel: EventV
         },
         // Only shown by the rail (as its header); with a bar the FAB goes in the Scaffold below,
         // which also keeps snackbars above it.
-        primaryActionContent = { if (isRail) SearchFab(onClick = openSearch) },
+        primaryActionContent = { if (isRail && showFab) SearchFab(onClick = openSearch) },
     ) {
         Scaffold(
             topBar = {
@@ -359,14 +361,14 @@ private fun EventShell(state: AppUiState, bundle: EventBundle, viewModel: EventV
                     .consumeWindowInsets(padding),
             ) {
                 OfflineNotice(state.sync)
-                // Running late (assistant spec §6): "Leave now for X" / "You can't make X in time" on every tab.
-                assistantState.live.runningLate?.takeIf { !state.isScreenshot }?.let { late ->
+                // Running late (assistant spec §6) on every other tab (My plan shows it in its timeline).
+                assistantState.live.runningLate?.takeIf { !state.isScreenshot && !onPlan }?.let { late ->
                     RunningLateCard(
                         late.text,
                         cantMake = late.state == LateState.CANT_MAKE_IT,
                         chips = late.chips,
                         onChip = { chip ->
-                            viewModel.assistantController.run(chip.action, chip.label, ActionSource.MANUAL)?.let { message -> viewModel.showMessage(message) }
+                            viewModel.assistantController.run(chip.action, chip.label, ActionSource.RULES)?.let { message -> viewModel.showMessage(message) }
                         },
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
                     )
@@ -384,21 +386,93 @@ private fun EventShell(state: AppUiState, bundle: EventBundle, viewModel: EventV
                     )
                 }
                 Box(Modifier.fillMaxWidth().weight(1f)) {
-                    tabStates.SaveableStateProvider(state.selectedTab.key) {
-                        TabContent(state, bundle, viewModel, onMapSearch = if (fabInMapToolbar) openSearch else null)
+                    tabStates.SaveableStateProvider(state.selectedItem.key + ":" + (state.selectedTab?.key ?: "")) {
+                        TabContent(state, bundle, viewModel, blockActions, onMapSearch = if (fabInMapToolbar) openSearch else null)
                     }
                     // Floats over the content (no layout space) so demo / ended events stay obvious.
                     EventStatusPills(bundle.event, Modifier.align(Alignment.TopCenter))
+                    // The input bar over this tab (the search FAB's target; never in screenshot mode).
+                    if (state.assistantOpen) {
+                        AssistantBarOverlay(
+                            controller = viewModel.assistantController,
+                            bundle = bundle,
+                            model = state.assistant,
+                            request = state.searchRequest,
+                            actions = blockActions,
+                            onRequestConsumed = { viewModel.consumeSearchRequest() },
+                            onClose = viewModel::closeAssistant,
+                            onSearch = viewModel::onSearch,
+                            onLocationShown = viewModel::onLocationShown,
+                            onScheduleItemShown = viewModel::onScheduleItemShown,
+                        )
+                        LaunchedEffect(Unit) { viewModel.checkAssistant() }
+                    }
                 }
             }
         }
     }
-
 }
 
 @Composable
-private fun TabContent(state: AppUiState, bundle: EventBundle, viewModel: EventViewModel, onMapSearch: (() -> Unit)?) {
-    when (state.selectedTab) {
+private fun TabContent(state: AppUiState, bundle: EventBundle, viewModel: EventViewModel, blockActions: BlockActions, onMapSearch: (() -> Unit)?) {
+    when (state.selectedItem) {
+        NavItem.PLAN -> {
+            MyPlanTab(
+                controller = viewModel.assistantController,
+                bundle = bundle,
+                model = state.assistant,
+                planner = state.planner,
+                request = state.searchRequest,
+                focusInput = state.focusInput,
+                actions = blockActions,
+                onRequestConsumed = { viewModel.consumeSearchRequest(keepOpen = false) },
+                onSearch = viewModel::onSearch,
+                onDownloadModel = viewModel::downloadAssistant,
+                onLocationShown = viewModel::onLocationShown,
+                onScheduleItemShown = viewModel::onScheduleItemShown,
+                onReplan = viewModel::replanFromNow,
+                onKeepChanged = viewModel::keepChangedPlan,
+            )
+            LaunchedEffect(Unit) { viewModel.checkAssistant() }
+        }
+        NavItem.EXPLORE -> ExploreTab(state, bundle, viewModel, onMapSearch)
+        else -> state.selectedTab?.let { ViewContent(it, state, bundle, viewModel, onMapSearch) }
+    }
+}
+
+/**
+ * Explore (plan tab spec): a segmented switch Map | Schedule | Places (only the views `display.tabs`
+ * lists, none with one view) above that view's screen, which keeps its own adaptive layout (list-detail
+ * panes, the map beside its secondary pane on an unfolded foldable). The choice is remembered per event.
+ */
+@Composable
+private fun ExploreTab(state: AppUiState, bundle: EventBundle, viewModel: EventViewModel, onMapSearch: (() -> Unit)?) {
+    val views = state.tabs.exploreViews
+    val view = state.selectedTab ?: return
+    val views2 = rememberSaveableStateHolder()
+    Column(Modifier.fillMaxSize()) {
+        if (state.tabs.hasSwitch) {
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                views.forEachIndexed { index, tab ->
+                    SegmentedButton(
+                        selected = tab == view,
+                        onClick = { viewModel.selectExploreView(tab) },
+                        shape = SegmentedButtonDefaults.itemShape(index, views.size),
+                        label = { Text(EventTabModel.viewLabel(tab), maxLines = 1) },
+                    )
+                }
+            }
+        }
+        Box(Modifier.fillMaxWidth().weight(1f)) {
+            views2.SaveableStateProvider(view.key) { ViewContent(view, state, bundle, viewModel, onMapSearch) }
+        }
+    }
+}
+
+/** One organizer tab's screen (Explore's views, Flyer, Updates; today's tabs in screenshot mode). */
+@Composable
+private fun ViewContent(tab: Tab, state: AppUiState, bundle: EventBundle, viewModel: EventViewModel, onMapSearch: (() -> Unit)?) {
+    when (tab) {
         Tab.MAP -> MapTab(state, viewModel, onSearch = onMapSearch)
         Tab.LOCATIONS -> LocationsTab(
             bundle = bundle,
@@ -419,19 +493,6 @@ private fun TabContent(state: AppUiState, bundle: EventBundle, viewModel: EventV
             onLocationClick = viewModel::focusLocation,
             onItemShown = viewModel::onScheduleItemShown,
             onSearch = viewModel::onSearch,
-            planner = state.planner,
-            planActions = remember(viewModel) {
-                PlanActions(
-                    onMakePlan = viewModel::makePlan,
-                    onReplan = viewModel::replanFromNow,
-                    onSwap = viewModel::swapPlanItem,
-                    onKeepChanged = viewModel::keepChangedPlan,
-                    onClear = viewModel::clearPlan,
-                    onExample = viewModel::useExample,
-                    onCheck = viewModel.assistantController::toggleCheckOff,
-                    onOpenAssistant = viewModel::openAssistant,
-                )
-            },
         )
         Tab.FLYER -> FlyerScreen(bundle.event.flyerUrl)
         Tab.NOTIFICATIONS -> NotificationsScreen(
@@ -445,12 +506,12 @@ private fun TabContent(state: AppUiState, bundle: EventBundle, viewModel: EventV
     }
 }
 
-/** The assistant screen wired to the view model. */
+/** What the assistant's cards and chips can do, wired to the view model (My plan and the bar). */
 @Composable
-private fun AssistantOverlay(state: AppUiState, bundle: EventBundle, viewModel: EventViewModel) {
+private fun rememberBlockActions(state: AppUiState, bundle: EventBundle, viewModel: EventViewModel): BlockActions {
     val controller = viewModel.assistantController
     val tabs = bundle.display.tabs
-    val blockActions = remember(bundle, state.planner.plan, state.hearts, state.followLive, state.remindersOn, state.notificationsEnabled, viewModel) {
+    return remember(bundle, state.planner.plan, state.hearts, state.followLive, state.remindersOn, state.notificationsEnabled, viewModel) {
         BlockActions(
             bundle = bundle,
             plan = state.planner.plan?.takeIf { !it.isEmpty },
@@ -496,30 +557,9 @@ private fun AssistantOverlay(state: AppUiState, bundle: EventBundle, viewModel: 
                     viewModel.selectTab(Tab.FLYER)
                 }
             },
-            onOpenPlan = { controller.run(AssistantAction(ActionName.PLAN), "Show my plan") },
+            onOpenPlan = viewModel::showPlan,
         )
     }
-    AssistantScreen(
-        controller = controller,
-        bundle = bundle,
-        model = state.assistant,
-        planner = state.planner,
-        request = state.searchRequest,
-        actions = blockActions,
-        onRequestConsumed = viewModel::consumeSearchRequest,
-        onClose = viewModel::closeAssistant,
-        onSearch = viewModel::onSearch,
-        onDownloadModel = viewModel::downloadAssistant,
-        onLocationShown = viewModel::onLocationShown,
-        onScheduleItemShown = viewModel::onScheduleItemShown,
-        onOpenPlanTab = {
-            viewModel.closeAssistant()
-            viewModel.showPlan()
-        },
-        onReplan = viewModel::replanFromNow,
-        onKeepChanged = viewModel::keepChangedPlan,
-    )
-    LaunchedEffect(Unit) { viewModel.checkAssistant() }
 }
 
 /** Takes position samples for the live plan hints while composed (and resumed); none without permission. */

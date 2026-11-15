@@ -42,6 +42,11 @@ import com.arcu.attnd.domain.Plan
 import com.arcu.attnd.domain.PlanEdit
 import com.arcu.attnd.domain.PlanEditor
 import com.arcu.attnd.domain.PlanOp
+import com.arcu.attnd.domain.PlanProposal
+import com.arcu.attnd.domain.PlanProposals
+import com.arcu.attnd.domain.PlanTabFlow
+import com.arcu.attnd.domain.ProposalKind
+import com.arcu.attnd.domain.ProposalReply
 import com.arcu.attnd.domain.PlanShare
 import com.arcu.attnd.domain.PlanVersionKind
 import com.arcu.attnd.domain.PlanVersions
@@ -51,7 +56,6 @@ import com.arcu.attnd.domain.RefKind
 import com.arcu.attnd.domain.SearchKind
 import com.arcu.attnd.domain.SharedPayload
 import com.arcu.attnd.domain.SharedPlans
-import com.arcu.attnd.domain.StoredTurn
 import com.arcu.attnd.domain.TurnPath
 import com.arcu.attnd.domain.TurnSource
 import kotlinx.coroutines.CancellationException
@@ -86,6 +90,12 @@ interface AssistantHost {
 
     /** `open(screen, id?)`: navigates to a manual screen (closing the assistant). */
     fun open(screen: String, ref: EntityRef?)
+
+    /** Plans can be made (every phone, with or without on-device AI; never in screenshot mode). */
+    fun canPlan(): Boolean
+
+    /** A proposal is now previewed: show the My plan tab. */
+    fun onProposal()
 
     /** A setting toggle; false when turning it on needs POST_NOTIFICATIONS first. */
     fun setSetting(name: ActionName, on: Boolean): Boolean
@@ -138,10 +148,24 @@ data class AssistantState(
     val wantsLocation: Boolean = false,
     /** Incremented when a turn is added (the screen scrolls to it). */
     val serial: Int = 0,
-)
+    /** A plan edit previewed in the My plan timeline, not applied yet (plan tab spec). */
+    val proposal: PlanProposal? = null,
+    /** "There are only 3 options." after a reply that names a missing option. */
+    val proposalNote: String? = null,
+    /** The "Undo" pill shown for ~8 s after a proposal was applied (or a plan was made). */
+    val undoOffer: UndoOffer? = null,
+) {
+    /** The answer card: the last non-edit turn (never a transcript). */
+    val answer: AssistantTurnUi? get() = turns.lastOrNull()
+}
+
+/** The Undo pill: [label] ("Plan updated") until [serial] changes or it times out. */
+data class UndoOffer(val label: String, val serial: Int)
 
 /**
- * The event assistant on Android (assistant spec §1–8): one conversation per event; every turn goes
+ * The event assistant on Android (assistant spec §1–8, plan tab spec): the last turn only (the answer
+ * card) plus the model's context history; plan edits are previewed in place ([PlanProposal]) and
+ * applied on a tap or a typed "do it". Every turn goes
  * through the rule-based [AssistantRouter] or, when Gemini Nano is available and [AssistantFlow.path]
  * says so, the model ([AssistantModel], streamed, router fallback). Writes go through
  * [ActionDispatcher] (validation, confirm blocks, Undo) to this [ActionExecutor]; plan changes are
@@ -185,16 +209,8 @@ class AssistantController(
         modelJob?.cancel()
         samples.clear()
         dismissedSkips.clear()
-        val bundle = repository.bundle.value
-        val turns = if (eventId == null || bundle == null) emptyList() else {
-            val ctx = context()
-            plans.transcript(eventId).map { stored ->
-                // Stored turns are shown again, re-validated; old confirmations can't be answered.
-                val blocks = ctx?.let { BlockValidator.validate(stored.turn.blocks, it.blockContext) } ?: stored.turn.blocks
-                AssistantTurnUi(nextId++, stored.input, blocks.filter { it !is AssistantBlock.Confirm })
-            }
-        }
-        _state.value = AssistantState(eventId = eventId, turns = turns, canUndo = eventId?.let { plans.history(it).canUndo } == true)
+        // The answer card starts empty for every event (only the model's context history is kept).
+        _state.value = AssistantState(eventId = eventId, canUndo = eventId?.let { plans.history(it).canUndo } == true)
         refreshLive()
     }
 
@@ -203,11 +219,17 @@ class AssistantController(
         modelJob?.cancel()
         plans.setTranscript(eventId, emptyList())
         plans.setConversation(eventId, AssistantConversation())
-        _state.update { it.copy(turns = emptyList(), busy = null) }
+        _state.update { it.copy(turns = emptyList(), busy = null, proposal = null, proposalNote = null) }
         AppLog.debug(LogCategory.UI, LogEvent.UI_ACTION, "Assistant conversation cleared", mapOf("name" to "assistant_clear"))
     }
 
     fun setForced(path: TurnPath?) = _state.update { it.copy(forced = path) }
+
+    /** The answer card swiped down / the user typed again. */
+    fun dismissAnswer() {
+        if (_state.value.turns.any { it.streaming }) return
+        _state.update { it.copy(turns = emptyList(), proposalNote = null) }
+    }
 
     fun context(now: Instant = Instant.now()): AssistantContext? {
         val bundle = repository.bundle.value ?: return null
@@ -219,7 +241,7 @@ class AssistantController(
             plan = plans.plan(eventId)?.takeIf { !it.isEmpty },
             now = now,
             user = host.userLocation(),
-            canPlan = available,
+            canPlan = host.canPlan(),
             modelAvailable = available,
             history = plans.history(eventId),
             units = host.units(),
@@ -239,6 +261,15 @@ class AssistantController(
     fun submit(input: String, forced: TurnPath? = _state.value.forced) {
         val text = input.trim()
         val ctx = context() ?: return
+        // A reply to the previewed edit: "do it", "the second one", "option 3", "no".
+        _state.value.proposal?.let { proposal ->
+            when (val reply = ProposalReply.parse(text, proposal.options.size)) {
+                is ProposalReply.Apply -> return applyProposal(reply.index).let { }
+                ProposalReply.Cancel -> return cancelProposal()
+                is ProposalReply.Invalid -> return _state.update { it.copy(proposalNote = reply.text) }
+                ProposalReply.None -> clearProposal()
+            }
+        }
         if (text.isEmpty()) {
             finish(null, AssistantRouter.route("", ctx).turn, TurnSource.RULES, AssistantIntent.EMPTY, System.nanoTime(), ctx)
             return
@@ -248,7 +279,7 @@ class AssistantController(
         when (AssistantFlow.path(routed.intent, text, ctx.modelAvailable, forced)) {
             TurnPath.SEARCH ->
                 if (forced == TurnPath.SEARCH) finish(text, AssistantFlow.searchTurn(text, ctx), TurnSource.RULES, AssistantIntent.SEARCH, started, ctx)
-                else finish(text, routed.turn, TurnSource.RULES, routed.intent, started, ctx)
+                else finish(text, PlanTabFlow.withoutModel(routed, text, ctx), TurnSource.RULES, routed.intent, started, ctx)
             TurnPath.PLAN -> finish(text, AssistantFlow.planTurn(text, routed, ctx), TurnSource.RULES, routed.intent, started, ctx)
             TurnPath.ASK -> ask(text, ctx, started)
         }
@@ -260,7 +291,7 @@ class AssistantController(
         val eventId = ctx.bundle.event.id
         val id = nextId++
         _state.update {
-            it.copy(turns = it.turns + AssistantTurnUi(id, text, emptyList(), TurnSource.MODEL, streaming = true), busy = TurnPath.ASK, serial = it.serial + 1)
+            it.copy(turns = listOf(AssistantTurnUi(id, text, emptyList(), TurnSource.MODEL, streaming = true)), busy = TurnPath.ASK, serial = it.serial + 1)
         }
         modelJob = scope.launch {
             var raw: String? = null
@@ -303,8 +334,22 @@ class AssistantController(
         modelTried: Boolean = false,
     ) {
         val actionSource = if (source == TurnSource.MODEL) ActionSource.MODEL else ActionSource.RULES
+        val ms0 = (System.nanoTime() - started) / 1_000_000
+        // A plan edit (router, model or a "Which one?" pick of adds / replaces) previews in place.
+        PlanProposals.fromTurn(turn, ctx)?.let { proposal ->
+            propose(proposal)
+            AppLog.info(
+                LogCategory.ASSISTANT, LogEvent.ASSISTANT_TURN, "Assistant turn (${if (source == TurnSource.MODEL) "model" else "rules"})",
+                mapOf("path" to if (source == TurnSource.MODEL) "model" else "rules", "intent" to intent.name.lowercase(), "ms" to ms0, "blocks" to 0, "fallback" to (modelTried && fallback)) +
+                    (input?.let { Redact.textFields("query", it, AppLog.allowText) } ?: emptyMap()),
+            )
+            remember(ctx.bundle.event.id, input, AssistantTurn(listOf(AssistantBlock.Text(proposal.summary))))
+            return
+        }
         var blocks = turn.blocks
         var applied: AssistantAction? = null
+        // Plans are made in place (the timeline shows the progress), not answered with a card.
+        if (turn.actions.any { it.name == ActionName.PLAN_MAKE }) blocks = emptyList()
         for (action in turn.actions) {
             val result = runQuietly(action, actionSource)
             if (result.applied != null) applied = result.applied
@@ -342,18 +387,12 @@ class AssistantController(
         }
         _state.update {
             it.copy(
-                turns = it.turns + AssistantTurnUi(nextId++, input, blocks, source, applied = applied, shared = shared),
+                turns = listOf(AssistantTurnUi(nextId++, input, blocks, source, applied = applied, shared = shared)),
                 busy = null,
                 serial = it.serial + 1,
                 canUndo = eventId?.let { id -> plans.history(id).canUndo } == true,
             )
         }
-        persist()
-    }
-
-    private fun persist() {
-        val eventId = _state.value.eventId ?: return
-        plans.setTranscript(eventId, _state.value.turns.filter { !it.streaming }.map { StoredTurn(it.input, AssistantTurn(it.blocks)) })
     }
 
     /** The model's conversation: the user's text and what the assistant answered (text only). */
@@ -407,6 +446,13 @@ class AssistantController(
      */
     fun run(action: AssistantAction, label: String?, source: ActionSource = ActionSource.RULES, confirmed: Boolean = false): String? {
         val ctx = context() ?: return null
+        // Plan edits from chips, hints and buttons preview in place first (plan tab spec).
+        if (PlanProposals.isEdit(action)) {
+            PlanProposals.fromAction(action, ctx)?.let { proposal ->
+                propose(proposal)
+                return null
+            }
+        }
         if (!action.name.mutates && action.name.result != ActionResultType.NAVIGATION) {
             append(label, AssistantRouter.renderRead(action, ctx))
             logAction(action, "applied")
@@ -445,6 +491,85 @@ class AssistantController(
             }
         }
     }
+
+    // ── Proposals (plan tab spec) ───────────────────────────────────────────
+
+    private fun propose(proposal: PlanProposal) {
+        _state.update { it.copy(proposal = proposal, proposalNote = null, turns = emptyList(), busy = null, undoOffer = null, serial = it.serial + 1) }
+        host.onProposal()
+    }
+
+    private fun clearProposal() = _state.update { it.copy(proposal = null, proposalNote = null) }
+
+    /** "no" / "cancel" / Esc / Cancel on the pill: nothing changes. */
+    fun cancelProposal() {
+        val proposal = _state.value.proposal ?: return
+        proposal.first.action?.let { logAction(it, "declined", ConfirmKind.CHIP) }
+        clearProposal()
+    }
+
+    /**
+     * Applies option [index] of the previewed edit (a tapped row, the pill's Apply, "do it", "the
+     * second one"): through the dispatcher with Undo; a shared plan is stored as it is. The screen
+     * stays where it is and shows the Undo pill. Returns a message when it failed.
+     */
+    fun applyProposal(index: Int = 0): String? {
+        val proposal = _state.value.proposal ?: return null
+        val option = proposal.options.getOrNull(index) ?: return null
+        val bundle = repository.bundle.value ?: return null
+        val eventId = bundle.event.id
+        val action = option.action
+        if (action == null) {
+            // Shared plan: "Use this plan" / "Merge with mine".
+            val merge = index == 1
+            plans.applyPlan(eventId, option.edit.after)
+            AppLog.notice(
+                LogCategory.UI, LogEvent.SHARE_OPENED, if (merge) "Shared plan merged" else "Shared plan used",
+                mapOf("target" to "plan", "items" to option.edit.after.itemIds.size, "known" to option.edit.after.itemIds.size, "action" to if (merge) "merge" else "use", "joined" to false),
+            )
+        } else {
+            val ctx = context() ?: return null
+            quietSource = ActionSource.MANUAL
+            val result = try {
+                dispatcher.dispatch(action, actionContext(ctx), ActionSource.MANUAL)
+            } finally {
+                quietSource = null
+            }
+            val failure = when (result) {
+                is Dispatch.Executed -> (result.outcome as? ActionOutcome.Failed)?.reason
+                is Dispatch.Rejected -> rejectText(result.reason)
+                is Dispatch.NeedsConfirmation -> null
+            }
+            if (failure != null) {
+                logAction(action, "failed")
+                clearProposal()
+                append(null, listOf(AssistantBlock.Text(failure)))
+                return failure
+            }
+            logAction(action, "applied", ConfirmKind.CHIP)
+        }
+        _state.update {
+            it.copy(
+                proposal = null, proposalNote = null,
+                undoOffer = UndoOffer(if (proposal.kind == ProposalKind.SHARED) "Plan replaced" else "Plan updated", it.serial + 1),
+                serial = it.serial + 1, canUndo = plans.history(eventId).canUndo,
+            )
+        }
+        refreshLive()
+        return null
+    }
+
+    /** The Undo pill (or "undo" typed): the last plan change back. */
+    fun undoLast() {
+        val ctx = context() ?: return
+        dispatcher.dispatch(AssistantAction(ActionName.PLAN_UNDO), actionContext(ctx), ActionSource.MANUAL)
+        logAction(AssistantAction(ActionName.PLAN_UNDO), "applied")
+        _state.update { it.copy(undoOffer = null, canUndo = plans.history(ctx.bundle.event.id).canUndo) }
+        refreshLive()
+    }
+
+    /** The Undo pill timed out ([serial] = the offer that was shown) or was dismissed. */
+    fun dismissUndo(serial: Int? = null) = _state.update { if (serial == null || it.undoOffer?.serial == serial) it.copy(undoOffer = null) else it }
 
     fun chip(chip: Chip) {
         run(chip.action, chip.label)
@@ -687,23 +812,9 @@ class AssistantController(
                 append(null, listOf(AssistantBlock.Text(host.planError() ?: "Nothing on the schedule fits that. Try another day or fewer limits.")))
                 return@launch
             }
-            val blocks = listOf(
-                AssistantBlock.Text("Here's your plan: ${Planner.summary(plan, bundle.event.zone)}."),
-                AssistantBlock.PlanBlock(),
-                AssistantBlock.Chips(
-                    listOf(
-                        Chip("Share my plan", AssistantAction(ActionName.SHARE_PLAN)),
-                        Chip("Add my plan to calendar", AssistantAction.calendarPlan()),
-                        Chip(PlanVersionKind.CHILL.label + " version", AssistantAction.planVersion(PlanVersionKind.CHILL)),
-                        Chip("Undo", AssistantAction(ActionName.PLAN_UNDO)),
-                    ),
-                ),
-            )
-            context()?.let { ctx ->
-                val validated = BlockValidator.validate(blocks, ctx.blockContext)
-                append(null, validated)
-                remember(ctx.bundle.event.id, null, AssistantTurn(validated))
-            }
+            // Built in place: the timeline shows it; the Undo pill offers the way back.
+            _state.update { it.copy(busy = null, turns = emptyList(), undoOffer = UndoOffer("Plan made", it.serial + 1), serial = it.serial + 1, canUndo = plans.history(bundle.event.id).canUndo) }
+            remember(bundle.event.id, null, AssistantTurn(listOf(AssistantBlock.Text("Here's your plan: ${Planner.summary(plan, bundle.event.zone)}."))))
             refreshLive()
         }
     }
@@ -732,45 +843,17 @@ class AssistantController(
             return
         }
         plans.addSharedPlan(bundle.event.id, known)
-        append(
-            null,
-            BlockValidator.validate(listOf(
-                AssistantBlock.Text("Someone shared a plan with ${known.size} items."),
-                AssistantBlock.Timeline(known, title = "Shared plan"),
-            ), ctx.blockContext),
-            shared = SharedOffer(known, payload.day),
-        )
-    }
-
-    /** "Use this plan" (merge = false) or "Merge with mine" on a shared plan turn. */
-    fun useShared(turnId: Long, merge: Boolean) {
-        val turn = _state.value.turns.firstOrNull { it.id == turnId } ?: return
-        val offer = turn.shared?.takeIf { !it.handled } ?: return
-        val bundle = repository.bundle.value ?: return
+        // Previewed in place: "Use this plan" / "Merge with mine" (plan tab spec).
         val eventId = bundle.event.id
-        val now = Instant.now()
         val own = hearts.hearts(eventId)
-        val plan = if (merge) SharedPlans.merge(plans.sharedPlans(eventId), own, bundle, plans.plan(eventId), now)
-        else SharedPlans.use(offer.ids, offer.day, bundle, own, now)
-        AppLog.notice(
-            LogCategory.UI, LogEvent.SHARE_OPENED, if (merge) "Shared plan merged" else "Shared plan used",
-            mapOf("target" to "plan", "items" to offer.ids.size, "known" to offer.ids.size, "action" to if (merge) "merge" else "use", "joined" to false),
-        )
-        if (plan == null) {
+        val current = plans.plan(eventId)?.takeIf { !it.isEmpty }
+        val use = SharedPlans.use(known, payload.day, bundle, own, ctx.now)
+        if (use == null) {
             append(null, listOf(AssistantBlock.Text("Nothing in that plan is still ahead.")))
             return
         }
-        plans.applyPlan(eventId, plan)
-        _state.update { s -> s.copy(turns = s.turns.map { if (it.id == turnId) it.copy(shared = offer.copy(handled = true)) else it }) }
-        append(
-            null,
-            listOf(
-                AssistantBlock.Text(if (merge) "Merged: ${Planner.summary(plan, bundle.event.zone)}." else "Using the shared plan: ${Planner.summary(plan, bundle.event.zone)}."),
-                AssistantBlock.PlanBlock(),
-                AssistantBlock.Chips(listOf(Chip("Undo", AssistantAction(ActionName.PLAN_UNDO)))),
-            ).let { blocks -> context()?.let { BlockValidator.validate(blocks, it.blockContext) } ?: blocks },
-        )
-        refreshLive()
+        val merge = SharedPlans.merge(plans.sharedPlans(eventId), own, bundle, current, ctx.now)
+        propose(PlanProposals.shared(current, use, merge, bundle))
     }
 
     /** "Ask about this" from a detail screen. */

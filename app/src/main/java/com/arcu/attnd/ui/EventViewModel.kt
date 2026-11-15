@@ -67,6 +67,9 @@ import com.arcu.attnd.domain.ScreenshotScreen
 import com.arcu.attnd.domain.SearchKind
 import com.arcu.attnd.domain.SupportInfo
 import com.arcu.attnd.domain.Tab
+import com.arcu.attnd.domain.EventTabModel
+import com.arcu.attnd.domain.EventTabs
+import com.arcu.attnd.domain.NavItem
 import com.arcu.attnd.domain.UnreadUpdates
 import com.arcu.attnd.domain.UpdateLevel
 import com.arcu.attnd.domain.UsageMetric
@@ -104,7 +107,7 @@ data class NearbyUiState(
     val error: String? = null,
 )
 
-/** The planner ("My plan" in Schedule), offered only when Gemini Nano is available on the device. */
+/** The planner (the My plan tab): every phone (likes + plain rules; Gemini Nano reads typed requests when available); never in screenshot mode. */
 data class PlanUiState(
     val available: Boolean = false,
     val plan: Plan? = null,
@@ -137,7 +140,15 @@ data class AppUiState(
     val phase: AppPhase = AppPhase.LOADING,
     val bundle: EventBundle? = null,
     val sync: SyncState = SyncState(),
-    val selectedTab: Tab = Tab.MAP,
+    /** The navigation (plan tab spec): My plan, Explore, Flyer, Updates; today's tabs in screenshot mode. */
+    val tabs: EventTabs = EventTabModel.of(emptyList(), null),
+    val selectedItem: NavItem = NavItem.PLAN,
+    /** Explore's view (Map / Schedule / Places), remembered per event. */
+    val exploreView: Tab? = null,
+    /** The organizer tab whose screen is visible (Explore's view, Flyer, Updates); null on My plan. */
+    val selectedTab: Tab? = null,
+    /** Incremented to focus the My plan tab's input bar (the search FAB / shortcut while on My plan). */
+    val focusInput: Int = 0,
     val join: JoinUiState = JoinUiState(),
     val nearby: NearbyUiState = NearbyUiState(),
     val showOptions: Boolean = false,
@@ -189,7 +200,10 @@ data class AppUiState(
 
 private data class LocalState(
     val ready: Boolean = false,
-    val selectedTab: Tab? = null,
+    val selectedItem: NavItem? = null,
+    /** Explore's view per event (also in [DevicePrefs.exploreView]). */
+    val exploreViews: Map<Int, Tab> = emptyMap(),
+    val focusInput: Int = 0,
     val join: JoinUiState = JoinUiState(),
     val nearby: NearbyUiState = NearbyUiState(),
     val showOptions: Boolean = false,
@@ -286,7 +300,11 @@ class EventViewModel(
             val notifications = bundle?.notifications.orEmpty()
             val hearts = eventId?.let(heartStore::hearts) ?: Hearts.NONE
             val plan = eventId?.let(planStore::plan)
-            val plannerAvailable = screenshot == null && state.assistant.availability == AssistantAvailability.AVAILABLE
+            // The planner runs without on-device AI too (likes + the plain-rule reading); never in screenshot mode.
+            val plannerAvailable = screenshot == null
+            val tabs = display?.let { EventTabModel.of(it, legacy = screenshot != null) } ?: EventTabModel.of(emptyList(), null)
+            val selectedItem = state.selectedItem?.takeIf { it in tabs.items } ?: tabs.initialItem
+            val exploreView = tabs.exploreView(eventId?.let { id -> state.exploreViews[id] ?: prefs.exploreView(id)?.let(Tab::fromKey) })
             AppUiState(
                 phase = when {
                     !state.ready || state.screenshotPending -> AppPhase.LOADING
@@ -295,7 +313,11 @@ class EventViewModel(
                 },
                 bundle = bundle,
                 sync = sync,
-                selectedTab = display?.let { d -> state.selectedTab?.takeIf { it in d.tabs } ?: d.defaultTab } ?: Tab.MAP,
+                tabs = tabs,
+                selectedItem = selectedItem,
+                exploreView = exploreView,
+                selectedTab = tabs.contentTab(selectedItem, exploreView),
+                focusInput = state.focusInput,
                 join = state.join,
                 nearby = state.nearby,
                 showOptions = state.showOptions && bundle != null,
@@ -305,8 +327,9 @@ class EventViewModel(
                 focusScheduleItemId = state.focusScheduleItemId,
                 focusNotificationId = state.focusNotificationId,
                 searchRequest = state.searchRequest.takeIf { bundle != null },
-                // Never in screenshot mode (assistant spec §8).
-                assistantOpen = (state.assistantOpen || state.searchRequest != null) && bundle != null && screenshot == null,
+                // The input bar over the other tabs (My plan has its own); never in screenshot mode.
+                assistantOpen = (state.assistantOpen || state.searchRequest != null) && bundle != null && screenshot == null &&
+                    selectedItem != NavItem.PLAN,
                 messageChip = state.messageChip.takeIf { screenshot == null && state.message != null },
                 remindersOn = eventId != null && planStore.reminders(eventId, hearts),
                 // Store screenshots never show the on-device assistant.
@@ -359,15 +382,21 @@ class EventViewModel(
                 .map { state ->
                     val bundle = state.bundle
                     if (state.phase != AppPhase.EVENT || bundle == null) null
-                    else bundle.event.id to (if (state.showOptions) UsageMetric.TAB_OPTIONS else state.selectedTab.key)
+                    // Explore sends its view's tab name; My plan sends nothing new (null).
+                    else bundle.event.id to (if (state.showOptions) UsageMetric.TAB_OPTIONS else EventTabModel.usageName(state.selectedItem, state.selectedTab))
                 }
                 .distinctUntilChanged()
                 .collect { view ->
                     if (view != null) {
-                        val name = if (view.second == Tab.NOTIFICATIONS.key) "updates" else view.second
+                        val name = when (view.second) {
+                            null -> "plan"
+                            Tab.NOTIFICATIONS.key -> "updates"
+                            else -> view.second
+                        }
                         AppLog.debug(LogCategory.UI, LogEvent.SCREEN, "Screen $name", mapOf("name" to name))
                     }
-                    if (view != null && !screenshotMode) usage.track(view.first, UsageMetric.TAB_VIEW, view.second)
+                    val metric = view?.second
+                    if (view != null && metric != null && !screenshotMode) usage.track(view.first, UsageMetric.TAB_VIEW, metric)
                 }
         }
         // Unread updates: the Updates tab counts as seen while it is visible, including updates that
@@ -475,7 +504,7 @@ class EventViewModel(
                     join = JoinUiState(),
                     showOnboarding = tour || (alreadyIn && it.showOnboarding),
                     planError = null,
-                    selectedTab = if (alreadyIn) it.selectedTab else null,
+                    selectedItem = if (alreadyIn) it.selectedItem else null,
                     showOptions = false,
                     focusLocationId = null,
                     focusScheduleItemId = null,
@@ -521,7 +550,7 @@ class EventViewModel(
                     showOptions = false,
                     showOnboarding = false,
                     planError = null,
-                    selectedTab = null,
+                    selectedItem = null,
                     focusLocationId = null,
                     focusScheduleItemId = null,
                     focusNotificationId = null,
@@ -557,11 +586,11 @@ class EventViewModel(
                 startJob.join()
                 if (request.screen == ScreenshotScreen.LAUNCH) {
                     if (repository.currentEventId != null) repository.leave()
-                    local.update { it.copy(selectedTab = null) }
+                    local.update { it.copy(selectedItem = null) }
                 } else {
                     join(silent = false, via = "search") { repository.lookup(request.eventCode) }
                     val location = repository.bundle.value?.let { request.focusLocation(it.locations) }
-                    local.update { it.copy(selectedTab = request.tab, focusLocationId = location?.id) }
+                    local.update { it.copy(selectedItem = request.tab?.let(NavItem::direct), focusLocationId = location?.id) }
                 }
             } finally {
                 local.update { it.copy(screenshotPending = false) }
@@ -644,17 +673,47 @@ class EventViewModel(
         local.update { it.copy(dismissedUpdateVersion = version) }
     }
 
+    /**
+     * Shows [tab]'s screen: Explore on that view for the map / schedule / places, else the tab's own
+     * item. Reselecting the map recenters it. A tab the event doesn't show changes nothing.
+     */
     fun selectTab(tab: Tab) {
-        val current = uiState.value.selectedTab
-        local.update {
-            if (tab == current && tab == Tab.MAP) it.copy(recenterRequest = it.recenterRequest + 1)
-            else it.copy(selectedTab = tab)
+        val current = uiState.value
+        if (tab == Tab.MAP && current.selectedTab == Tab.MAP && !current.showOptions) {
+            local.update { it.copy(recenterRequest = it.recenterRequest + 1) }
+            return
         }
+        local.update { withTab(it, tab) }
+    }
+
+    /** A navigation item tapped (My plan, Explore, Flyer, Updates; today's tabs in screenshot mode). */
+    fun selectItem(item: NavItem) {
+        val current = uiState.value
+        if (item == current.selectedItem && current.selectedTab == Tab.MAP) {
+            local.update { it.copy(recenterRequest = it.recenterRequest + 1) }
+            return
+        }
+        local.update { it.copy(selectedItem = item, assistantOpen = if (item == NavItem.PLAN) false else it.assistantOpen) }
+    }
+
+    /** Explore's switch: shows [view] and remembers it for the event. */
+    fun selectExploreView(view: Tab) {
+        local.update { withTab(it, view) }
+    }
+
+    /** [state] showing [tab] (the item that holds it; Explore's view remembered per event). */
+    private fun withTab(state: LocalState, tab: Tab): LocalState {
+        val ui = uiState.value
+        val item = ui.tabs.itemFor(tab) ?: return state
+        val eventId = repository.bundle.value?.event?.id
+        if (item != NavItem.EXPLORE || eventId == null) return state.copy(selectedItem = item)
+        prefs.setExploreView(eventId, tab.key)
+        return state.copy(selectedItem = item, exploreViews = state.exploreViews + (eventId to tab))
     }
 
     /** Opening the app from a push notification lands on the Notifications tab. */
     fun openNotifications(notificationId: Int? = null) {
-        local.update { it.copy(selectedTab = Tab.NOTIFICATIONS, showOptions = false, focusNotificationId = notificationId ?: it.focusNotificationId) }
+        local.update { withTab(it, Tab.NOTIFICATIONS).copy(showOptions = false, focusNotificationId = notificationId ?: it.focusNotificationId) }
         viewModelScope.launch {
             // On a cold start the saved bundle (and so the event id) is only known after start().
             startJob.join()
@@ -665,7 +724,7 @@ class EventViewModel(
 
     /** Shows a location's detail: on the Locations tab, or as an overlay when that tab is hidden. */
     fun focusLocation(locationId: Int) {
-        local.update { it.copy(focusLocationId = locationId, selectedTab = Tab.LOCATIONS) }
+        local.update { withTab(it, Tab.LOCATIONS).copy(focusLocationId = locationId) }
     }
 
     fun consumeFocusLocation() {
@@ -673,7 +732,7 @@ class EventViewModel(
     }
 
     fun focusScheduleItem(itemId: Int) {
-        local.update { it.copy(focusScheduleItemId = itemId, selectedTab = Tab.SCHEDULE) }
+        local.update { withTab(it, Tab.SCHEDULE).copy(focusScheduleItemId = itemId) }
     }
 
     fun consumeFocusScheduleItem() {
@@ -682,7 +741,7 @@ class EventViewModel(
 
     /** Shows a notification on the Notifications tab (or as an overlay when that tab is hidden). */
     fun focusNotification(notificationId: Int) {
-        local.update { it.copy(focusNotificationId = notificationId, selectedTab = Tab.NOTIFICATIONS, showOptions = false) }
+        local.update { withTab(it, Tab.NOTIFICATIONS).copy(focusNotificationId = notificationId, showOptions = false) }
     }
 
     fun consumeFocusNotification() {
@@ -693,7 +752,7 @@ class EventViewModel(
     fun showOnMap(locationId: Int) {
         val bundle = uiState.value.bundle ?: return
         if (Tab.MAP !in bundle.display.tabs) return
-        local.update { it.copy(selectedTab = Tab.MAP, showOptions = false, mapFocusLocationId = locationId) }
+        local.update { withTab(it, Tab.MAP).copy(showOptions = false, mapFocusLocationId = locationId) }
     }
 
     fun consumeMapFocus() {
@@ -736,7 +795,8 @@ class EventViewModel(
     fun runMessageChip() {
         val chip = local.value.messageChip ?: return
         local.update { it.copy(messageChip = null) }
-        val result = assistantController.run(chip.action, chip.label, ActionSource.MANUAL)
+        // A plan edit previews in place on My plan (AssistantHost.onProposal).
+        val result = assistantController.run(chip.action, chip.label, ActionSource.RULES)
         if (result != null) local.update { it.copy(message = result) }
     }
 
@@ -753,8 +813,10 @@ class EventViewModel(
             val bundle = repository.bundle.value ?: return@launch
             if (request.eventId != null && request.eventId != bundle.event.id) return@launch
             val tabs = bundle.display.tabs
+            // Searches go to My plan's input bar; items of hidden tabs open in the bar over the current tab.
             fun search(query: String, detail: SearchEntry? = null) = local.update {
-                it.copy(showOptions = false, searchRequest = SearchRequest(query, (it.searchRequest?.serial ?: 0) + 1, detail))
+                val base = if (detail == null && NavItem.PLAN in uiState.value.tabs.items) it.copy(selectedItem = NavItem.PLAN) else it
+                base.copy(showOptions = false, searchRequest = SearchRequest(query, (it.searchRequest?.serial ?: 0) + 1, detail))
             }
             when (val target = request.target) {
                 is OpenTarget.Location ->
@@ -774,7 +836,7 @@ class EventViewModel(
                 is OpenTarget.Notification -> when {
                     Tab.NOTIFICATIONS !in tabs -> search("", target.id?.let { SearchEntry(SearchKind.NOTIFICATION, it) })
                     target.id != null -> focusNotification(target.id)
-                    else -> local.update { it.copy(selectedTab = Tab.NOTIFICATIONS, showOptions = false) }
+                    else -> local.update { withTab(it, Tab.NOTIFICATIONS).copy(showOptions = false) }
                 }
                 OpenTarget.EventInfo -> showOptions(true)
                 is OpenTarget.Search -> search(target.query)
@@ -791,8 +853,9 @@ class EventViewModel(
         }
     }
 
-    fun consumeSearchRequest() {
-        local.update { it.copy(searchRequest = null, assistantOpen = it.assistantOpen || it.searchRequest != null) }
+    /** The bar took the request; [keepOpen] = the bar over a tab (My plan's bar is always there). */
+    fun consumeSearchRequest(keepOpen: Boolean = true) {
+        local.update { it.copy(searchRequest = null, assistantOpen = if (keepOpen) it.assistantOpen || it.searchRequest != null else it.assistantOpen) }
     }
 
     // ── Event assistant (assistant spec) ────────────────────────────────────
@@ -804,6 +867,11 @@ class EventViewModel(
         override suspend fun makePlan(request: String, source: String): Plan? = buildPlan(request, source)
         override fun planError(): String? = local.value.planError
         override fun open(screen: String, ref: EntityRef?) = openScreen(screen, ref)
+        override fun canPlan(): Boolean = !screenshotMode
+        override fun onProposal() {
+            // A plan edit previews in place on My plan (typed on another tab, a hint, a like clash).
+            if (NavItem.PLAN in uiState.value.tabs.items) local.update { it.copy(selectedItem = NavItem.PLAN, assistantOpen = false, searchRequest = null, showOptions = false) }
+        }
         override fun setSetting(name: ActionName, on: Boolean): Boolean {
             if (on && !hasNotificationPermission()) return false
             when (name) {
@@ -834,7 +902,9 @@ class EventViewModel(
     fun openAssistant() {
         if (screenshotMode) return
         AppLog.debug(LogCategory.UI, LogEvent.SCREEN, "Screen assistant", mapOf("name" to "assistant"))
-        local.update { it.copy(assistantOpen = true, showOptions = false) }
+        // On My plan the bar is always there: focus it; elsewhere it opens over the tab.
+        if (uiState.value.selectedItem == NavItem.PLAN) local.update { it.copy(focusInput = it.focusInput + 1, showOptions = false) }
+        else local.update { it.copy(assistantOpen = true, showOptions = false) }
     }
 
     fun closeAssistant() {
@@ -900,7 +970,7 @@ class EventViewModel(
                 )
                 return@launch
             }
-            local.update { it.copy(assistantOpen = true, showOptions = false, showOnboarding = false) }
+            local.update { it.copy(selectedItem = NavItem.PLAN, showOptions = false, showOnboarding = false) }
             assistantController.openShared(payload, joined = !already)
         }
     }
@@ -967,7 +1037,7 @@ class EventViewModel(
             val hearts = heartStore.hearts(bundle.event.id)
             val rules = PlanRequest.heuristic(request, bundle, now)
             val modelStarted = System.nanoTime()
-            val model = try {
+            val model = if (local.value.assistant.availability != AssistantAvailability.AVAILABLE) null else try {
                 val prompt = PlanRequest.prompt(bundle, request, hearts, now)
                 val raw = assistant.extractPreferences(prompt)
                 PlanRequest.parse(raw, bundle, now)
@@ -1049,11 +1119,10 @@ class EventViewModel(
         local.update { it.copy(planError = null) }
     }
 
-    /** Opens Schedule → My plan. */
+    /** Opens the My plan tab. */
     fun showPlan() {
-        val bundle = repository.bundle.value ?: return
-        if (Tab.SCHEDULE !in bundle.display.tabs) return
-        local.update { it.copy(selectedTab = Tab.SCHEDULE, showOptions = false, showPlanRequest = it.showPlanRequest + 1) }
+        if (NavItem.PLAN !in uiState.value.tabs.items) return
+        local.update { it.copy(selectedItem = NavItem.PLAN, showOptions = false, assistantOpen = false, showPlanRequest = it.showPlanRequest + 1) }
     }
 
     // ── Live Update and onboarding ─────────────────────────────────────────
@@ -1082,7 +1151,7 @@ class EventViewModel(
             showPlan()
         } else {
             local.update {
-                it.copy(showOptions = false, assistantOpen = true, searchRequest = SearchRequest(example.text, (it.searchRequest?.serial ?: 0) + 1, ask = true))
+                it.copy(showOptions = false, selectedItem = NavItem.PLAN, searchRequest = SearchRequest(example.text, (it.searchRequest?.serial ?: 0) + 1, ask = true))
             }
         }
     }

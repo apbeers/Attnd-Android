@@ -130,6 +130,11 @@ class DevicePrefs(context: Context) {
 
     fun setOnboardingSeen(eventId: Int) = prefs.edit { putBoolean("$KEY_ONBOARDING$eventId", true) }
 
+    /** Explore's switch (Map | Schedule | Places) per event: the view last shown (a `Tab` key). */
+    fun exploreView(eventId: Int): String? = prefs.getString("$KEY_EXPLORE_VIEW$eventId", null)
+
+    fun setExploreView(eventId: Int, key: String) = prefs.edit { putString("$KEY_EXPLORE_VIEW$eventId", key) }
+
     // Event assistant (assistant spec §4, §7): stored with the plan per event, kept after leaving.
 
     /** The plan's undo stack (`PlanHistory.encode`). */
@@ -195,6 +200,7 @@ class DevicePrefs(context: Context) {
         private const val KEY_URGENT_DISMISSED = "urgent_dismissed_"
         private const val KEY_REMINDERS = "reminders_shown_"
         private const val KEY_ONBOARDING = "onboarding_seen_"
+        private const val KEY_EXPLORE_VIEW = "explore_view_"
         private const val KEY_PLAN_HISTORY = "plan_history_"
         private const val KEY_CONVERSATION = "assistant_conversation_"
         private const val KEY_TRANSCRIPT = "assistant_transcript_"
