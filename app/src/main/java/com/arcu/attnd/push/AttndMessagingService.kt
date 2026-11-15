@@ -1,6 +1,12 @@
 package com.arcu.attnd.push
 
+import android.os.SystemClock
 import com.arcu.attnd.AttndApplication
+import com.arcu.attnd.data.RefreshResult
+import com.arcu.attnd.domain.AppLog
+import com.arcu.attnd.domain.LogCategory
+import com.arcu.attnd.domain.LogEvent
+import com.arcu.attnd.domain.PerfMetric
 import com.arcu.attnd.live.LiveNotifications
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
@@ -31,16 +37,44 @@ class AttndMessagingService : FirebaseMessagingService() {
     }
 
     override fun onMessageReceived(message: RemoteMessage) {
+        val received = SystemClock.elapsedRealtime()
         val data = message.data
         val repository = graph.repository
         val eventId = data[PushNotifications.KEY_EVENT_ID]?.toIntOrNull()
         val isForCurrentEvent = eventId == null || eventId == repository.currentEventId
+        val type = when (data[PushNotifications.KEY_TYPE]) {
+            PushNotifications.TYPE_CONTENT_UPDATED -> "content_updated"
+            null -> if (message.notification != null) "notification" else "unknown"
+            else -> if (data[PushNotifications.KEY_TYPE] == "notification") "notification" else "unknown"
+        }
+        val foreground = graph.logSink.isForeground
+        if (!foreground) AppLog.info(LogCategory.BACKGROUND, LogEvent.WAKE, "Woken by a push", mapOf("reason" to "silent_push"))
+        AppLog.info(
+            LogCategory.PUSH, LogEvent.PUSH_RECEIVED, "Push $type",
+            mapOf(
+                "type" to type,
+                "priority" to data[PushNotifications.KEY_PRIORITY],
+                "content_version" to data[PushNotifications.KEY_CONTENT_VERSION]?.trim()?.toIntOrNull(),
+                "notification_id" to data[PushNotifications.KEY_NOTIFICATION_ID]?.toIntOrNull(),
+                "state" to if (foreground) "fg" else "bg",
+            ),
+        )
 
         when (data[PushNotifications.KEY_TYPE]) {
             PushNotifications.TYPE_CONTENT_UPDATED -> {
                 // FCM data values are strings.
                 val version = data[PushNotifications.KEY_CONTENT_VERSION]?.trim()?.toIntOrNull()
-                if (isForCurrentEvent) graph.appScope.launch { repository.onContentUpdated(version) }
+                if (isForCurrentEvent) {
+                    graph.appScope.launch {
+                        val result = repository.onContentUpdated(version)
+                        // API-014: how long a content change took to reach the screen from the push.
+                        if (result == RefreshResult.Updated) {
+                            graph.perf.record(PerfMetric.PUSH_REFRESH_DELAY, PerfMetric.pushDelayBucket(SystemClock.elapsedRealtime() - received))
+                        }
+                    }
+                } else {
+                    AppLog.info(LogCategory.PUSH, LogEvent.PUSH_HANDLED, "content_updated for another event: ignored", mapOf("type" to type, "action" to "ignored_other_event"))
+                }
             }
             else -> {
                 // Organizer notification (or an untyped message with a notification block).
@@ -52,12 +86,14 @@ class AttndMessagingService : FirebaseMessagingService() {
                     // urgent channel whenever POST_NOTIFICATIONS is granted, even with the in-app opt-in
                     // off; the Live Update switches to urgent mode.
                     LiveNotifications.showUrgent(this, serverId, title ?: "Urgent update", body.orEmpty())
+                    AppLog.notice(LogCategory.PUSH, LogEvent.PUSH_HANDLED, "Urgent notification shown", mapOf("type" to type, "action" to "urgent", "ms" to SystemClock.elapsedRealtime() - received))
                     if (isForCurrentEvent && eventId != null && serverId != null) {
                         graph.appScope.launch { graph.liveUpdates.onUrgent(eventId, serverId, title.orEmpty(), body.orEmpty()) }
                     }
                 } else if (title != null || body != null) {
                     val id = serverId ?: (System.currentTimeMillis() % Int.MAX_VALUE).toInt()
                     PushNotifications.show(this, title ?: "Event update", body.orEmpty(), id, serverId)
+                    AppLog.info(LogCategory.PUSH, LogEvent.PUSH_HANDLED, "Notification shown", mapOf("type" to type, "action" to "shown", "ms" to SystemClock.elapsedRealtime() - received))
                 }
                 if (isForCurrentEvent) graph.appScope.launch { repository.refresh(silent = true) }
             }

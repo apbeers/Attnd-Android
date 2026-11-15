@@ -1,6 +1,9 @@
 package com.arcu.attnd.util.integrity
 
 import android.content.Context
+import com.arcu.attnd.domain.AppLog
+import com.arcu.attnd.domain.LogCategory
+import com.arcu.attnd.domain.LogLevel
 import com.google.android.play.core.integrity.IntegrityManagerFactory
 import com.google.android.play.core.integrity.IntegrityTokenRequest
 import com.google.android.play.core.integrity.IntegrityTokenResponse
@@ -24,6 +27,7 @@ class IntegrityManager(context: Context) {
             val response: IntegrityTokenResponse = integrityManager.requestIntegrityToken(request).await()
             Result.success(response.token())
         } catch (e: Exception) {
+            AppLog.caught(LogCategory.AUTH, "play_integrity", e, LogLevel.WARNING)
             Result.failure(e)
         }
     }

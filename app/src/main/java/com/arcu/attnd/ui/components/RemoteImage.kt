@@ -21,6 +21,9 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import com.arcu.attnd.data.ImageDiskCache
 import com.arcu.attnd.data.ImageFetch
+import com.arcu.attnd.domain.AppLog
+import com.arcu.attnd.domain.LogCategory
+import com.arcu.attnd.domain.LogEvent
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
@@ -108,7 +111,8 @@ object ImageLoader {
             decode(bytes, maxDimension)
         } catch (e: CancellationException) {
             throw e
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            AppLog.warning(LogCategory.NET, LogEvent.IMAGE_FAILED, "Image load failed (${AppLog.errorKind(e)})", mapOf("error" to AppLog.errorKind(e), "domain" to e.javaClass.simpleName))
             null
         } finally {
             connection.disconnect()

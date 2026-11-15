@@ -1,10 +1,12 @@
 package com.arcu.attnd.util.integrity
 
 import android.content.Context
-import android.util.Log
 import androidx.core.content.edit
 import com.arcu.attnd.data.attest.AndroidAttestRequest
 import com.arcu.attnd.data.attest.AttestationApi
+import com.arcu.attnd.domain.AppLog
+import com.arcu.attnd.domain.LogCategory
+import com.arcu.attnd.domain.LogEvent
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -34,7 +36,6 @@ import java.util.Base64
  */
 object AttestationManager {
 
-    private const val TAG = "AttestationManager"
     private const val PREFS_NAME = "attnd_attestation"
     private const val KEY_JWT = "jwt"
     private const val FAILURE_BACKOFF_MS = 10 * 60 * 1000L
@@ -86,7 +87,13 @@ object AttestationManager {
             runCatching { attest(ctx) }
                 .onFailure {
                     lastFailureAt = System.currentTimeMillis()
-                    Log.w(TAG, "Attestation failed: ${it.message}")
+                    AppLog.warning(
+                        LogCategory.AUTH, LogEvent.ATTEST_FAILED, "Attestation failed; static key fallback, retried in 10 min",
+                        mapOf(
+                            "kind" to "play_integrity", "error" to AppLog.errorKind(it), "domain" to it.javaClass.simpleName,
+                            "retry_after_s" to FAILURE_BACKOFF_MS / 1000,
+                        ),
+                    )
                 }
                 .getOrNull()
         }
@@ -94,6 +101,7 @@ object AttestationManager {
 
     /** Clear the cached JWT (call after receiving a 401 to force re-attestation). */
     fun invalidateToken() {
+        AppLog.info(LogCategory.AUTH, LogEvent.TOKEN_EXPIRED, "Stored attestation token dropped", mapOf("reason" to "401"))
         lastFailureAt = 0L
         appContext?.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             ?.edit { remove(KEY_JWT) }
@@ -106,7 +114,8 @@ object AttestationManager {
 
         // 1. Fetch nonce
         val nonce = attestApi.nonce()
-        Log.d(TAG, "Nonce fetched")
+        val started = System.nanoTime()
+        AppLog.info(LogCategory.AUTH, LogEvent.ATTEST_STARTED, "Attestation started", mapOf("kind" to "play_integrity"))
 
         // 2. Request Play Integrity token
         val integrityMgr = IntegrityManager(context)
@@ -114,7 +123,6 @@ object AttestationManager {
         val integrityToken = tokenResult.getOrElse {
             throw AttestationException("Play Integrity token unavailable: ${it.message}", it)
         }
-        Log.d(TAG, "Integrity token obtained")
 
         // 3. Send to backend
         val jwt = attestApi.attestAndroid(
@@ -124,7 +132,10 @@ object AttestationManager {
                 nonce = nonce,
             )
         )
-        Log.i(TAG, "Attestation complete, JWT received")
+        AppLog.info(
+            LogCategory.AUTH, LogEvent.ATTEST_FINISHED, "Attestation complete",
+            mapOf("kind" to "play_integrity", "ms" to (System.nanoTime() - started) / 1_000_000, "ok" to true),
+        )
 
         // 4. Persist
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit {

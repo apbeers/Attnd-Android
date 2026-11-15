@@ -34,10 +34,10 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -58,15 +58,19 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import com.arcu.attnd.data.log.PermissionLog
+import com.arcu.attnd.domain.AppLog
+import com.arcu.attnd.domain.DistanceFormat
 import com.arcu.attnd.domain.Event
 import com.arcu.attnd.domain.EventTime
+import com.arcu.attnd.domain.LogCategory
+import com.arcu.attnd.domain.LogLevel
 import com.arcu.attnd.domain.NearbyEvent
+import com.arcu.attnd.domain.RelativeTime
 import com.arcu.attnd.ui.JoinUiState
 import com.arcu.attnd.ui.NearbyUiState
-import com.arcu.attnd.ui.components.QrScannerDialog
-import com.arcu.attnd.domain.DistanceFormat
-import com.arcu.attnd.domain.RelativeTime
 import com.arcu.attnd.ui.components.DistanceArrow
+import com.arcu.attnd.ui.components.QrScannerDialog
 import com.arcu.attnd.ui.components.rememberDistanceUnits
 import com.arcu.attnd.ui.components.rememberNow
 import com.arcu.attnd.ui.components.rememberUserLocation
@@ -105,9 +109,11 @@ fun LaunchScreen(
     }
 
     val locationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+        PermissionLog.location("launch", result)
         if (result.values.any { it }) findNearby() else onNearbyError("Location permission is needed to find nearby events.")
     }
     val cameraPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        PermissionLog.camera(granted)
         if (granted) showScanner = true else cameraError = "Camera permission is needed to scan QR codes."
     }
 
@@ -252,7 +258,8 @@ private suspend fun currentLocation(context: Context): Pair<Double, Double>? {
         val location = client.lastLocation.await()
             ?: client.getCurrentLocation(Priority.PRIORITY_BALANCED_POWER_ACCURACY, CancellationTokenSource().token).await()
         location?.let { it.latitude to it.longitude }
-    } catch (_: Exception) {
+    } catch (e: Exception) {
+        AppLog.caught(LogCategory.LOCATION, "launch.location", e, LogLevel.WARNING)
         null
     }
 }

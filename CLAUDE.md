@@ -35,7 +35,8 @@ attnd-web is the coordinating repo. The API contract ([`API_V2.md`](https://gith
 - **Play Install Referrer** — deep link on first install via Play Store
 - **Firebase Cloud Messaging** — push (optional at build time, see below)
 - **compileSdk / targetSdk**: 37 — **minSdk**: 35 (Android 15; we support roughly the last two years of Android, so no compatibility branches for older versions and no core-library desugaring — `java.time` is native)
-- **Application ID**: `com.arcu.attnd` (debug builds: `com.arcu.attnd.debug`)
+- **Application ID**: `com.arcu.attnd` (debug builds: `com.arcu.attnd.debug`; the `dev` build type keeps `com.arcu.attnd`, which Play and `google-services.json` need)
+- **Build types**: `debug` (local, `.debug` suffix, `BuildConfig.DEV = true`); `dev` (`initWith(release)`: upload-key signed, Play Integrity, no static key, **not debuggable** (Play rejects debuggable bundles on every track), **no R8** (`minifyEnabled false`, readable stacks), `BuildConfig.DEV = true`) for `develop` → Play internal testing; `release` (R8 minify + resource shrinking, `DEV = false`) for `main` → production. `proguard-rules.pro` keeps the serializers of every `@Serializable` class and `SourceFile,LineNumberTable` (renamed to `SourceFile`) for retrace; AppFunctions, Maps, ML Kit, Play services and Firebase ship consumer rules
 
 Exact dependency versions live in `app/build.gradle`.
 
@@ -75,6 +76,13 @@ app/
       PlanCodec.kt                #   Plan ⇄ JSON for the device's preferences (lenient)
       PlanRequest.kt              #   Model prompt + JSON validation, plain-rule reading, merge, plan-request detection, example chips
       LiveFollow.kt               #   Live Update content, windows, wake-ups, reminders, urgent block, venue geofence circle
+      AppLog.kt                   #   API-013 logging facade (level first, Redact, sink), error kinds, Trace sections + perf.signpost
+      Logging.kt                  #   LogLevel / LogCategory / LogRecord (v1 JSON line), LogJson, the viewer's LogFilter
+      LogEvents.kt                #   Every event name we emit (all in attnd-web LOG_EVENTS.md)
+      LogRedaction.kt             #   Redact: path templates, text → lengths, secrets/emails/ids masked, 0.01° coordinates
+      DebugMode.kt                #   Debug codes D-XXXXX, 10-min sessions, 5-min pre-roll, levels
+      Diagnostics.kt              #   Log upload batches / body / Retry-After; exit reports (crash/anr/low_memory/exit)
+      PerfMetrics.kt              #   API-014 perf_* names and bucket labels
     data/
       net/HttpClient.kt           #   HttpURLConnection client (no caching, so 304s reach us)
       api/AttndApi.kt             #   v2 endpoints; 401 → re-attest → retry once; ETag/If-None-Match
@@ -92,6 +100,9 @@ app/
       DeviceSensors.kt            #   UserLocationSource (fused location) + HeadingSource (compass), ref-counted, only while visible
       WalkRouter.kt               #   Routes API computeRoutes + per-location cache; AppSignature (signing cert SHA-1)
       PlanStore.kt                #   Per event: plan, Follow on Lock Screen, skipped items, arrival, urgent block, reminders shown (version flow)
+      log/                        #   API-013/014: LogStore (ring buffer), AndroidLogSink (logcat + writer thread + fg/bg + network), LogUploader,
+                                  #   DiagnosticsController (debug mode, levels, export), ExitReporter (ApplicationExitInfo + crash handler),
+                                  #   PerfRecorder (perf_* into usage), LaunchTiming, PermissionLog
     live/                         # Live Update (spec §8): LiveUpdateController (AppGraph), LiveNotifications (channels, Live Update, reminders, urgent), LiveUpdateReceiver (alarms, actions, geofence, boot), VenueGeofence
     assistant/                    # AppFunctions service (KSP generates AttndAppFunctionService), dynamic shortcuts, open intents
     push/                         # FCM service + notification channel / display
@@ -100,7 +111,7 @@ app/
       AttndApp.kt                 #   Root composable, theme (accent colour), EventShell with NavigationSuiteScaffold
       MapTab.kt                   #   Foldable-aware map + secondary pane
       components/                 #   RemoteImage, FoldAwareSplit, IdListDetail, banners, chips, QR scanner; Glance.kt (DistanceArrow, WalkTime, HeartButton, PeekSheet, UpdateBanner, LocalEventActions, LocalScreenshotMode)
-      screens/                    #   Launch, Map, Locations, Schedule (+ PlanScreen: My plan), Notifications, Flyer, Options, Search (app-wide search + Ask), Onboarding (tour)
+      screens/                    #   Launch, Map, Locations, Schedule (+ PlanScreen: My plan), Notifications, Flyer, Options (+ LogViewerScreen), Search (app-wide search + Ask), Onboarding (tour)
       theme/
   src/test/java/com/arcu/attnd/
     unit/                         # JVM tests: decoding, display defaults, grouping in event tz, HTTP client, usage, support info
@@ -188,6 +199,22 @@ Everything is local: no server or API change, and the query only ever goes to th
 - **Dynamic shortcuts** (`assistant/AppShortcuts.kt`, `ShortcutManagerCompat`): Search, Happening now, Updates while an event is joined; removed without one. App Actions `shortcuts.xml` capabilities are not used (they target Google Assistant; Gemini uses AppFunctions).
 - **Planner**: see Planner, onboarding, Live Update; Ask requests that look like plans make one.
 - **Ask about this event** (search screen, Search | Ask toggle): Gemini Nano via ML Kit GenAI Prompt API **beta** (`data/OnDeviceAssistant.kt`). Shown only when `checkStatus()` says AVAILABLE, DOWNLOADABLE (Download button) or DOWNLOADING (progress); otherwise plain search. `AssistantPrompt` retrieves context locally (keywords, any-token matches + now/next, ≤ 12 items), asks for ≤ 3 sentences citing `[S12]`/`[L5]`/`[U9]`/`[E]`, and the cited items (or the context) become tappable results; on any error the matches are shown instead. Never in screenshot mode.
+
+## Logging & diagnostics (API-013, API-014)
+
+Shared spec with iOS and attnd-web (record format, event names, redaction: attnd-web `LOG_EVENTS.md`; endpoints: `API_V2.md` → Diagnostics). Unit tests: `LoggingTest`, `LogRedactionTest`, `DiagnosticsUploadTest`, `AttndApiClientTest` (request ids).
+- **Facade** `AppLog.debug(LogCategory.NET, LogEvent.REQUEST_FINISHED, "…", mapOf(…))` (`domain/AppLog.kt`, pure Kotlin so `data/api` logs too): level checked first, message and fields through `Redact`, then the sink. `AndroidLogSink` writes `android.util.Log` (tag `Attnd/<cat>`) and queues the record for one background writer thread → `LogStore` (`filesDir/logs/current.jsonl` + `previous.jsonl`, ~2 MB, newest kept, `seq` continues across restarts). Each record carries app/build/os/model, `fg`/`bg` (started activities), `wifi`/`cell`/`none`/`other`, the joined event and `diag`. **Use only names from `LogEvent` (all listed in `LOG_EVENTS.md`); add a row there first.** Caught errors: `AppLog.caught(cat, where, e, level)` → `error.caught` (`domain` = exception class, `code`, `type` = `AppLog.errorKind`, `where`).
+- **Redaction** (`Redact`): never search/Ask/plan text (`query_len`; dev builds may add `query`, cut and masked), never tokens/keys/push tokens/JWTs/emails/device id/support code (keys dropped, values masked), URLs as path templates (`/api/v2/events/{id}/bundle/`, no host or query), coordinates 0.01° or distances only.
+- **Every API call** (`AttndApi.exchange`) sends a new 16-hex `X-Request-Id` (also on the 401 retry, logged as `net.request.retry`) and, during a debug session, `X-Diag-Session`; logs `net.request.started` (trace) / `finished` (status, ms, bytes, `cache` 304/etag/none, attempt, req_id) / `failed` (`error` timeout/offline/dns/tls/…). `AttndApi.callListener` feeds the perf counts. Diagnostics uploads are not logged themselves.
+- **Levels and debug mode** (`DiagnosticsController`, local `attnd_diagnostics` prefs, excluded from backup like `filesDir/logs/`): `BuildConfig.DEV` (dev and debug builds) → `debug`, one persistent debug code per install, continuous upload (`reason: "dev"`); release → `warning`, local only, until Options → About & support → **Turn on debug logging for 10 minutes** (consent text, random `D-XXXXX` with Copy, countdown, Turn off; `debug` + upload incl. the 5 minutes before from the ring buffer; the expiry is stored, so it ends on time across restarts; never linked to the device id, never remote).
+- **Uploads** (`LogUploader`, `POST diagnostics/logs/`): the session's records after its stored cursor (seq per code) and from `uploadFromMs`, ≤ 500 per batch and ≤ 1 MB raw, gzip; every ~10 s in debug mode, ~30 s or 200 records in dev builds, and on background; `429`/`503` wait for `Retry-After`; `400`/`413` batches are skipped; failures back off 60 s and stay in the ring buffer. Logged as `logging.upload` (into the next batch).
+- **Log viewer** (`LogViewerScreen`, from About & support): "Logs" (dev builds, debug mode) or "Recent logs" (production: what the ring buffer kept); filters errors only / level / category / text, newest first, tap for fields; Share writes the filtered lines to `cacheDir/log-exports/*.jsonl` and sends it through `FileProvider` `<package>.logs`.
+- **Trace sections** (`android.os.Trace`, plus `perf.signpost` with `ms`): `launch` (process start / onCreate → first committed frame, `LaunchTiming`), `bundle_fetch`, `planner`, `map_first_render`.
+- **Crash / ANR / exit reports** (`ExitReporter`, `POST diagnostics/reports/`, anonymous, every build): at launch (+8 s) `getHistoricalProcessExitReasons` newer than the last handled → `crash` (`REASON_CRASH*`, with the obfuscated Java stack our uncaught-exception handler saved in `filesDir/logs/crash.txt`, or that file alone), `anr` (`getTraceInputStream` thread dump), `low_memory`, `exit` (other system exits; exit-self, user-requested/stopped and app updates are skipped); `build` = versionCode (the mapping's key); `lifecycle.exit_reason` and `logging.report.sent` logged; retried next launch, dropped after 7 days.
+- **API-014 perf counts** (`PerfRecorder`, into the usage batch; `domain/PerfMetrics.kt` has the exact bucket labels): `perf_launch_cold`/`_warm` (only into an event), `perf_bundle_fetch`/`perf_bundle_304`, `perf_api_error` (`4xx`/`5xx`/`timeout`/`offline`, diagnostics uploads excluded), `perf_push_refresh_delay` (push received → bundle applied), `perf_live_start_fail` (`denied`/`disabled`/`error`, once until it posts again), `perf_planner_ms` (the `Planner` run only), `perf_map_first_render` (first composition → `onMapLoaded`); each also logged as `perf.metric`. Counts outside an event wait for the next one (≤ 50).
+- **Screenshot mode** is quiet: no uploads, no `X-Diag-Session`, no perf counts.
+- **Symbols**: CI uploads R8's `mapping.txt` of every release build to Play (`play_publish.py --mapping`, `edits.deobfuscationfiles` `proguard`, same edit as the bundle; `--native-symbols` → `nativeCode` if a build ever has native symbols) and to attnd-web (`POST /api/diagnostics/symbols/?platform=android&version=…&build=…`, gzip; `ATTND_PROD_CI_KEY` on main, `ATTND_API_KEY` would be the dev server's but dev builds have no mapping), a failure there is only a warning.
+- Play data safety: "Crash logs" and "Diagnostics" collected, not shared, not linked to identity; debug logs optional (user-started).
 
 ## API (v2)
 
@@ -277,17 +304,18 @@ CI sets `VERSION_CODE=<run number>000` and `VERSION_NAME=2.0.<run number>` (alwa
 | Trigger | What happens |
 |---------|--------------|
 | Every run | In parallel: **Unit tests & lint** (`testDebugUnitTest lintDebug`, plus `assembleDebug` on pull requests; then `scripts/ci/lint_summary.py` prints lint's findings as warnings, never failing), **Integration · dev** (`dev.attnd.app`, secret `ATTND_API_KEY`) and **Integration · prod** (`attnd.app`, secret `ATTND_PROD_CI_KEY`, accepted for the DEMO event only): `testDebugUnitTest -PintegrationTests`, then `scripts/ci/junit_summary.py`. The integration jobs never gate delivery; prod is `continue-on-error` (a failure is a warning). A missing secret skips that job's tests |
-| Push to `develop` | Also in parallel: **Signed bundle** (`bundleRelease` against the `dev` environment's `ATTND_SERVER`, the `.aab` kept as the `android-bundle` artifact), then **Publish to Play internal testing** (Linux, `needs: [test, bundle]`, so failing unit tests block it) |
-| Push to `main` | The same against `attnd.app` → **Publish to Play production** (staged rollout if `PLAY_ROLLOUT` < 1), plus the store listing text in the same edit |
+| Push to `develop` | Also in parallel: **Signed bundle** (`bundleDev -x lintVitalDev`: the `dev` build type, against the `dev` environment's `ATTND_SERVER`; `app.aab` kept as the `android-bundle` artifact), then **Publish to Play internal testing** (Linux, `needs: [test, bundle]`, so failing unit tests block it) |
+| Push to `main` | `bundleRelease -x lintVitalRelease` against `attnd.app`; the artifact also holds R8's `mapping.txt`, which the bundle job posts to attnd-web (`POST /api/diagnostics/symbols/`, `ATTND_PROD_CI_KEY`; a failure is a warning) → **Publish to Play production** (staged rollout if `PLAY_ROLLOUT` < 1), with the store listing text and the mapping (`edits.deobfuscationfiles`) in the same edit |
 
 **Gradle caches**: every job restores `~/.gradle/caches` (including the Gradle build cache, `org.gradle.caching=true`) and `~/.gradle/wrapper` with `actions/cache`, keyed per job (`gradle-test-…`, `gradle-bundle-…`, `gradle-integration-…`) on the build files' hash plus the commit, falling back to the newest earlier cache; pushes save a fresh one (pull requests only read). The project's `.gradle/` (configuration cache) is never cached, so signing settings never land in a cache.
 
-Docs-only commits (`*.md`) don't run the pipeline; a newer push to `develop` cancels the older run (`main` never cancels). Gradle: parallel, build cache, configuration cache, 4 GB heap (`gradle.properties`). Publishing uses `scripts/ci/play_publish.py` (Play Developer API v3, service-account JWT) — no third-party actions or Gradle plugins. Release builds never contain the static API key. Server host: `ATTND_SERVER` → `BuildConfig.ATTND_SERVER` (default `attnd.app`). Setup checklist: `SETUP.md` in attnd-web.
+`play_publish.py`'s bundle mode takes `--mapping mapping.txt` and `--native-symbols <zip>` (both uploaded for the bundle's version code before the commit). Docs-only commits (`*.md`) don't run the pipeline; a newer push to `develop` cancels the older run (`main` never cancels). Gradle: parallel, build cache, configuration cache, 4 GB heap (`gradle.properties`). Publishing uses `scripts/ci/play_publish.py` (Play Developer API v3, service-account JWT) — no third-party actions or Gradle plugins. Release builds never contain the static API key. Server host: `ATTND_SERVER` → `BuildConfig.ATTND_SERVER` (default `attnd.app`). Setup checklist: `SETUP.md` in attnd-web.
 
 ## Building
 
 ```bash
 ./gradlew assembleDebug        # debug
+./gradlew bundleDev            # dev (release-signed, not minified; requires signing.properties)
 ./gradlew assembleRelease      # release (requires signing.properties); or ./build_release.command
 ```
 

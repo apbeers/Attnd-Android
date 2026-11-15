@@ -11,12 +11,17 @@ import androidx.appfunctions.AppFunctionService
 import androidx.appfunctions.AppFunctionServiceEntryPoint
 import com.arcu.attnd.AppGraph
 import com.arcu.attnd.AttndApplication
+import com.arcu.attnd.domain.AppLog
 import com.arcu.attnd.domain.EventBundle
 import com.arcu.attnd.domain.EventFact
 import com.arcu.attnd.domain.EventFacts
 import com.arcu.attnd.domain.Hearts
+import com.arcu.attnd.domain.LogCategory
+import com.arcu.attnd.domain.LogEvent
 import com.arcu.attnd.domain.OpenRequest
+import com.arcu.attnd.domain.Redact
 import com.arcu.attnd.domain.SearchKind
+import kotlinx.coroutines.CancellationException
 import java.time.Instant
 import java.util.Locale
 
@@ -76,10 +81,10 @@ abstract class BaseAttndAppFunctionService : AppFunctionService() {
      * @return Matching items, best match first.
      */
     @AppFunctionDeclaration(isDescribedByKDoc = true)
-    suspend fun searchEvent(query: String, limit: Int = EventFacts.DEFAULT_LIMIT): List<AttndEventItem> {
+    suspend fun searchEvent(query: String, limit: Int = EventFacts.DEFAULT_LIMIT): List<AttndEventItem> = appFunction("searchEvent", query) {
         if (query.isBlank()) throw AppFunctionInvalidArgumentException("The query is empty.")
         val bundle = bundle()
-        return EventFacts.search(bundle, query, Instant.now(), limit = EventFacts.limit(limit), locale = Locale.getDefault())
+        EventFacts.search(bundle, query, Instant.now(), limit = EventFacts.limit(limit), locale = Locale.getDefault())
             .map { it.toItem(bundle) }
     }
 
@@ -89,9 +94,9 @@ abstract class BaseAttndAppFunctionService : AppFunctionService() {
      * @return Schedule items in progress first, then upcoming ones, in time order.
      */
     @AppFunctionDeclaration(isDescribedByKDoc = true)
-    suspend fun getHappeningNow(): List<AttndEventItem> {
+    suspend fun getHappeningNow(): List<AttndEventItem> = appFunction("getHappeningNow", null) {
         val bundle = bundle()
-        return EventFacts.happeningNow(bundle, Instant.now()).map { it.toItem(bundle) }
+        EventFacts.happeningNow(bundle, Instant.now()).map { it.toItem(bundle) }
     }
 
     /**
@@ -101,10 +106,10 @@ abstract class BaseAttndAppFunctionService : AppFunctionService() {
      * @return Matching schedule items with their start and end times and place.
      */
     @AppFunctionDeclaration(isDescribedByKDoc = true)
-    suspend fun findScheduleItems(name: String): List<AttndEventItem> {
+    suspend fun findScheduleItems(name: String): List<AttndEventItem> = appFunction("findScheduleItems", name) {
         if (name.isBlank()) throw AppFunctionInvalidArgumentException("The name is empty.")
         val bundle = bundle()
-        return EventFacts.search(bundle, name, Instant.now(), kinds = setOf(SearchKind.SCHEDULE)).map { it.toItem(bundle) }
+        EventFacts.search(bundle, name, Instant.now(), kinds = setOf(SearchKind.SCHEDULE)).map { it.toItem(bundle) }
     }
 
     /**
@@ -114,10 +119,10 @@ abstract class BaseAttndAppFunctionService : AppFunctionService() {
      * @return Matching locations with their address and coordinates when known.
      */
     @AppFunctionDeclaration(isDescribedByKDoc = true)
-    suspend fun findLocations(name: String): List<AttndEventItem> {
+    suspend fun findLocations(name: String): List<AttndEventItem> = appFunction("findLocations", name) {
         if (name.isBlank()) throw AppFunctionInvalidArgumentException("The name is empty.")
         val bundle = bundle()
-        return EventFacts.search(bundle, name, Instant.now(), kinds = setOf(SearchKind.LOCATION)).map { it.toItem(bundle) }
+        EventFacts.search(bundle, name, Instant.now(), kinds = setOf(SearchKind.LOCATION)).map { it.toItem(bundle) }
     }
 
     /**
@@ -127,9 +132,9 @@ abstract class BaseAttndAppFunctionService : AppFunctionService() {
      * @return The organizer updates.
      */
     @AppFunctionDeclaration(isDescribedByKDoc = true)
-    suspend fun getLatestUpdates(limit: Int = EventFacts.DEFAULT_LIMIT): List<AttndEventItem> {
+    suspend fun getLatestUpdates(limit: Int = EventFacts.DEFAULT_LIMIT): List<AttndEventItem> = appFunction("getLatestUpdates", null) {
         val bundle = bundle()
-        return EventFacts.latestUpdates(bundle, EventFacts.limit(limit)).map { it.toItem(bundle) }
+        EventFacts.latestUpdates(bundle, EventFacts.limit(limit)).map { it.toItem(bundle) }
     }
 
     /**
@@ -138,9 +143,9 @@ abstract class BaseAttndAppFunctionService : AppFunctionService() {
      * @return The event.
      */
     @AppFunctionDeclaration(isDescribedByKDoc = true)
-    suspend fun getEventInfo(): AttndEventItem {
+    suspend fun getEventInfo(): AttndEventItem = appFunction("getEventInfo", null) {
         val bundle = bundle()
-        return EventFacts.eventInfo(bundle).toItem(bundle)
+        EventFacts.eventInfo(bundle).toItem(bundle)
     }
 
     /**
@@ -150,10 +155,10 @@ abstract class BaseAttndAppFunctionService : AppFunctionService() {
      * @return The hearted items; empty when nothing is hearted.
      */
     @AppFunctionDeclaration(isDescribedByKDoc = true)
-    suspend fun getHeartedItems(): List<AttndEventItem> {
+    suspend fun getHeartedItems(): List<AttndEventItem> = appFunction("getHeartedItems", null) {
         val bundle = bundle()
         val hearts = graph().hearts.hearts(bundle.event.id)
-        return EventFacts.hearted(bundle, hearts, Instant.now()).map { it.toItem(bundle) }
+        EventFacts.hearted(bundle, hearts, Instant.now()).map { it.toItem(bundle) }
     }
 
     /**
@@ -166,7 +171,7 @@ abstract class BaseAttndAppFunctionService : AppFunctionService() {
      * @return The item.
      */
     @AppFunctionDeclaration(isDescribedByKDoc = true)
-    suspend fun setHeart(kind: String, id: Int, hearted: Boolean): AttndEventItem {
+    suspend fun setHeart(kind: String, id: Int, hearted: Boolean): AttndEventItem = appFunction("setHeart", null) {
         val bundle = bundle()
         val searchKind = when (kind.trim().lowercase(Locale.ROOT)) {
             "schedule_item", "schedule" -> SearchKind.SCHEDULE
@@ -181,10 +186,41 @@ abstract class BaseAttndAppFunctionService : AppFunctionService() {
         if (graph.hearts.set(bundle.event.id, searchKind, id, hearted)) {
             Hearts.metric(searchKind, hearted)?.let { graph.usage.track(bundle.event.id, it, id.toString()) }
         }
-        return fact.toItem(bundle)
+        fact.toItem(bundle)
     }
 
     private fun graph(): AppGraph = (application as AttndApplication).graph
+
+    /**
+     * `assistant.request` (kind `appfunction`): name, ms, result count, ok; the query's length only (dev
+     * builds may log the text). Failures also log `assistant.error`.
+     */
+    private inline fun <T> appFunction(name: String, text: String?, block: () -> T): T {
+        val started = System.nanoTime()
+        try {
+            val result = block()
+            AppLog.info(
+                LogCategory.ASSISTANT, LogEvent.ASSISTANT_REQUEST, "AppFunction $name: ok",
+                mapOf(
+                    "kind" to "appfunction", "name" to name, "ms" to (System.nanoTime() - started) / 1_000_000, "ok" to true,
+                    "results" to ((result as? List<*>)?.size ?: 1),
+                ) + (if (text != null) Redact.textFields("query", text, AppLog.allowText) else emptyMap()),
+            )
+            return result
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            AppLog.warning(
+                LogCategory.ASSISTANT, LogEvent.ASSISTANT_REQUEST, "AppFunction $name failed (${e.javaClass.simpleName})",
+                mapOf("kind" to "appfunction", "name" to name, "ms" to (System.nanoTime() - started) / 1_000_000, "ok" to false),
+            )
+            AppLog.warning(
+                LogCategory.ASSISTANT, LogEvent.ASSISTANT_ERROR, "AppFunction $name failed",
+                mapOf("kind" to "appfunction", "error" to AppLog.errorKind(e), "domain" to e.javaClass.simpleName),
+            )
+            throw e
+        }
+    }
 
     /** The joined event's bundle from disk (the app may not be running). */
     private suspend fun bundle(): EventBundle =

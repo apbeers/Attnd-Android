@@ -5,12 +5,17 @@ import com.arcu.attnd.data.api.AttndApi
 import com.arcu.attnd.data.api.DeviceRequest
 import com.arcu.attnd.data.api.JoinRequest
 import com.arcu.attnd.data.api.LeaveRequest
+import com.arcu.attnd.data.net.ApiException
 import com.arcu.attnd.data.prefs.DevicePrefs
+import com.arcu.attnd.domain.AppLog
 import com.arcu.attnd.domain.AppUpdate
 import com.arcu.attnd.domain.Event
 import com.arcu.attnd.domain.EventBundle
 import com.arcu.attnd.domain.ImageCachePlan
 import com.arcu.attnd.domain.LiveUpdates
+import com.arcu.attnd.domain.LogCategory
+import com.arcu.attnd.domain.LogEvent
+import com.arcu.attnd.domain.LogLevel
 import com.arcu.attnd.domain.NearbyEvent
 import com.arcu.attnd.domain.UpdateLevel
 import kotlinx.coroutines.CancellationException
@@ -47,6 +52,15 @@ sealed interface RefreshResult {
     /** The server no longer has the event (404); local state was cleared. */
     data object EventGone : RefreshResult
     data class Failed(val message: String) : RefreshResult
+
+    /** For diagnostics: `updated`, `not_modified`, `no_event`, `gone`, `failed`. */
+    val label: String get() = when (this) {
+        Updated -> "updated"
+        NotModified -> "not_modified"
+        NoEvent -> "no_event"
+        EventGone -> "gone"
+        is Failed -> "failed"
+    }
 }
 
 /**
@@ -113,10 +127,18 @@ class EventRepository(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                AppLog.caught(LogCategory.NET, "app_status", e, LogLevel.WARNING)
                 null
             }
         } ?: return
-        _appUpdate.value = ApiMapper.appUpdate(status)
+        val update = ApiMapper.appUpdate(status)
+        if (update != _appUpdate.value) {
+            AppLog.notice(
+                LogCategory.LIFECYCLE, LogEvent.UPDATE_PROMPT, "Update: ${update.level.name.lowercase()}",
+                mapOf("update" to update.level.name.lowercase(), "latest_version" to update.latestVersion),
+            )
+        }
+        _appUpdate.value = update
     }
 
     val deviceId: String get() = prefs.deviceId
@@ -130,7 +152,17 @@ class EventRepository(
             images?.clear() // nothing joined: no images should be left from an earlier event
             return@withContext null
         }
+        val started = System.nanoTime()
         val cached = readCache()?.takeIf { it.event.id == eventId }
+        if (cached != null) {
+            AppLog.info(
+                LogCategory.STORAGE, LogEvent.BUNDLE_RESTORED, "Saved bundle restored",
+                mapOf(
+                    "bytes" to cacheFile.length(), "ms" to (System.nanoTime() - started) / 1_000_000, "content_version" to cached.contentVersion,
+                    "age_s" to prefs.lastSyncedAt?.let { (System.currentTimeMillis() - it) / 1000 },
+                ),
+            )
+        }
         if (cached == null) prefs.bundleEtag = null
         _bundle.value = cached
         cached?.let { prefetchImages(it) }
@@ -150,10 +182,11 @@ class EventRepository(
      * Joins [event], leaving any other event first, then downloads its bundle.
      * Throws when the join call fails; returns the result of the bundle download.
      */
-    suspend fun join(event: Event): RefreshResult = withContext(io) {
+    suspend fun join(event: Event, via: String = "search"): RefreshResult = withContext(io) {
         val previous = prefs.eventId
         if (previous != null && previous != event.id) {
             usage?.flushNow()
+            AppLog.notice(LogCategory.LIFECYCLE, LogEvent.EVENT_LEFT, "Left event $previous for another", mapOf("event_id" to previous, "reason" to "switch"))
             // Leave the old event gracefully; failure must not block joining the new one.
             runSuspendCatching { api.leave(previous, LeaveRequest(deviceId)) }
         }
@@ -165,7 +198,11 @@ class EventRepository(
             prefs.eventId = event.id
         }
         prefs.eventCode = event.eventCode
-        refresh()
+        AppLog.notice(
+            LogCategory.LIFECYCLE, LogEvent.EVENT_JOINED, "Joined event ${event.id}",
+            mapOf("event_id" to event.id, "via" to via),
+        )
+        refresh(source = "join")
     }
 
     /** Leaves the current event. Local state is cleared even if the network call fails. */
@@ -173,6 +210,7 @@ class EventRepository(
         withContext(io) {
             val eventId = prefs.eventId
             if (eventId != null) usage?.flushNow()
+            if (eventId != null) AppLog.notice(LogCategory.LIFECYCLE, LogEvent.EVENT_LEFT, "Left event $eventId", mapOf("event_id" to eventId, "reason" to "user"))
             clearLocal()
             if (eventId != null) {
                 runSuspendCatching { api.leave(eventId, LeaveRequest(deviceId)) }
@@ -188,22 +226,25 @@ class EventRepository(
      * A failure only sets [SyncState.error] (the offline notice) once [failuresBeforeError] refreshes
      * in a row have failed (see [LiveUpdates.failuresBeforeOfflineNotice]). Any success clears it.
      */
-    suspend fun refresh(silent: Boolean = false, failuresBeforeError: Int = 1): RefreshResult = withContext(io) {
+    suspend fun refresh(silent: Boolean = false, failuresBeforeError: Int = 1, source: String = "foreground"): RefreshResult = withContext(io) {
         val eventId = prefs.eventId ?: return@withContext RefreshResult.NoEvent
         refreshMutex.withLock {
             if (prefs.eventId != eventId) return@withLock RefreshResult.NotModified
             if (!silent) _sync.update { it.copy(isRefreshing = true) }
-            try {
-                fetchBundle(eventId, failuresBeforeError)
+            val result = try {
+                AppLog.asyncSection("bundle_fetch") { fetchBundle(eventId, failuresBeforeError, source) }
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: IOException) {
+            } catch (e: IOException) {
+                AppLog.caught(LogCategory.NET, "bundle.refresh", e, LogLevel.WARNING, mapOf("silent" to silent))
                 fail("Can't reach Attnd right now. Showing saved content.", failuresBeforeError, offline = true)
             } catch (e: Exception) {
+                AppLog.caught(LogCategory.NET, "bundle.refresh", e, fields = mapOf("silent" to silent))
                 fail("Couldn't refresh (${e.javaClass.simpleName}).", failuresBeforeError)
             } finally {
                 if (!silent) _sync.update { it.copy(isRefreshing = false) }
             }
+            result
         }
     }
 
@@ -213,13 +254,43 @@ class EventRepository(
      * at [pushVersion] or newer. Works with the app in the background too: restores the saved
      * bundle first when the push started the process.
      */
-    suspend fun onContentUpdated(pushVersion: Int?) {
+    suspend fun onContentUpdated(pushVersion: Int?): RefreshResult? {
+        val started = System.nanoTime()
         restore()
-        if (!LiveUpdates.shouldRefreshForPush(pushVersion, _bundle.value?.contentVersion)) return
-        delay(LiveUpdates.pushRefreshDelayMs())
+        val shown = _bundle.value?.contentVersion
+        if (!LiveUpdates.shouldRefreshForPush(pushVersion, shown)) {
+            AppLog.info(
+                LogCategory.PUSH, LogEvent.PUSH_HANDLED, "content_updated $pushVersion: already at $shown",
+                mapOf("type" to "content_updated", "action" to "skipped_not_newer", "ms" to (System.nanoTime() - started) / 1_000_000),
+            )
+            return null
+        }
+        val wait = LiveUpdates.pushRefreshDelayMs()
+        AppLog.info(
+            LogCategory.BACKGROUND, LogEvent.REFRESH_STARTED, "Refreshing for content_updated $pushVersion in $wait ms",
+            mapOf("task" to "bundle", "reason" to "silent_push"),
+        )
+        delay(wait)
         // Another refresh (resume, poll, an earlier push) may have fetched it meanwhile.
-        if (!LiveUpdates.shouldRefreshForPush(pushVersion, _bundle.value?.contentVersion)) return
-        refresh(silent = true)
+        val result = if (!LiveUpdates.shouldRefreshForPush(pushVersion, _bundle.value?.contentVersion)) {
+            RefreshResult.NotModified
+        } else {
+            refresh(silent = true, source = "push")
+        }
+        val ms = (System.nanoTime() - started) / 1_000_000
+        if (result is RefreshResult.Failed) {
+            AppLog.warning(LogCategory.BACKGROUND, LogEvent.REFRESH_FAILED, "content_updated refresh failed", mapOf("task" to "bundle", "ms" to ms, "error" to result.label))
+        } else {
+            AppLog.info(
+                LogCategory.BACKGROUND, LogEvent.REFRESH_FINISHED, "content_updated refresh: ${result.label}",
+                mapOf("task" to "bundle", "ms" to ms, "result" to if (result == RefreshResult.Updated) "new_data" else "no_data"),
+            )
+        }
+        AppLog.info(
+            LogCategory.PUSH, LogEvent.PUSH_HANDLED, "content_updated $pushVersion handled",
+            mapOf("type" to "content_updated", "action" to "refreshed", "ms" to ms, "delay_ms" to wait),
+        )
+        return result
     }
 
     /**
@@ -237,7 +308,17 @@ class EventRepository(
             appVersion = appVersion,
             subscribed = prefs.notificationsEnabled,
         )
-        val ok = runSuspendCatching { api.registerDevice(request) }.isSuccess
+        val outcome = runSuspendCatching { api.registerDevice(request) }
+        val ok = outcome.isSuccess
+        val error = outcome.exceptionOrNull()
+        AppLog.log(
+            if (ok) LogLevel.INFO else LogLevel.WARNING,
+            LogCategory.NET, LogEvent.DEVICE_REGISTERED, if (ok) "Device registered" else "Device registration failed",
+            mapOf(
+                "status" to if (ok) 200 else (error as? ApiException)?.code ?: 0,
+                "has_push_token" to (token != null), "subscribed" to prefs.notificationsEnabled,
+            ),
+        )
         when {
             ok -> registeredToken = token
             // The server still has the old token, which FCM has replaced: don't count on pushes.
@@ -248,6 +329,7 @@ class EventRepository(
 
     suspend fun onPushTokenChanged(token: String) {
         if (token.isBlank()) return
+        AppLog.info(LogCategory.PUSH, LogEvent.PUSH_TOKEN, "New push token", mapOf("kind" to "fcm", "changed" to (token != prefs.pushToken), "length" to token.length))
         prefs.pushToken = token
         registerDevice()
     }
@@ -263,10 +345,14 @@ class EventRepository(
     private fun etagFor(eventId: Int): String? =
         prefs.bundleEtag?.takeIf { _bundle.value?.event?.id == eventId }
 
-    private suspend fun fetchBundle(eventId: Int, failuresBeforeError: Int): RefreshResult {
+    private suspend fun fetchBundle(eventId: Int, failuresBeforeError: Int, source: String): RefreshResult {
         val response = api.bundle(eventId, etagFor(eventId), deviceId)
         return when {
             response.code == 304 -> {
+                AppLog.debug(
+                    LogCategory.NET, LogEvent.BUNDLE_NOT_MODIFIED, "Bundle unchanged",
+                    mapOf("content_version" to _bundle.value?.contentVersion, "source" to source),
+                )
                 markSynced()
                 // Retries images an earlier pass couldn't get (a no-op once they're all on disk).
                 _bundle.value?.let { prefetchImages(it) }
@@ -279,9 +365,17 @@ class EventRepository(
                     json == null || parsed == null -> fail("The server sent content this version can't read.", failuresBeforeError)
                     prefs.eventId != eventId -> RefreshResult.NotModified // left or switched meanwhile
                     else -> {
-                        writeCache(json)
+                        writeCache(json, parsed.contentVersion)
                         prefs.bundleEtag = response.etag
+                        val previousVersion = _bundle.value?.contentVersion
                         _bundle.value = parsed
+                        AppLog.info(
+                            LogCategory.NET, LogEvent.BUNDLE_APPLIED, "Bundle ${parsed.contentVersion} applied",
+                            mapOf(
+                                "content_version" to parsed.contentVersion, "previous_version" to previousVersion, "source" to source,
+                                "locations" to parsed.locations.size, "items" to parsed.schedule.size, "notifications" to parsed.notifications.size,
+                            ),
+                        )
                         markSynced()
                         prefetchImages(parsed)
                         RefreshResult.Updated
@@ -289,6 +383,7 @@ class EventRepository(
                 }
             }
             response.code == 404 -> {
+                AppLog.notice(LogCategory.LIFECYCLE, LogEvent.EVENT_LEFT, "Event $eventId is gone (404)", mapOf("event_id" to eventId, "reason" to "404"))
                 if (prefs.eventId == eventId) clearLocal()
                 _sync.update { it.copy(error = "This event is no longer available.") }
                 RefreshResult.EventGone
@@ -298,6 +393,7 @@ class EventRepository(
     }
 
     private fun markSynced() {
+        if (_sync.value.error != null) AppLog.notice(LogCategory.NET, LogEvent.OFFLINE_NOTICE, "Back online", mapOf("shown" to false, "failures" to consecutiveFailures))
         val now = System.currentTimeMillis()
         prefs.lastSyncedAt = now
         consecutiveFailures = 0
@@ -306,7 +402,10 @@ class EventRepository(
 
     private fun fail(message: String, failuresBeforeError: Int, offline: Boolean = false): RefreshResult {
         consecutiveFailures++
-        if (consecutiveFailures >= failuresBeforeError) _sync.update { it.copy(error = message, offline = offline) }
+        if (consecutiveFailures >= failuresBeforeError) {
+            if (_sync.value.error == null) AppLog.notice(LogCategory.NET, LogEvent.OFFLINE_NOTICE, "Offline notice shown", mapOf("shown" to true, "failures" to consecutiveFailures))
+            _sync.update { it.copy(error = message, offline = offline) }
+        }
         return RefreshResult.Failed(message)
     }
 
@@ -332,12 +431,14 @@ class EventRepository(
 
     private fun readCache(): EventBundle? = try {
         if (cacheFile.exists()) ApiMapper.parseBundle(cacheFile.readText()) else null
-    } catch (_: IOException) {
+    } catch (e: IOException) {
+        AppLog.error(LogCategory.STORAGE, LogEvent.BUNDLE_FAILED, "Saved bundle unreadable", mapOf("op" to "restore", "error" to e.javaClass.simpleName))
         null
     }
 
     /** Writes via a temp file + rename so a crash never leaves a half-written bundle. */
-    private fun writeCache(json: String) {
+    private fun writeCache(json: String, contentVersion: Int?) {
+        val started = System.nanoTime()
         try {
             val tmp = File(cacheFile.parentFile, cacheFile.name + ".tmp")
             tmp.writeText(json)
@@ -345,8 +446,13 @@ class EventRepository(
                 cacheFile.writeText(json)
                 tmp.delete()
             }
-        } catch (_: IOException) {
+            AppLog.debug(
+                LogCategory.STORAGE, LogEvent.BUNDLE_SAVED, "Bundle saved",
+                mapOf("bytes" to json.length, "ms" to (System.nanoTime() - started) / 1_000_000, "content_version" to contentVersion),
+            )
+        } catch (e: IOException) {
             // Caching is best effort; the in-memory bundle is still current.
+            AppLog.error(LogCategory.STORAGE, LogEvent.BUNDLE_FAILED, "Bundle not saved", mapOf("op" to "save", "error" to e.javaClass.simpleName))
         }
     }
 

@@ -52,6 +52,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.arcu.attnd.data.log.PermissionLog
 import com.arcu.attnd.domain.EventBundle
 import com.arcu.attnd.domain.PlanExample
 import com.arcu.attnd.push.PushNotifications
@@ -89,11 +90,13 @@ fun OnboardingScreen(
     var locationGranted by remember { mutableStateOf(hasLocationPermission(context)) }
     var notificationsGranted by remember { mutableStateOf(PushNotifications.hasPermission(context)) }
     val locationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+        PermissionLog.location("onboarding", result)
         locationGranted = result.values.any { it }
         if (locationGranted) onShowUserLocation(true)
         next()
     }
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        PermissionLog.notifications("onboarding", granted)
         notificationsGranted = granted
         if (granted) onNotificationsGranted()
         next()

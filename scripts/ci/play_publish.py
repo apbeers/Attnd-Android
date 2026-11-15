@@ -3,9 +3,11 @@
 Google Play Developer Publishing API (v3) uploads: an app bundle release, or the store listing.
 
 Bundle release:
-    play_publish.py app-release.aab --track internal
+    play_publish.py app-dev.aab --track internal
     play_publish.py app-release.aab --track production --rollout 0.2 --notes-file store/en-US/release_notes.txt \
         --listing store/en-US                     # also the listing text, in the same edit as the release
+        --mapping mapping.txt                     # R8 mapping for Play's crash deobfuscation (same edit)
+        --native-symbols native-debug-symbols.zip # native debug symbols, if the build has any
 
 Store listing (text from store/en-US/*.txt, images from compose_screenshots.py):
     play_publish.py --listing store/en-US --check                      # validate the text only, offline
@@ -218,6 +220,15 @@ def publish_bundle(token, package, args, fields=None):
                       raw=f.read(), content_type='application/octet-stream')
     version_code = bundle['versionCode']
     print(f'Uploaded bundle versionCode {version_code}')
+    # edits.deobfuscationfiles.upload (media upload, application/octet-stream) for this version code:
+    # `proguard` = the R8 mapping.txt, `nativeCode` = the native debug symbols zip.
+    for kind, path in (('proguard', args.mapping), ('nativeCode', args.native_symbols)):
+        if not path:
+            continue
+        with open(path, 'rb') as f:
+            call(token, 'POST', f'{UPLOAD}/{package}/edits/{edit}/apks/{version_code}/deobfuscationFiles/{kind}'
+                 '?uploadType=media', raw=f.read(), content_type='application/octet-stream')
+        print(f'Uploaded {kind} deobfuscation file for {version_code} ({Path(path).stat().st_size} bytes)')
 
     release = {'versionCodes': [str(version_code)],
                'status': 'completed' if args.rollout >= 1 else 'inProgress'}
@@ -266,6 +277,8 @@ def main():
     parser.add_argument('--rollout', type=float, default=1.0, help='0 < fraction <= 1 (production staged rollout)')
     parser.add_argument('--notes', default='', help='release notes (overrides --notes-file)')
     parser.add_argument('--notes-file', help='release notes file used when --notes is empty, e.g. store/en-US/release_notes.txt')
+    parser.add_argument('--mapping', metavar='FILE', help='bundle mode: R8 mapping.txt for this version code')
+    parser.add_argument('--native-symbols', metavar='ZIP', help='bundle mode: native debug symbols zip')
     parser.add_argument('--listing', metavar='STORE_DIR',
                         help='store listing text, e.g. store/en-US: listing mode on its own, or with an .aab '
                              'the text is updated in the same edit as the release')
@@ -283,6 +296,11 @@ def main():
     if bundle_mode:
         if not args.track:
             parser.error('bundle mode needs --track')
+        for path in (args.mapping, args.native_symbols):
+            if path and not Path(path).is_file():
+                parser.error(f'{path} does not exist')
+    elif args.mapping or args.native_symbols:
+        parser.error('--mapping / --native-symbols need an .aab (bundle mode)')
     elif args.listing:
         images = load_images(args.images) if args.images else {}
         if args.check:

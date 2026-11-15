@@ -28,9 +28,9 @@ import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.EventBusy
 import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -61,8 +61,13 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.arcu.attnd.data.SyncState
+import com.arcu.attnd.domain.AppLog
 import com.arcu.attnd.domain.Event
 import com.arcu.attnd.domain.LiveUpdates
+import com.arcu.attnd.domain.LogCategory
+import com.arcu.attnd.domain.LogEvent
+import com.arcu.attnd.domain.LogLevel
+import com.arcu.attnd.domain.Redact
 import kotlinx.coroutines.delay
 import java.time.Instant
 import java.time.ZoneId
@@ -174,15 +179,32 @@ fun OfflineNotice(sync: SyncState, modifier: Modifier = Modifier) {
  * per-tab [SearchField]s and the app-wide search screen, so both count exactly the same way.
  */
 @Composable
-fun rememberSearchReporter(query: String, onSearch: () -> Unit): () -> Unit {
+fun rememberSearchReporter(
+    query: String,
+    onSearch: () -> Unit,
+    source: String = "tab",
+    /** Runs the search again and returns its result count, for `search.query` (where cheap to know). */
+    countResults: ((String) -> Int)? = null,
+): () -> Unit {
     val currentOnSearch by rememberUpdatedState(onSearch)
     val currentQuery by rememberUpdatedState(query)
+    val currentCount by rememberUpdatedState(countResults)
     val reported = rememberSaveable { mutableStateOf("") }
     val report: (String) -> Unit = remember(reported) {
         { text ->
             val trimmed = text.trim()
             if (trimmed.isNotEmpty() && trimmed != reported.value) {
                 reported.value = trimmed
+                // search.query: the length only (dev builds may log the text, spec §1).
+                if (AppLog.isLoggable(LogLevel.DEBUG)) {
+                    val started = System.nanoTime()
+                    val results = currentCount?.invoke(trimmed)
+                    AppLog.debug(
+                        LogCategory.SEARCH, LogEvent.SEARCH_QUERY, "Search ($source)",
+                        mapOf("source" to source, "results" to results, "ms" to results?.let { (System.nanoTime() - started) / 1_000_000 }) +
+                            Redact.textFields("query", trimmed, AppLog.allowText),
+                    )
+                }
                 currentOnSearch()
             }
         }

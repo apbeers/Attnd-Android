@@ -1,5 +1,6 @@
 package com.arcu.attnd.unit
 
+import com.arcu.attnd.data.api.ApiCall
 import com.arcu.attnd.data.api.AttndApi
 import com.arcu.attnd.data.api.AuthTokenProvider
 import com.arcu.attnd.data.api.DeviceRequest
@@ -189,5 +190,48 @@ class AttndApiClientTest {
             assertEquals(410, e.code)
         }
         assertTrue(api.updateRequired.value)
+    }
+
+    // ── Logging spec §2: request ids, debug sessions, timings ───────────────
+
+    @Test
+    fun everyRequest_hasItsOwnRequestId_andTheDebugCodeWhenSet() = runTest {
+        val http = FakeHttp(response(200, okStatus), response(401), response(200, okStatus))
+        val api = AttndApi(FakeTokens(fresh = "new-token"), "https://example.test/api/v2/", http)
+        api.join(1, JoinRequest(deviceId = "dev-1"))
+        api.diagSession = { "D-7K3QX" }
+        api.leave(1, com.arcu.attnd.data.api.LeaveRequest("dev-1"))
+
+        val ids = http.requests.map { it.headers["X-Request-Id"] }
+        assertEquals(3, ids.toSet().size)
+        ids.forEach { assertTrue("$it", it != null && Regex("^[0-9a-f]{16}$").matches(it)) }
+        assertNull(http.requests[0].headers["X-Diag-Session"])
+        assertEquals(listOf("D-7K3QX", "D-7K3QX"), http.requests.drop(1).map { it.headers["X-Diag-Session"] })
+    }
+
+    @Test
+    fun callListener_getsPathTemplatesStatusesAndFailures() = runTest {
+        val http = object : HttpClient {
+            var calls = 0
+            override suspend fun execute(method: String, url: String, headers: Map<String, String>, body: String?): HttpResponse {
+                calls++
+                if (calls == 2) throw java.net.SocketTimeoutException("slow")
+                return HttpResponse(304, null, emptyMap())
+            }
+        }
+        val api = AttndApi(FakeTokens(fresh = null), "https://example.test/api/v2/", http)
+        val calls = mutableListOf<ApiCall>()
+        api.callListener = { calls += it }
+        api.bundle(12, "\"v1\"", "dev-1")
+        try {
+            api.bundle(12, null, "dev-1")
+            fail("expected a timeout")
+        } catch (_: java.net.SocketTimeoutException) {
+        }
+        assertEquals(listOf("/api/v2/events/{id}/bundle/", "/api/v2/events/{id}/bundle/"), calls.map { it.path })
+        assertEquals(304, calls[0].status)
+        assertTrue(calls[0].isBundle)
+        assertNull(calls[1].status)
+        assertTrue(calls[1].timedOut)
     }
 }

@@ -1,6 +1,9 @@
 package com.arcu.attnd.data
 
+import com.arcu.attnd.domain.AppLog
 import com.arcu.attnd.domain.ImageCachePlan
+import com.arcu.attnd.domain.LogCategory
+import com.arcu.attnd.domain.LogEvent
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
@@ -21,6 +24,7 @@ import java.net.HttpURLConnection
 import java.net.URI
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 /** Outcome of [ImageDiskCache.fetch]. */
@@ -133,6 +137,9 @@ class ImageDiskCache(
      * (images skipped for size or budget count as done, so they aren't retried on every sync).
      */
     private suspend fun runPrefetch(urls: List<String>): Boolean {
+        val started = System.nanoTime()
+        val fetched = AtomicInteger(0)
+        val failures = AtomicInteger(0)
         dir.mkdirs()
         val existing = dir.listFiles()?.filter { it.isFile }.orEmpty()
         val referencedNames = urls.mapTo(HashSet()) { ImageCachePlan.fileName(it) }
@@ -151,9 +158,13 @@ class ImageDiskCache(
                                 // Over budget (several downloads finished together): drop this one.
                                 if (!ImageCachePlan.fitsBudget(used.get(), size)) result.file.delete()
                                 else used.addAndGet(size)
+                                fetched.incrementAndGet()
                             }
                             ImageFetch.TooLarge -> Unit
-                            ImageFetch.Failed -> failed.set(true) // existing file (if any) is kept
+                            ImageFetch.Failed -> {
+                                failed.set(true) // existing file (if any) is kept
+                                failures.incrementAndGet()
+                            }
                         }
                     }
                 }
@@ -162,6 +173,12 @@ class ImageDiskCache(
         // Every referenced image has been attempted: now drop what the bundle no longer uses.
         val names = dir.list()?.toList().orEmpty()
         ImageCachePlan.stale(names, urls).forEach { File(dir, it).delete() }
+        if (missing.isNotEmpty()) {
+            AppLog.debug(
+                LogCategory.STORAGE, LogEvent.IMAGES_PREFETCH, "Images prefetched: ${fetched.get()} of ${missing.size}",
+                mapOf("total" to urls.size, "fetched" to fetched.get(), "failed" to failures.get(), "ms" to (System.nanoTime() - started) / 1_000_000),
+            )
+        }
         return !failed.get()
     }
 
@@ -172,13 +189,17 @@ class ImageDiskCache(
         } catch (_: Exception) {
             return@withContext ImageFetch.Failed
         }
+        val started = System.nanoTime()
         val target = File(dir, ImageCachePlan.fileName(url))
         val tmp = File(dir, "${target.name}.$session-${UUID.randomUUID()}${ImageCachePlan.TEMP_SUFFIX}")
         try {
             connection.connectTimeout = 15_000
             connection.readTimeout = 30_000
             connection.instanceFollowRedirects = true
-            if (connection.responseCode !in 200..299) return@withContext ImageFetch.Failed
+            if (connection.responseCode !in 200..299) {
+                AppLog.warning(LogCategory.NET, LogEvent.IMAGE_FAILED, "Image download ${connection.responseCode}", mapOf("error" to "http", "status" to connection.responseCode))
+                return@withContext ImageFetch.Failed
+            }
             // A captive portal or error page answering 200 must not be stored as the image.
             if (!ImageCachePlan.isImageContentType(connection.contentType)) return@withContext ImageFetch.Failed
             if (connection.contentLengthLong > ImageCachePlan.MAX_FILE_BYTES) return@withContext ImageFetch.TooLarge
@@ -186,6 +207,10 @@ class ImageDiskCache(
             val written = connection.inputStream.use { input ->
                 tmp.outputStream().use { output -> copyAtMost(input, output, ImageCachePlan.MAX_FILE_BYTES) }
             }
+            AppLog.debug(
+                LogCategory.NET, LogEvent.IMAGE_FETCHED, "Image downloaded",
+                mapOf("ms" to (System.nanoTime() - started) / 1_000_000, "bytes" to written, "status" to connection.responseCode),
+            )
             when {
                 written < 0 -> ImageFetch.TooLarge
                 written == 0L -> ImageFetch.Failed
@@ -194,7 +219,8 @@ class ImageDiskCache(
             }
         } catch (e: CancellationException) {
             throw e
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            AppLog.warning(LogCategory.NET, LogEvent.IMAGE_FAILED, "Image download failed (${AppLog.errorKind(e)})", mapOf("error" to AppLog.errorKind(e), "domain" to e.javaClass.simpleName))
             ImageFetch.Failed
         } finally {
             tmp.delete() // no-op after a successful rename

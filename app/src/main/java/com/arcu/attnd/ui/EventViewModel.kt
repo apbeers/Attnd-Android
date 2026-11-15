@@ -20,8 +20,12 @@ import com.arcu.attnd.data.RefreshResult
 import com.arcu.attnd.data.SyncState
 import com.arcu.attnd.data.UsageReporter
 import com.arcu.attnd.data.api.AttndApi
+import com.arcu.attnd.data.log.DiagnosticsController
+import com.arcu.attnd.data.log.DiagnosticsState
+import com.arcu.attnd.data.log.PerfRecorder
 import com.arcu.attnd.data.net.ApiException
 import com.arcu.attnd.data.prefs.DevicePrefs
+import com.arcu.attnd.domain.AppLog
 import com.arcu.attnd.domain.AppUpdate
 import com.arcu.attnd.domain.AssistantPrompt
 import com.arcu.attnd.domain.Event
@@ -31,14 +35,22 @@ import com.arcu.attnd.domain.EventSearch
 import com.arcu.attnd.domain.Hearts
 import com.arcu.attnd.domain.JoinLinks
 import com.arcu.attnd.domain.LiveUpdates
+import com.arcu.attnd.domain.LogCategory
+import com.arcu.attnd.domain.LogEvent
+import com.arcu.attnd.domain.LogFilter
+import com.arcu.attnd.domain.LogLevel
+import com.arcu.attnd.domain.LogRecord
+import com.arcu.attnd.domain.MealBreak
 import com.arcu.attnd.domain.NearbyEvent
 import com.arcu.attnd.domain.OpenRequest
 import com.arcu.attnd.domain.OpenTarget
+import com.arcu.attnd.domain.PerfMetric
 import com.arcu.attnd.domain.Plan
 import com.arcu.attnd.domain.PlanExample
 import com.arcu.attnd.domain.PlanRequest
 import com.arcu.attnd.domain.PlannedItem
 import com.arcu.attnd.domain.Planner
+import com.arcu.attnd.domain.Redact
 import com.arcu.attnd.domain.ScreenshotRequest
 import com.arcu.attnd.domain.ScreenshotScreen
 import com.arcu.attnd.domain.SearchKind
@@ -62,6 +74,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.io.File
 import java.io.IOException
 import java.time.Instant
 
@@ -161,6 +174,8 @@ data class AppUiState(
     val showOnboarding: Boolean = false,
     /** "Follow on Lock Screen" for the joined event (Live Update + reminders). */
     val followLive: Boolean = false,
+    /** Debug logging and the log viewer (About & support; logging spec §2–3). */
+    val diagnostics: DiagnosticsState = DiagnosticsState(dev = false),
 )
 
 private data class LocalState(
@@ -202,6 +217,8 @@ class EventViewModel(
     private val heartStore: HeartStore,
     private val planStore: PlanStore,
     private val liveUpdates: LiveUpdateController,
+    private val diagnostics: DiagnosticsController,
+    private val perf: PerfRecorder,
 ) : ViewModel() {
 
     /** The parts of [SupportInfo] that never change while the process runs. */
@@ -243,8 +260,8 @@ class EventViewModel(
             repository.sync,
             local,
             repository.appUpdate,
-            combine(heartStore.version, planStore.version) { hearts, plans -> hearts to plans },
-        ) { savedBundle, savedSync, state, savedUpdate, _ ->
+            combine(heartStore.version, planStore.version, diagnostics.state) { hearts, plans, diag -> Triple(hearts, plans, diag) },
+        ) { savedBundle, savedSync, state, savedUpdate, versions ->
             val screenshot = state.screenshot
             // Screenshot mode: the screen's layout tweaks, and nothing on top (no update banner or
             // screen, status pill, offline notice or refresh spinner).
@@ -314,6 +331,7 @@ class EventViewModel(
                 ),
                 showOnboarding = state.showOnboarding && screenshot == null && bundle != null,
                 followLive = eventId != null && planStore.follows(eventId, hearts),
+                diagnostics = versions.third,
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, AppUiState())
 
@@ -331,6 +349,10 @@ class EventViewModel(
                 }
                 .distinctUntilChanged()
                 .collect { view ->
+                    if (view != null) {
+                        val name = if (view.second == Tab.NOTIFICATIONS.key) "updates" else view.second
+                        AppLog.debug(LogCategory.UI, LogEvent.SCREEN, "Screen $name", mapOf("name" to name))
+                    }
                     if (view != null && !screenshotMode) usage.track(view.first, UsageMetric.TAB_VIEW, view.second)
                 }
         }
@@ -382,11 +404,11 @@ class EventViewModel(
             val legacyCode = prefs.eventCode
             when {
                 repository.currentEventId != null -> repository.refresh()
-                legacyCode != null -> join(silent = true) { repository.lookup(legacyCode) }
+                legacyCode != null -> join(silent = true, via = "rejoin") { repository.lookup(legacyCode) }
                 !prefs.installReferrerChecked -> {
                     prefs.installReferrerChecked = true
                     InstallReferrer.eventCode(appContext)?.let { code ->
-                        join(silent = false) { repository.lookup(code) }
+                        join(silent = false, via = "referrer") { repository.lookup(code) }
                     }
                 }
             }
@@ -399,7 +421,7 @@ class EventViewModel(
     // ── Joining ─────────────────────────────────────────────────────────────
 
     /** From the code field, a QR scan or an App Link. Accepts a bare code or a /join/<code>/ URL. */
-    fun joinByCode(input: String) {
+    fun joinByCode(input: String, via: String = "search") {
         val trimmed = input.trim()
         val code = JoinLinks.parseJoinCode(trimmed)
             // Not a /join/ link: treat it as a code or exact event name, unless it is some other URL.
@@ -410,23 +432,23 @@ class EventViewModel(
         }
         viewModelScope.launch {
             startJob.join()
-            join(silent = false) { repository.lookup(code) }
+            join(silent = false, via = via) { repository.lookup(code) }
         }
     }
 
     fun joinEvent(event: Event) {
         viewModelScope.launch {
             startJob.join()
-            join(silent = false) { event }
+            join(silent = false, via = "nearby") { event }
         }
     }
 
-    private suspend fun join(silent: Boolean, resolve: suspend () -> Event) {
+    private suspend fun join(silent: Boolean, via: String = "search", resolve: suspend () -> Event) {
         local.update { it.copy(join = JoinUiState(isJoining = true), message = null) }
         try {
             val event = resolve()
             val alreadyIn = repository.currentEventId == event.id && repository.bundle.value != null
-            val result = repository.join(event)
+            val result = repository.join(event, via)
             // The tour, the first time this event is joined (never in screenshot mode).
             val tour = !alreadyIn && !screenshotMode && !prefs.onboardingSeen(event.id) && repository.bundle.value?.event?.id == event.id
             local.update {
@@ -452,6 +474,13 @@ class EventViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            AppLog.caught(LogCategory.NET, "join", e, if (e is IOException || (e is ApiException && e.code == 404)) LogLevel.WARNING else LogLevel.ERROR)
+            if (!silent) {
+                AppLog.warning(
+                    LogCategory.UI, LogEvent.UI_ERROR_SHOWN, "Join error shown",
+                    mapOf("kind" to if (e is ApiException && e.code == 404) "lookup" else "join", "status" to (e as? ApiException)?.code),
+                )
+            }
             if (silent && e is ApiException && e.code == 404) prefs.eventCode = null
             local.update { it.copy(join = JoinUiState(error = if (silent) null else describeJoinError(e))) }
         }
@@ -512,7 +541,7 @@ class EventViewModel(
                     if (repository.currentEventId != null) repository.leave()
                     local.update { it.copy(selectedTab = null) }
                 } else {
-                    join(silent = false) { repository.lookup(request.eventCode) }
+                    join(silent = false, via = "search") { repository.lookup(request.eventCode) }
                     val location = repository.bundle.value?.let { request.focusLocation(it.locations) }
                     local.update { it.copy(selectedTab = request.tab, focusLocationId = location?.id) }
                 }
@@ -532,6 +561,7 @@ class EventViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                AppLog.caught(LogCategory.NET, "nearby", e, LogLevel.WARNING)
                 NearbyUiState(error = "Could not load nearby events. ${describeJoinError(e)}")
             }
             local.update { it.copy(nearby = nearby) }
@@ -551,7 +581,8 @@ class EventViewModel(
     /** Pull to refresh. */
     fun refresh() {
         track(UsageMetric.REFRESH)
-        viewModelScope.launch { repository.refresh() }
+        AppLog.debug(LogCategory.UI, LogEvent.UI_ACTION, "Pull to refresh", mapOf("name" to "refresh"))
+        viewModelScope.launch { repository.refresh(source = "pull") }
     }
 
     /**
@@ -571,13 +602,18 @@ class EventViewModel(
         repository.checkForUpdate()
         val lastSync = repository.sync.value.lastSyncedAt
         if (lastSync == null || System.currentTimeMillis() - lastSync > RESUME_DEBOUNCE_MS) repository.refresh()
+        var lastInterval = 0L
         while (true) {
             val interval = LiveUpdates.pollIntervalMs(repository.hasPushToken)
+            if (interval != lastInterval) {
+                lastInterval = interval
+                AppLog.trace(LogCategory.NET, LogEvent.POLL_SCHEDULED, "Safety poll every ${interval / 1000} s", mapOf("interval_s" to interval / 1000, "has_push_token" to repository.hasPushToken))
+            }
             delay(interval)
             // A token the server hasn't confirmed (registration failed offline): retry, so pushes resume.
             if (repository.needsDeviceRegistration) repository.registerDevice()
             if (repository.bundle.value != null) {
-                repository.refresh(silent = true, failuresBeforeError = LiveUpdates.failuresBeforeOfflineNotice(interval))
+                repository.refresh(silent = true, failuresBeforeError = LiveUpdates.failuresBeforeOfflineNotice(interval), source = "poll")
             }
         }
     }
@@ -726,6 +762,8 @@ class EventViewModel(
         if (current != AssistantAvailability.UNKNOWN && current != AssistantAvailability.DOWNLOADING) return
         viewModelScope.launch {
             val availability = assistant.availability()
+            AppLog.info(LogCategory.ASSISTANT, LogEvent.MODEL_STATUS, "Gemini Nano: $availability", mapOf("status" to availability))
+            AppLog.info(LogCategory.PLANNER, LogEvent.PLANNER_AVAILABILITY, "Planner: $availability", mapOf("status" to availability))
             local.update { it.copy(assistant = it.assistant.copy(availability = availability)) }
         }
     }
@@ -736,6 +774,12 @@ class EventViewModel(
         downloadJob = viewModelScope.launch {
             local.update { it.copy(assistant = it.assistant.copy(availability = AssistantAvailability.DOWNLOADING, downloadError = null)) }
             assistant.download().collect { status ->
+                when (status) {
+                    is AssistantDownload.Started -> AppLog.info(LogCategory.ASSISTANT, LogEvent.MODEL_DOWNLOAD, "Model download started", mapOf("state" to "started", "pct" to 0))
+                    AssistantDownload.Completed -> AppLog.info(LogCategory.ASSISTANT, LogEvent.MODEL_DOWNLOAD, "Model download finished", mapOf("state" to "finished", "pct" to 100))
+                    is AssistantDownload.Failed -> AppLog.warning(LogCategory.ASSISTANT, LogEvent.MODEL_DOWNLOAD, "Model download failed: ${status.message}", mapOf("state" to "failed"))
+                    is AssistantDownload.Progress -> Unit
+                }
                 local.update { state ->
                     val a = state.assistant
                     state.copy(
@@ -777,10 +821,12 @@ class EventViewModel(
             val now = Instant.now()
             val context = AssistantPrompt.context(bundle, trimmed, now)
             val prompt = AssistantPrompt.build(bundle, trimmed, context, now)
+            val started = System.nanoTime()
             val update = try {
                 val raw = assistant.answer(prompt)
                 val cited = AssistantPrompt.citations(raw, context, bundle)
                 val text = AssistantPrompt.displayText(raw)
+                logAsk(started, ok = text.isNotEmpty(), trimmed, results = cited.size.takeIf { it > 0 } ?: context.size, citations = cited.size)
                 if (text.isEmpty()) {
                     AssistantUiState(error = "No answer this time. Here's what matches your question.", sources = context)
                 } else {
@@ -788,7 +834,12 @@ class EventViewModel(
                 }
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                AppLog.warning(
+                    LogCategory.ASSISTANT, LogEvent.ASSISTANT_ERROR, "Ask failed (${e.javaClass.simpleName})",
+                    mapOf("kind" to "ask", "error" to AppLog.errorKind(e), "domain" to e.javaClass.simpleName),
+                )
+                logAsk(started, ok = false, trimmed, results = context.size, citations = 0)
                 AssistantUiState(error = "On-device AI couldn't answer right now. Here's what matches your question.", sources = context)
             }
             local.update {
@@ -811,7 +862,7 @@ class EventViewModel(
             local.update {
                 it.copy(assistant = it.assistant.copy(question = request, isAnswering = true, answer = null, sources = emptyList(), error = null, madePlan = false))
             }
-            val plan = buildPlan(request)
+            val plan = buildPlan(request, source = "ask")
             val bundle = repository.bundle.value
             local.update { state ->
                 state.copy(
@@ -841,23 +892,37 @@ class EventViewModel(
      * against the bundle; the plain-rule reading fills gaps or replaces it on failure), then the
      * deterministic [Planner] schedules. Returns null when there is no event or the planner is off.
      */
-    private suspend fun buildPlan(request: String): Plan? {
+    private suspend fun buildPlan(request: String, source: String): Plan? {
         val bundle = repository.bundle.value ?: return null
         if (!uiState.value.planner.available) return null
+        AppLog.info(LogCategory.PLANNER, LogEvent.PLANNER_REQUEST, "Plan requested ($source)", mapOf("source" to source) + Redact.textFields("query", request, AppLog.allowText))
         local.update { it.copy(isPlanning = true, planError = null) }
         try {
             val now = Instant.now()
             val hearts = heartStore.hearts(bundle.event.id)
             val rules = PlanRequest.heuristic(request, bundle, now)
+            val modelStarted = System.nanoTime()
             val model = try {
-                PlanRequest.parse(assistant.extractPreferences(PlanRequest.prompt(bundle, request, hearts, now)), bundle, now)
+                val prompt = PlanRequest.prompt(bundle, request, hearts, now)
+                val raw = assistant.extractPreferences(prompt)
+                PlanRequest.parse(raw, bundle, now)
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                AppLog.caught(LogCategory.PLANNER, "plan.preferences", e, LogLevel.WARNING)
                 null
             }
             val preferences = PlanRequest.merge(model, rules)
-            val plan = Planner(bundle, preferences, hearts).plan(now, request.trim())
+            AppLog.log(
+                if (model != null) LogLevel.INFO else LogLevel.WARNING, LogCategory.PLANNER, LogEvent.PLANNER_EXTRACT,
+                if (model != null) "Preferences from Gemini Nano" else "Preferences from the plain rules only",
+                mapOf(
+                    "ms" to (System.nanoTime() - modelStarted) / 1_000_000, "ok" to (model != null),
+                    "model" to if (model != null) "gemini_nano" else "rules",
+                    "liked_tags" to preferences.likedTags.size, "disliked_tags" to preferences.dislikedTags.size, "days" to preferences.days.size,
+                ),
+            )
+            val plan = timedPlan { Planner(bundle, preferences, hearts).plan(now, request.trim()) }
             if (plan.isEmpty) {
                 local.update { it.copy(planError = "Nothing on the schedule fits that. Try another day or fewer limits.") }
                 return plan
@@ -870,17 +935,19 @@ class EventViewModel(
     }
 
     /** From the plan card in Schedule (or an example chip). */
-    fun makePlan(request: String) {
+    fun makePlan(request: String, source: String = "card") {
         val trimmed = request.trim()
         if (trimmed.isEmpty() || planJob?.isActive == true) return
-        planJob = viewModelScope.launch { buildPlan(trimmed) }
+        planJob = viewModelScope.launch { buildPlan(trimmed, source) }
     }
 
     /** "Re-plan from now": the same preferences from the current time (also after a content change). */
     fun replanFromNow() {
         val bundle = repository.bundle.value ?: return
         val plan = planStore.plan(bundle.event.id) ?: return
-        val replanned = Planner(bundle, plan.preferences, heartStore.hearts(bundle.event.id)).plan(Instant.now(), plan.request)
+        val replanned = timedPlan {
+            Planner(bundle, plan.preferences, heartStore.hearts(bundle.event.id)).plan(Instant.now(), plan.request)
+        }
         if (replanned.isEmpty) {
             local.update { it.copy(planError = "Nothing left on the schedule fits this plan.") }
         } else {
@@ -893,6 +960,7 @@ class EventViewModel(
         val bundle = repository.bundle.value ?: return
         val plan = planStore.plan(bundle.event.id) ?: return
         val swapped = Planner(bundle, plan.preferences, heartStore.hearts(bundle.event.id)).swap(plan, oldId, newId) ?: return
+        AppLog.info(LogCategory.PLANNER, LogEvent.PLANNER_SWAP, "Plan item swapped", mapOf("item_id" to oldId))
         planStore.setPlan(bundle.event.id, swapped)
     }
 
@@ -905,11 +973,13 @@ class EventViewModel(
             days = kept,
             fingerprints = kept.flatMap { it.items }.mapNotNull { bundle.scheduleItem(it.itemId) }.associate { it.id to Planner.fingerprint(it) },
         )
+        AppLog.debug(LogCategory.UI, LogEvent.UI_ACTION, "Changed plan kept", mapOf("name" to "plan_keep"))
         planStore.setPlan(bundle.event.id, updated)
     }
 
     fun clearPlan() {
         val eventId = repository.bundle.value?.event?.id ?: return
+        AppLog.debug(LogCategory.UI, LogEvent.UI_ACTION, "Plan cleared", mapOf("name" to "plan_clear"))
         planStore.setPlan(eventId, null)
         local.update { it.copy(planError = null) }
     }
@@ -926,6 +996,7 @@ class EventViewModel(
     /** "Follow on Lock Screen" (the caller holds POST_NOTIFICATIONS when turning it on). */
     fun setFollowLive(follow: Boolean) {
         val eventId = repository.bundle.value?.event?.id ?: return
+        AppLog.notice(LogCategory.LIVE, LogEvent.LIVE_FOLLOW_CHANGED, "Follow on Lock Screen ${if (follow) "on" else "off"}", mapOf("on" to follow, "default" to false))
         planStore.setFollows(eventId, follow)
     }
 
@@ -942,7 +1013,7 @@ class EventViewModel(
     fun useExample(example: PlanExample) {
         finishOnboarding()
         if (example.isPlan) {
-            makePlan(example.text)
+            makePlan(example.text, source = "example")
             showPlan()
         } else {
             local.update {
@@ -993,6 +1064,7 @@ class EventViewModel(
 
     /** The caller must already hold POST_NOTIFICATIONS when enabling. */
     fun setNotificationsEnabled(enabled: Boolean) {
+        AppLog.debug(LogCategory.UI, LogEvent.UI_ACTION, "Push notifications ${if (enabled) "on" else "off"}", mapOf("name" to if (enabled) "notifications_on" else "notifications_off"))
         local.update { it.copy(notificationsEnabled = enabled) }
         viewModelScope.launch {
             if (!repository.setNotificationsEnabled(enabled)) {
@@ -1006,6 +1078,53 @@ class EventViewModel(
         local.update { it.copy(showUserLocation = show) }
     }
 
+    // ── Diagnostics (About & support; logging spec §2–3) ────────────────────
+
+    /** "Turn on debug logging for 10 minutes". */
+    fun startDebugMode() = diagnostics.startDebugMode()
+
+    fun stopDebugMode() = diagnostics.stopDebugMode()
+
+    /** The ring buffer, oldest first (the log viewer filters and reverses it). */
+    suspend fun logRecords(): List<LogRecord> = diagnostics.records()
+
+    /** The last log upload attempt (dev builds and debug sessions). */
+    val logUploadStatus: String? get() = diagnostics.lastUploadResult
+
+    /** A `.jsonl` file of the records matching [filter], for the share sheet. */
+    suspend fun exportLogs(filter: LogFilter?): File = diagnostics.export(filter)
+
+    /** One planner run: Trace section `planner` (+ `perf.signpost`), `planner.run`, API-014 `perf_planner_ms`. */
+    private inline fun timedPlan(block: () -> Plan): Plan {
+        val started = System.nanoTime()
+        val plan = AppLog.section("planner") { block() }
+        val ms = (System.nanoTime() - started) / 1_000_000
+        AppLog.info(
+            LogCategory.PLANNER, LogEvent.PLANNER_RUN, "Plan: ${plan.itemIds.size} items in $ms ms",
+            mapOf(
+                "ms" to ms, "items" to plan.itemIds.size, "days" to plan.days.size,
+                "meals" to plan.days.sumOf { day -> day.entries.count { it is MealBreak } },
+                "pace" to plan.preferences.pace,
+            ),
+        )
+        if (!screenshotMode) perf.record(PerfMetric.PLANNER_MS, PerfMetric.plannerBucket(ms))
+        return plan
+    }
+
+    /** Ask finished: `assistant.request` (lengths only; dev builds also the text) and `assistant.answer`. */
+    private fun logAsk(started: Long, ok: Boolean, question: String, results: Int, citations: Int) {
+        val ms = (System.nanoTime() - started) / 1_000_000
+        AppLog.log(
+            if (ok) LogLevel.INFO else LogLevel.WARNING, LogCategory.ASSISTANT, LogEvent.ASSISTANT_REQUEST,
+            "Ask: ${if (ok) "answered" else "no answer"} in $ms ms",
+            mapOf("kind" to "ask", "name" to "ask", "ms" to ms, "ok" to ok, "results" to results) +
+                Redact.textFields("query", question, AppLog.allowText),
+        )
+        if (ok) {
+            AppLog.debug(LogCategory.ASSISTANT, LogEvent.ASSISTANT_ANSWER, "Answer with $citations citations", mapOf("ms" to ms, "citations" to citations, "fallback" to (citations == 0)))
+        }
+    }
+
     companion object {
         private const val RESUME_DEBOUNCE_MS = 30 * 1000L
         private const val MAX_UNCITED_SOURCES = 5
@@ -1015,7 +1134,7 @@ class EventViewModel(
                 val app = checkNotNull(this[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY]) as AttndApplication
                 EventViewModel(
                     app, app.graph.repository, app.graph.prefs, app.graph.usage, app.graph.assistant, app.graph.hearts,
-                    app.graph.plans, app.graph.liveUpdates,
+                    app.graph.plans, app.graph.liveUpdates, app.graph.diagnostics, app.graph.perf,
                 )
             }
         }

@@ -3,7 +3,10 @@ package com.arcu.attnd.data
 import android.content.Context
 import com.android.installreferrer.api.InstallReferrerClient
 import com.android.installreferrer.api.InstallReferrerStateListener
+import com.arcu.attnd.domain.AppLog
 import com.arcu.attnd.domain.JoinLinks
+import com.arcu.attnd.domain.LogCategory
+import com.arcu.attnd.domain.LogLevel
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
@@ -39,7 +42,8 @@ object InstallReferrer {
                     if (cont.isActive) cont.resume(null)
                 }
             })
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            AppLog.caught(LogCategory.LIFECYCLE, "install_referrer", e, LogLevel.WARNING)
             if (cont.isActive) cont.resume(null)
         }
     }

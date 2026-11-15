@@ -5,16 +5,22 @@ import android.app.AlarmManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.util.Log
 import com.arcu.attnd.data.EventRepository
 import com.arcu.attnd.data.HeartStore
 import com.arcu.attnd.data.PlanStore
 import com.arcu.attnd.data.UsageReporter
 import com.arcu.attnd.data.hasLocationPermission
+import com.arcu.attnd.data.log.PerfRecorder
+import com.arcu.attnd.domain.AppLog
 import com.arcu.attnd.domain.EventBundle
 import com.arcu.attnd.domain.GeoPoint
 import com.arcu.attnd.domain.Hearts
 import com.arcu.attnd.domain.LiveFollow
+import com.arcu.attnd.domain.LogCategory
+import com.arcu.attnd.domain.LogEvent
+import com.arcu.attnd.domain.LogJson
+import com.arcu.attnd.domain.LogLevel
+import com.arcu.attnd.domain.PerfMetric
 import com.arcu.attnd.domain.SearchKind
 import com.arcu.attnd.domain.UrgentBlock
 import com.google.android.gms.location.LocationServices
@@ -46,8 +52,18 @@ class LiveUpdateController(
     private val plans: PlanStore,
     private val usage: UsageReporter,
     private val scope: CoroutineScope,
+    private val perf: PerfRecorder? = null,
 ) {
     private val appContext = context.applicationContext
+
+    /** Whether this process has the Live Update posted (for live.start / live.end). */
+    @Volatile
+    private var liveShown = false
+
+    /** A failed start was counted (API-014 `perf_live_start_fail`) and nothing was posted since. */
+    @Volatile
+    private var failCounted = false
+
     private val mutex = Mutex()
     private val geofence = VenueGeofence(appContext)
 
@@ -65,21 +81,21 @@ class LiveUpdateController(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            Log.w(TAG, "Live Update refresh failed", e)
+            AppLog.caught(LogCategory.LIVE, "live.refresh", e)
         }
     }
 
     private suspend fun update(now: Instant) {
         val bundle = repository.restore()
         if (bundle == null || suspended) {
-            stop(clearGeofence = bundle == null)
+            stop(clearGeofence = bundle == null, reason = if (bundle == null) "left_event" else "system")
             return
         }
         val eventId = bundle.event.id
         val heartsNow = hearts.hearts(eventId)
         val plan = plans.plan(eventId)
         if (!plans.follows(eventId, heartsNow)) {
-            stop(clearGeofence = true)
+            stop(clearGeofence = true, reason = "unfollowed")
             return
         }
         val zone = bundle.event.zone
@@ -105,9 +121,37 @@ class LiveUpdateController(
         val dismissedToday = plans.liveDismissedOn(eventId) == today.toString()
         val state = LiveFollow.state(bundle, plan, heartsNow, now, skipped, urgent, dismissedUrgent, user, arrived)
         if (state != null && !dismissedToday) {
-            LiveNotifications.showLive(appContext, bundle, state, heartsNow)
+            var failure: Pair<String, Throwable?>? = null
+            val posted = try {
+                LiveNotifications.showLive(appContext, bundle, state, heartsNow).also { if (!it) failure = PerfMetric.LIVE_DENIED to null }
+            } catch (e: RuntimeException) {
+                failure = PerfMetric.LIVE_ERROR to e
+                false
+            }
+            // Android 16+: posted, but the user turned Live Updates (promoted notifications) off for the app.
+            if (posted && !LiveNotifications.canPromote(appContext)) failure = PerfMetric.LIVE_DISABLED to null
+            failure?.let { (reason, error) ->
+                if (!failCounted) {
+                    failCounted = true
+                    perf?.record(PerfMetric.LIVE_START_FAIL, reason)
+                    AppLog.warning(
+                        LogCategory.LIVE, LogEvent.LIVE_START_FAILED, "Live Update can't start ($reason)",
+                        mapOf("reason" to reason, "domain" to error?.javaClass?.simpleName),
+                    )
+                }
+            }
+            val fields = mapOf("mode" to state.mode, "source" to state.source, "items" to state.segments.count { it.isItem })
+            when {
+                !posted -> liveShown = false
+                !liveShown -> AppLog.notice(LogCategory.LIVE, LogEvent.LIVE_START, "Live Update started (${state.mode})", fields)
+                else -> AppLog.debug(LogCategory.LIVE, LogEvent.LIVE_UPDATE, "Live Update (${state.mode})", mapOf("mode" to state.mode))
+            }
+            if (posted) {
+                liveShown = true
+                if (failure == null) failCounted = false
+            }
         } else {
-            LiveNotifications.cancelLive(appContext)
+            cancelLive(if (dismissedToday) "user" else "day_over")
         }
 
         val wake = LiveFollow.nextWake(bundle, plan, heartsNow, now, skipped, urgent, dismissedUrgent, later, arrived)
@@ -124,8 +168,14 @@ class LiveUpdateController(
         return listOfNotNull(fromBundle, fromPush).maxByOrNull { it.sentAt }
     }
 
-    private fun stop(clearGeofence: Boolean) {
+    private fun cancelLive(reason: String) {
+        if (liveShown) AppLog.info(LogCategory.LIVE, LogEvent.LIVE_END, "Live Update ended ($reason)", mapOf("reason" to reason))
+        liveShown = false
         LiveNotifications.cancelLive(appContext)
+    }
+
+    private fun stop(clearGeofence: Boolean, reason: String) {
+        cancelLive(reason)
         schedule(null)
         if (clearGeofence) geofence.clear()
     }
@@ -135,6 +185,7 @@ class LiveUpdateController(
     suspend fun toggleHeart(eventId: Int, itemId: Int) {
         if (repository.restore()?.event?.id != eventId) return
         val hearted = !hearts.hearts(eventId).has(SearchKind.SCHEDULE, itemId)
+        AppLog.info(LogCategory.LIVE, LogEvent.LIVE_ACTION, "Live Update action: ${if (hearted) "heart" else "unheart"}", mapOf("action" to if (hearted) "heart" else "unheart"))
         if (hearts.set(eventId, SearchKind.SCHEDULE, itemId, hearted)) {
             Hearts.metric(SearchKind.SCHEDULE, hearted)?.let { usage.track(eventId, it, itemId.toString()) }
         }
@@ -142,12 +193,14 @@ class LiveUpdateController(
     }
 
     suspend fun skip(eventId: Int, itemId: Int) {
+        AppLog.info(LogCategory.LIVE, LogEvent.LIVE_ACTION, "Live Update action: skip", mapOf("action" to "skip"))
         val bundle = repository.restore()?.takeIf { it.event.id == eventId } ?: return
         plans.skip(eventId, Instant.now().atZone(bundle.event.zone).toLocalDate(), itemId)
         refresh()
     }
 
     suspend fun dismissUrgent(eventId: Int, notificationId: Int) {
+        AppLog.info(LogCategory.LIVE, LogEvent.LIVE_ACTION, "Live Update action: dismiss urgent", mapOf("action" to "dismiss_urgent"))
         plans.dismissUrgent(eventId, notificationId)
         refresh()
     }
@@ -160,6 +213,7 @@ class LiveUpdateController(
     }
 
     suspend fun onArrived() {
+        AppLog.notice(LogCategory.LIVE, LogEvent.LIVE_ARRIVAL, "Arrived at the venue", mapOf("action" to "entered"))
         val bundle = repository.restore() ?: return
         plans.setArrived(bundle.event.id, Instant.now().atZone(bundle.event.zone).toLocalDate())
         refresh()
@@ -189,6 +243,10 @@ class LiveUpdateController(
         // Inexact: delivered within ±5 min of the target (Android may stretch windows under 10 min).
         val start = maxOf(System.currentTimeMillis(), at.toEpochMilli() - WINDOW_MS / 2)
         alarms.setWindow(AlarmManager.RTC_WAKEUP, start, WINDOW_MS, intent)
+        AppLog.debug(
+            LogCategory.LIVE, LogEvent.LIVE_WAKE_SCHEDULED, "Next Live Update wake-up in ${(start - System.currentTimeMillis()) / 60_000} min",
+            mapOf("at" to LogJson.timestamp(Instant.ofEpochMilli(start)), "reason" to "next_change", "window_s" to WINDOW_MS / 1000),
+        )
     }
 
     @SuppressLint("MissingPermission") // checked by hasLocationPermission()
@@ -201,13 +259,13 @@ class LiveUpdateController(
                 ?.let { GeoPoint.of(it.latitude, it.longitude) }
         } catch (e: CancellationException) {
             throw e
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            AppLog.caught(LogCategory.LOCATION, "live.last_location", e, LogLevel.WARNING)
             null
         }
     }
 
     private companion object {
-        const val TAG = "LiveUpdate"
         const val WINDOW_MS = 10 * 60 * 1000L
         const val LOCATION_TIMEOUT_MS = 3_000L
         val MAX_LOCATION_AGE: Duration = Duration.ofMinutes(30)

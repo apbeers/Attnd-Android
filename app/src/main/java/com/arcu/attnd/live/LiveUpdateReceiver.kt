@@ -4,6 +4,9 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import com.arcu.attnd.AttndApplication
+import com.arcu.attnd.domain.AppLog
+import com.arcu.attnd.domain.LogCategory
+import com.arcu.attnd.domain.LogEvent
 import com.google.android.gms.location.Geofence
 import com.google.android.gms.location.GeofencingEvent
 import kotlinx.coroutines.launch
@@ -20,6 +23,15 @@ class LiveUpdateReceiver : BroadcastReceiver() {
         val live = app.graph.liveUpdates
         val eventId = intent.getIntExtra(EXTRA_EVENT_ID, -1)
         val itemId = intent.getIntExtra(EXTRA_ITEM_ID, -1)
+        val reason = when (intent.action) {
+            ACTION_TICK -> "alarm"
+            ACTION_GEOFENCE -> "geofence"
+            ACTION_HEART, ACTION_SKIP, ACTION_DISMISS_URGENT, ACTION_DISMISSED -> "intent"
+            else -> "boot" // BOOT_COMPLETED, MY_PACKAGE_REPLACED, TIMEZONE_CHANGED
+        }
+        if (!app.graph.logSink.isForeground) {
+            AppLog.info(LogCategory.BACKGROUND, LogEvent.WAKE, "Woken: $reason", mapOf("reason" to reason))
+        }
         val pending = goAsync()
         app.graph.appScope.launch {
             try {

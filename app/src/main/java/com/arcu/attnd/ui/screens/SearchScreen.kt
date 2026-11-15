@@ -56,9 +56,9 @@ import androidx.compose.material3.SearchBarValue
 import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.ToggleButton
 import androidx.compose.material3.ToggleButtonDefaults
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -98,9 +98,9 @@ import com.arcu.attnd.ui.AssistantUiState
 import com.arcu.attnd.ui.SearchRequest
 import com.arcu.attnd.ui.components.DistanceArrow
 import com.arcu.attnd.ui.components.EmptyState
+import com.arcu.attnd.ui.components.EventInfoCard
 import com.arcu.attnd.ui.components.HeartButton
 import com.arcu.attnd.ui.components.LocalEventActions
-import com.arcu.attnd.ui.components.EventInfoCard
 import com.arcu.attnd.ui.components.RemoteImage
 import com.arcu.attnd.ui.components.SectionHeader
 import com.arcu.attnd.ui.components.rememberNow
@@ -160,7 +160,7 @@ fun EventSearch(
     val query = textFieldState.text.toString()
     val expanded = searchBarState.currentValue == SearchBarValue.Expanded
     // API-005 `search`, counted exactly like the per-tab search fields (submit or 1.5 s settle).
-    val submit = rememberSearchReporter(query, onSearch)
+    val submit = rememberSearchReporter(query, onSearch, source = "sheet", countResults = { q -> EventSearch.search(bundle, q, Instant.now()).size })
     val assistantUsable = assistant.availability in USABLE
     val fieldFocus = remember { FocusRequester() }
 

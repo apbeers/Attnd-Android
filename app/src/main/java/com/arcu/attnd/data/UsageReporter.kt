@@ -2,6 +2,10 @@ package com.arcu.attnd.data
 
 import com.arcu.attnd.data.api.UsageEntryDto
 import com.arcu.attnd.data.api.UsageRequest
+import com.arcu.attnd.data.net.ApiException
+import com.arcu.attnd.domain.AppLog
+import com.arcu.attnd.domain.LogCategory
+import com.arcu.attnd.domain.LogEvent
 import com.arcu.attnd.domain.UsageAggregator
 import com.arcu.attnd.domain.UsageEntry
 import kotlinx.coroutines.CancellationException
@@ -37,10 +41,13 @@ class UsageReporter(
     private var timer: Job? = null
     private val flushMutex = Mutex()
 
-    /** Counts one [name] (with optional [detail]) for [eventId]. Cheap; safe from any thread. */
-    fun track(eventId: Int, name: String, detail: String? = null) {
+    /**
+     * Counts one [name] (with optional [detail]) for [eventId], in the window of [at] (default now).
+     * Cheap; safe from any thread.
+     */
+    fun track(eventId: Int, name: String, detail: String? = null, at: Instant? = null) {
         synchronized(lock) {
-            pending.getOrPut(eventId) { UsageAggregator() }.add(name, detail, clock())
+            pending.getOrPut(eventId) { UsageAggregator() }.add(name, detail, at ?: clock())
         }
         scheduleFlush()
     }
@@ -58,7 +65,7 @@ class UsageReporter(
                 pending.clear()
                 failedOnce to drained
             }
-            retrying.forEach { send(it) } // second failure: dropped
+            retrying.forEach { send(it, retry = true) } // second failure: dropped
             fresh.forEach { batch ->
                 if (!send(batch)) synchronized(lock) { retries += batch }
             }
@@ -81,12 +88,17 @@ class UsageReporter(
         }
     }
 
-    private suspend fun send(batch: Batch): Boolean = try {
+    private suspend fun send(batch: Batch, retry: Boolean = false): Boolean = try {
         sender(batch.eventId, UsageRequest(events = batch.entries))
+        AppLog.debug(LogCategory.NET, LogEvent.USAGE_FLUSHED, "Usage sent", mapOf("entries" to batch.entries.size, "status" to 200, "retry" to retry))
         true
     } catch (e: CancellationException) {
         throw e
-    } catch (_: Exception) {
+    } catch (e: Exception) {
+        AppLog.debug(
+            LogCategory.NET, LogEvent.USAGE_FLUSHED, "Usage not sent (${AppLog.errorKind(e)})",
+            mapOf("entries" to batch.entries.size, "status" to ((e as? ApiException)?.code ?: 0), "retry" to retry),
+        )
         false
     }
 

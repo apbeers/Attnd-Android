@@ -6,14 +6,18 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.arcu.attnd.R
 import com.arcu.attnd.assistant.OpenIntents
+import com.arcu.attnd.domain.AppLog
 import com.arcu.attnd.domain.EventBundle
 import com.arcu.attnd.domain.Hearts
 import com.arcu.attnd.domain.LiveMode
 import com.arcu.attnd.domain.LiveState
+import com.arcu.attnd.domain.LogCategory
+import com.arcu.attnd.domain.LogEvent
 import com.arcu.attnd.domain.OpenRequest
 import com.arcu.attnd.domain.OpenTarget
 import com.arcu.attnd.domain.SearchKind
@@ -75,9 +79,10 @@ object LiveNotifications {
         )
     }
 
+    /** Posts the Live Update; false when it can't be shown (no POST_NOTIFICATIONS). */
     @SuppressLint("MissingPermission") // checked by PushNotifications.hasPermission()
-    fun showLive(context: Context, bundle: EventBundle, state: LiveState, hearts: Hearts) {
-        if (!PushNotifications.hasPermission(context)) return
+    fun showLive(context: Context, bundle: EventBundle, state: LiveState, hearts: Hearts): Boolean {
+        if (!PushNotifications.hasPermission(context)) return false
         val eventId = bundle.event.id
         val focus = state.focus
         val urgent = state.urgent
@@ -132,6 +137,7 @@ object LiveNotifications {
             builder.addAction(0, context.getString(R.string.live_action_map), open(context, eventId, OpenTarget.MapLocation(place.id)))
         }
         NotificationManagerCompat.from(context).notify(LIVE_NOTIFICATION_ID, builder.build())
+        return true
     }
 
     /** The day as a journey: item segments in the accent colour, gaps neutral, a point at each start. */
@@ -145,6 +151,10 @@ object LiveNotifications {
         style.setProgress(state.progress)
         return style
     }
+
+    /** Live Updates may be promoted (Android 16+ lets the user turn that off per app). */
+    fun canPromote(context: Context): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.BAKLAVA || NotificationManagerCompat.from(context).canPostPromotedNotifications()
 
     fun cancelLive(context: Context) {
         NotificationManagerCompat.from(context).cancel(LIVE_NOTIFICATION_ID)
@@ -165,6 +175,7 @@ object LiveNotifications {
             .setContentIntent(open(context, eventId, OpenTarget.ScheduleItem(itemId)))
             .build()
         NotificationManagerCompat.from(context).notify(REMINDER_ID_BASE + itemId, notification)
+        AppLog.info(LogCategory.LIVE, LogEvent.LIVE_REMINDER_SHOWN, "Reminder shown", mapOf("item_id" to itemId))
     }
 
     /**
@@ -173,7 +184,10 @@ object LiveNotifications {
      */
     @SuppressLint("MissingPermission") // checked by PushNotifications.hasPermission()
     fun showUrgent(context: Context, notificationId: Int?, title: String, body: String) {
-        if (!PushNotifications.hasPermission(context)) return
+        if (!PushNotifications.hasPermission(context)) {
+            AppLog.warning(LogCategory.PUSH, LogEvent.PUSH_DROPPED, "Urgent notification not shown: no permission", mapOf("type" to "notification", "reason" to "no_permission"))
+            return
+        }
         val localId = notificationId ?: (System.currentTimeMillis() % Int.MAX_VALUE).toInt()
         // Like other organizer notifications: counts `notification_open` and scrolls to it.
         val tap = PushNotifications.openNotificationsIntent(context, localId, notificationId)

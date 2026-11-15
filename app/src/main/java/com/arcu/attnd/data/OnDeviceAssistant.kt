@@ -1,6 +1,8 @@
 package com.arcu.attnd.data
 
-import android.util.Log
+import com.arcu.attnd.domain.AppLog
+import com.arcu.attnd.domain.LogCategory
+import com.arcu.attnd.domain.LogLevel
 import com.google.mlkit.genai.common.DownloadStatus
 import com.google.mlkit.genai.common.FeatureStatus
 import com.google.mlkit.genai.prompt.Generation
@@ -46,12 +48,12 @@ class OnDeviceAssistant {
         return try {
             Generation.getClient().also { client = it }
         } catch (e: Exception) {
-            Log.w(TAG, "Prompt API client unavailable", e)
+            AppLog.caught(LogCategory.ASSISTANT, "genai.client", e, LogLevel.WARNING)
             clientFailed = true
             null
         } catch (e: LinkageError) {
             // Play services / AICore classes missing on this build of the OS.
-            Log.w(TAG, "Prompt API client unavailable", e)
+            AppLog.caught(LogCategory.ASSISTANT, "genai.client", e, LogLevel.WARNING)
             clientFailed = true
             null
         }
@@ -69,7 +71,7 @@ class OnDeviceAssistant {
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            Log.w(TAG, "Prompt API status check failed", e)
+            AppLog.caught(LogCategory.ASSISTANT, "genai.status", e, LogLevel.WARNING)
             AssistantAvailability.UNAVAILABLE
         }
     }
@@ -115,7 +117,6 @@ class OnDeviceAssistant {
     }
 
     private companion object {
-        const val TAG = "OnDeviceAssistant"
         const val TEMPERATURE = 0.2f
         const val TOP_K = 16
         const val MAX_OUTPUT_TOKENS = 256

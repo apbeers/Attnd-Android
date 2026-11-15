@@ -60,14 +60,15 @@ import com.arcu.attnd.ui.components.EventActions
 import com.arcu.attnd.ui.components.EventStatusPills
 import com.arcu.attnd.ui.components.LocalEventActions
 import com.arcu.attnd.ui.components.LocalScreenshotMode
-import com.arcu.attnd.ui.components.UpdateBanner
 import com.arcu.attnd.ui.components.OfflineNotice
+import com.arcu.attnd.ui.components.UpdateBanner
 import com.arcu.attnd.ui.screens.EventSearch
 import com.arcu.attnd.ui.screens.EventTopBar
 import com.arcu.attnd.ui.screens.FlyerScreen
 import com.arcu.attnd.ui.screens.LaunchScreen
 import com.arcu.attnd.ui.screens.LocationDetail
 import com.arcu.attnd.ui.screens.LocationsTab
+import com.arcu.attnd.ui.screens.LogViewerSource
 import com.arcu.attnd.ui.screens.NotificationsScreen
 import com.arcu.attnd.ui.screens.OnboardingScreen
 import com.arcu.attnd.ui.screens.OptionsScreen
@@ -126,6 +127,16 @@ fun AttndApp(viewModel: EventViewModel = viewModel(factory = EventViewModel.Fact
                                 onTour = viewModel::showTour,
                                 onLeaveEvent = viewModel::leaveEvent,
                                 onBack = { viewModel.showOptions(false) },
+                                diagnostics = state.diagnostics,
+                                onStartDebugMode = viewModel::startDebugMode,
+                                onStopDebugMode = viewModel::stopDebugMode,
+                                logs = remember(viewModel) {
+                                    LogViewerSource(
+                                        load = viewModel::logRecords,
+                                        export = viewModel::exportLogs,
+                                        uploadStatus = { viewModel.logUploadStatus },
+                                    )
+                                },
                             )
                         } else {
                             // Hearts and "Show on map" for every row, detail, card and the search screen.

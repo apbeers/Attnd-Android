@@ -6,10 +6,12 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.util.Log
 import androidx.core.content.ContextCompat
+import com.arcu.attnd.domain.AppLog
 import com.arcu.attnd.domain.EventBundle
 import com.arcu.attnd.domain.LiveFollow
+import com.arcu.attnd.domain.LogCategory
+import com.arcu.attnd.domain.LogLevel
 import com.google.android.gms.location.Geofence
 import com.google.android.gms.location.GeofencingRequest
 import com.google.android.gms.location.LocationServices
@@ -62,9 +64,9 @@ class VenueGeofence(private val context: Context) {
         try {
             LocationServices.getGeofencingClient(context).addGeofences(request, pendingIntent())
                 .addOnSuccessListener { registeredKey = key }
-                .addOnFailureListener { Log.w(TAG, "Geofence not added", it) }
+                .addOnFailureListener { AppLog.caught(LogCategory.LIVE, "geofence.add", it, LogLevel.WARNING) }
         } catch (e: Exception) {
-            Log.w(TAG, "Geofence not added", e)
+            AppLog.caught(LogCategory.LIVE, "geofence.add", e, LogLevel.WARNING)
         }
     }
 
@@ -74,12 +76,11 @@ class VenueGeofence(private val context: Context) {
         try {
             LocationServices.getGeofencingClient(context).removeGeofences(pendingIntent())
         } catch (e: Exception) {
-            Log.w(TAG, "Geofence not removed", e)
+            AppLog.caught(LogCategory.LIVE, "geofence.remove", e, LogLevel.WARNING)
         }
     }
 
     private companion object {
-        const val TAG = "VenueGeofence"
         const val REQUEST_CODE = 7_002
     }
 }

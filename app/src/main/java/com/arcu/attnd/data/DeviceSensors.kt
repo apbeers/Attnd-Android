@@ -14,8 +14,12 @@ import android.os.Looper
 import android.view.Display
 import android.view.Surface
 import androidx.core.content.ContextCompat
-import com.arcu.attnd.domain.GeoPoint
+import com.arcu.attnd.domain.AppLog
 import com.arcu.attnd.domain.Geo
+import com.arcu.attnd.domain.GeoPoint
+import com.arcu.attnd.domain.LogCategory
+import com.arcu.attnd.domain.LogEvent
+import com.arcu.attnd.domain.LogLevel
 import com.google.android.gms.location.DeviceOrientation
 import com.google.android.gms.location.DeviceOrientationListener
 import com.google.android.gms.location.DeviceOrientationRequest
@@ -82,6 +86,7 @@ class UserLocationSource(context: Context) {
         }
         if (running) return
         running = true
+        AppLog.debug(LogCategory.LOCATION, LogEvent.LOCATION_UPDATES, "Location updates started", mapOf("on" to true, "heading" to false, "consumers" to users))
         try {
             client.lastLocation.addOnSuccessListener { last ->
                 if (last != null && _location.value == null) {
@@ -94,19 +99,29 @@ class UserLocationSource(context: Context) {
                 .setMinUpdateDistanceMeters(MIN_UPDATE_DISTANCE_M)
                 .build()
             client.requestLocationUpdates(request, callback, Looper.getMainLooper())
-                .addOnFailureListener { running = false }
-        } catch (_: Exception) {
+                .addOnFailureListener {
+                    running = false
+                    locationError(it)
+                }
+        } catch (e: Exception) {
             // No Play services or a revoked permission: no distances.
             running = false
+            locationError(e)
         }
+    }
+
+    private fun locationError(e: Exception) {
+        AppLog.warning(LogCategory.LOCATION, LogEvent.LOCATION_ERROR, "Location updates failed", mapOf("error" to AppLog.errorKind(e), "domain" to e.javaClass.simpleName))
     }
 
     private fun stop() {
         if (!running) return
         running = false
+        AppLog.debug(LogCategory.LOCATION, LogEvent.LOCATION_UPDATES, "Location updates stopped", mapOf("on" to false, "heading" to false, "consumers" to users))
         try {
             client.removeLocationUpdates(callback)
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            AppLog.caught(LogCategory.LOCATION, "location.stop", e, LogLevel.WARNING)
         }
     }
 
@@ -186,12 +201,17 @@ class HeadingSource(context: Context, private val userLocation: UserLocationSour
 
     private fun startFused() {
         mode = Mode.FUSED
+        AppLog.debug(LogCategory.LOCATION, LogEvent.HEADING_SOURCE, "Heading: fused orientation", mapOf("source" to "fused_orientation"))
         try {
             val request = DeviceOrientationRequest.Builder(SAMPLING_PERIOD_US).build()
             LocationServices.getFusedOrientationProviderClient(appContext)
                 .requestOrientationUpdates(request, ContextCompat.getMainExecutor(appContext), fusedListener)
-                .addOnFailureListener { if (mode == Mode.FUSED) startSensor() }
-        } catch (_: Exception) {
+                .addOnFailureListener {
+                    AppLog.caught(LogCategory.LOCATION, "heading.fused", it, LogLevel.WARNING)
+                    if (mode == Mode.FUSED) startSensor()
+                }
+        } catch (e: Exception) {
+            AppLog.caught(LogCategory.LOCATION, "heading.fused", e, LogLevel.WARNING)
             startSensor()
         }
     }
@@ -201,9 +221,11 @@ class HeadingSource(context: Context, private val userLocation: UserLocationSour
         val sensor = sensorManager?.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
         if (sensor == null || users == 0) {
             mode = Mode.STOPPED
+            if (sensor == null) AppLog.info(LogCategory.LOCATION, LogEvent.LOCATION_ERROR, "No heading sensor: no arrows", mapOf("error" to "no_sensor"))
             return
         }
         mode = Mode.SENSOR
+        AppLog.debug(LogCategory.LOCATION, LogEvent.HEADING_SOURCE, "Heading: rotation-vector sensor", mapOf("source" to "rotation_vector"))
         sensorManager?.registerListener(sensorListener, sensor, SAMPLING_PERIOD_US.toInt())
     }
 
@@ -221,7 +243,8 @@ class HeadingSource(context: Context, private val userLocation: UserLocationSour
     private fun stopFused() {
         try {
             LocationServices.getFusedOrientationProviderClient(appContext).removeOrientationUpdates(fusedListener)
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            AppLog.caught(LogCategory.LOCATION, "heading.stop", e, LogLevel.WARNING)
         }
     }
 

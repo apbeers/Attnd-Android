@@ -24,6 +24,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.arcu.attnd.domain.AppLog
+import com.arcu.attnd.domain.LogCategory
+import com.arcu.attnd.domain.LogLevel
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
@@ -94,8 +97,9 @@ fun QrScannerView(onScanned: (String) -> Unit) {
                 try {
                     provider.unbindAll()
                     provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
-                } catch (_: Exception) {
+                } catch (e: Exception) {
                     // No back camera or camera in use; the dialog can still be cancelled.
+                    AppLog.caught(LogCategory.UI, "qr.camera", e, LogLevel.WARNING)
                 }
             }, ContextCompat.getMainExecutor(ctx))
             previewView

@@ -2,6 +2,7 @@ package com.arcu.attnd
 
 import android.content.Intent
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -13,7 +14,11 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.arcu.attnd.assistant.AppShortcuts
 import com.arcu.attnd.assistant.OpenIntents
+import com.arcu.attnd.data.log.LaunchTiming
+import com.arcu.attnd.domain.AppLog
 import com.arcu.attnd.domain.JoinLinks
+import com.arcu.attnd.domain.LogCategory
+import com.arcu.attnd.domain.LogEvent
 import com.arcu.attnd.domain.ScreenshotRequest
 import com.arcu.attnd.push.PushNotifications
 import com.arcu.attnd.ui.AttndApp
@@ -29,7 +34,10 @@ class MainActivity : ComponentActivity() {
 
     private val viewModel: EventViewModel by viewModels { EventViewModel.Factory }
 
+    private val graph get() = (application as AttndApplication).graph
+
     override fun onCreate(savedInstanceState: Bundle?) {
+        val isLaunch = LaunchTiming.onActivityCreate(SystemClock.uptimeMillis(), restored = savedInstanceState != null)
         installSplashScreen()
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -44,12 +52,44 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent { AttndApp(viewModel) }
+
+        // Launch timing (cold / warm) ends with the first frame committed after this onCreate.
+        if (isLaunch) {
+            window.decorView.viewTreeObserver.registerFrameCommitCallback {
+                LaunchTiming.onFirstFrame(SystemClock.uptimeMillis(), graph.perf, restored = graph.repository.bundle.value != null)
+            }
+        }
+    }
+
+    /** When the app last went to the background / foreground (`since_bg_s`, `fg_s`). */
+    private var backgroundedAt = 0L
+    private var foregroundedAt = 0L
+
+    override fun onStart() {
+        super.onStart()
+        if (!isChangingConfigurations) {
+            val now = SystemClock.elapsedRealtime()
+            foregroundedAt = now
+            AppLog.info(
+                LogCategory.LIFECYCLE, LogEvent.FOREGROUND, "App in the foreground",
+                mapOf("since_bg_s" to (if (backgroundedAt > 0) (now - backgroundedAt) / 1000 else null)),
+            )
+        }
     }
 
     override fun onStop() {
         super.onStop()
         // Backgrounded (not just rotated): send usage counts now; the next resume is an app_open.
-        if (!isChangingConfigurations) viewModel.onAppBackground()
+        if (!isChangingConfigurations) {
+            val now = SystemClock.elapsedRealtime()
+            backgroundedAt = now
+            AppLog.info(
+                LogCategory.LIFECYCLE, LogEvent.BACKGROUND, "App in the background",
+                mapOf("fg_s" to (if (foregroundedAt > 0) (now - foregroundedAt) / 1000 else null)),
+            )
+            viewModel.onAppBackground()
+            graph.diagnostics.onBackground()
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -68,6 +108,9 @@ class MainActivity : ComponentActivity() {
                 locationName = intent.getStringExtra(ScreenshotRequest.EXTRA_LOCATION),
             )
             if (screenshot != null) {
+                // Screenshot mode is quiet: no log uploads, no performance counts.
+                graph.diagnostics.suspendUploads()
+                graph.perf.suspended = true
                 // Never show the on-screen keyboard in a store screenshot.
                 window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN)
                 viewModel.startScreenshot(screenshot)
@@ -75,18 +118,29 @@ class MainActivity : ComponentActivity() {
             }
         }
         if (PushNotifications.opensNotifications(intent)) {
+            AppLog.info(
+                LogCategory.PUSH, LogEvent.PUSH_OPENED, "Notification opened",
+                mapOf("type" to "notification", "notification_id" to PushNotifications.notificationId(intent)),
+            )
             viewModel.openNotifications(PushNotifications.notificationId(intent))
             return
         }
         // Internal open links (launcher shortcuts, AppFunctions results): attnd-open://<event>/<target>
         OpenIntents.parse(intent)?.let {
+            AppLog.info(
+                LogCategory.LIFECYCLE, LogEvent.DEEP_LINK, "Opened by an internal link",
+                mapOf("kind" to if (AppShortcuts.isShortcut(intent)) "shortcut" else "open", "target" to it.target.javaClass.simpleName.lowercase()),
+            )
             AppShortcuts.reportUsed(this, intent)
             viewModel.open(it)
             return
         }
         // App Link: https://attnd.app/join/<code>/
         if (intent.action == Intent.ACTION_VIEW) {
-            JoinLinks.parseJoinCode(intent.dataString)?.let { viewModel.joinByCode(it) }
+            JoinLinks.parseJoinCode(intent.dataString)?.let {
+                AppLog.info(LogCategory.LIFECYCLE, LogEvent.DEEP_LINK, "Opened by a join link", mapOf("kind" to "join", "target" to "/join/{id}/"))
+                viewModel.joinByCode(it)
+            }
         }
     }
 }

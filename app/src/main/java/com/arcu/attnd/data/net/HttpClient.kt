@@ -6,11 +6,15 @@ import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URI
 
-/** A completed HTTP exchange. [body] is null for 204/304 and when the server sent nothing. */
+/**
+ * A completed HTTP exchange. [body] is null for 204/304 and when the server sent nothing.
+ * [bytes] is the size of the response body as received (for diagnostics; -1 when unknown).
+ */
 class HttpResponse(
     val code: Int,
     val body: String?,
     private val headers: Map<String, List<String>>,
+    val bytes: Long = body?.length?.toLong() ?: 0L,
 ) {
     val isSuccessful: Boolean get() = code in 200..299
 
@@ -25,6 +29,13 @@ class ApiException(val code: Int, message: String = "HTTP $code") : Exception(me
 /** Seam for tests; the app uses [UrlConnectionHttpClient]. */
 fun interface HttpClient {
     suspend fun execute(method: String, url: String, headers: Map<String, String>, body: String?): HttpResponse
+
+    /**
+     * A binary request body (API-013: gzip-compressed diagnostics uploads). [headers] carry its
+     * `Content-Type` / `Content-Encoding`. Test fakes that don't need it keep this default.
+     */
+    suspend fun executeBytes(method: String, url: String, headers: Map<String, String>, body: ByteArray): HttpResponse =
+        throw IOException("Binary request bodies are not supported by this client")
 }
 
 /**
@@ -41,7 +52,16 @@ class UrlConnectionHttpClient(
         url: String,
         headers: Map<String, String>,
         body: String?,
-    ): HttpResponse = withContext(Dispatchers.IO) {
+    ): HttpResponse = send(
+        method, url,
+        if (body == null) headers else mapOf("Content-Type" to "application/json; charset=utf-8") + headers,
+        body?.toByteArray(Charsets.UTF_8),
+    )
+
+    override suspend fun executeBytes(method: String, url: String, headers: Map<String, String>, body: ByteArray): HttpResponse =
+        send(method, url, headers, body)
+
+    private suspend fun send(method: String, url: String, headers: Map<String, String>, body: ByteArray?): HttpResponse = withContext(Dispatchers.IO) {
         val connection = URI(url).toURL().openConnection() as HttpURLConnection
         try {
             connection.requestMethod = method
@@ -52,8 +72,8 @@ class UrlConnectionHttpClient(
             headers.forEach { (name, value) -> connection.setRequestProperty(name, value) }
             if (body != null) {
                 connection.doOutput = true
-                connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+                connection.setFixedLengthStreamingMode(body.size)
+                connection.outputStream.use { it.write(body) }
             }
             val code = connection.responseCode
             if (code < 0) throw IOException("Invalid HTTP response")
@@ -62,11 +82,11 @@ class UrlConnectionHttpClient(
                 code >= 400 -> connection.errorStream
                 else -> connection.inputStream
             }
-            val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
+            val raw = stream?.use { it.readBytes() }
             val responseHeaders = connection.headerFields.orEmpty()
                 .filterKeys { it != null }
                 .mapKeys { it.key!! }
-            HttpResponse(code, text, responseHeaders)
+            HttpResponse(code, raw?.toString(Charsets.UTF_8), responseHeaders, raw?.size?.toLong() ?: 0L)
         } finally {
             connection.disconnect()
         }

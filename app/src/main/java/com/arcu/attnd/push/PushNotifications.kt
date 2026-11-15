@@ -13,6 +13,9 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.arcu.attnd.MainActivity
 import com.arcu.attnd.R
+import com.arcu.attnd.domain.AppLog
+import com.arcu.attnd.domain.LogCategory
+import com.arcu.attnd.domain.LogEvent
 import com.google.firebase.FirebaseApp
 import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.CancellationException
@@ -74,7 +77,10 @@ object PushNotifications {
      */
     @SuppressLint("MissingPermission") // checked by hasPermission()
     fun show(context: Context, title: String, body: String, notificationId: Int, serverNotificationId: Int? = null) {
-        if (!hasPermission(context)) return
+        if (!hasPermission(context)) {
+            AppLog.info(LogCategory.PUSH, LogEvent.PUSH_DROPPED, "Not shown: no notification permission", mapOf("type" to "notification", "reason" to "no_permission"))
+            return
+        }
         val pendingIntent = openNotificationsIntent(context, notificationId, serverNotificationId)
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_attnd)
@@ -110,12 +116,16 @@ object PushNotifications {
      */
     @Suppress("DEPRECATION")
     suspend fun currentToken(context: Context): String? {
-        if (FirebaseApp.getApps(context).isEmpty()) return null
+        if (FirebaseApp.getApps(context).isEmpty()) {
+            AppLog.info(LogCategory.PUSH, LogEvent.PUSH_TOKEN_FAILED, "Firebase not configured: no push token", mapOf("error" to "not_configured"))
+            return null
+        }
         return try {
             FirebaseMessaging.getInstance().token.await()
         } catch (e: CancellationException) {
             throw e
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            AppLog.warning(LogCategory.PUSH, LogEvent.PUSH_TOKEN_FAILED, "FCM token unavailable", mapOf("error" to AppLog.errorKind(e), "domain" to e.javaClass.simpleName))
             null
         }
     }

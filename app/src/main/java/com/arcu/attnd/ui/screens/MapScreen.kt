@@ -5,6 +5,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.SystemClock
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -15,10 +16,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
@@ -35,13 +36,13 @@ import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.FloatingToolbarDefaults
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
-import androidx.compose.material3.VerticalFloatingToolbar
 import androidx.compose.material3.Text
+import androidx.compose.material3.VerticalFloatingToolbar
 import androidx.compose.material3.contentColorFor
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -65,6 +66,8 @@ import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import com.arcu.attnd.AttndApplication
 import com.arcu.attnd.R
+import com.arcu.attnd.data.log.PermissionLog
+import com.arcu.attnd.domain.AppLog
 import com.arcu.attnd.domain.DisplayConfig
 import com.arcu.attnd.domain.DistanceUnits
 import com.arcu.attnd.domain.EventBundle
@@ -73,7 +76,11 @@ import com.arcu.attnd.domain.Geo
 import com.arcu.attnd.domain.GeoPoint
 import com.arcu.attnd.domain.Glance
 import com.arcu.attnd.domain.LocationGrouping
+import com.arcu.attnd.domain.LogCategory
+import com.arcu.attnd.domain.LogEvent
+import com.arcu.attnd.domain.LogLevel
 import com.arcu.attnd.domain.NowPlaying
+import com.arcu.attnd.domain.PerfMetric
 import com.arcu.attnd.domain.SearchKind
 import com.arcu.attnd.domain.WalkRoute
 import com.arcu.attnd.domain.Walking
@@ -201,6 +208,8 @@ fun EventMap(
         }
     }
     var mapLoaded by remember { mutableStateOf(false) }
+    // map.first_render (logging spec §1/§6): from the map's first composition to onMapLoaded.
+    val renderStart = remember { MapRenderTiming.start() }
     var initialFitDone by rememberSaveable { mutableStateOf(false) }
     val paddingPx = with(density) { 48.dp.roundToPx() }
 
@@ -223,8 +232,9 @@ fun EventMap(
         scope.launch {
             try {
                 if (animate) cameraPositionState.animate(update) else cameraPositionState.move(update)
-            } catch (_: Exception) {
+            } catch (e: Exception) {
                 // newLatLngBounds throws if the map has no size yet; the next request will work.
+                AppLog.caught(LogCategory.MAP, "map.camera", e, LogLevel.DEBUG)
             }
         }
     }
@@ -290,6 +300,7 @@ fun EventMap(
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) { result ->
+        PermissionLog.location("map", result)
         if (result.values.any { it }) {
             onShowUserLocationChange(true)
             scope.launch { zoomToUser(context, cameraPositionState) }
@@ -326,7 +337,10 @@ fun EventMap(
                     zoomControlsEnabled = false,
                     mapToolbarEnabled = false,
                 ),
-                onMapLoaded = { mapLoaded = true },
+                onMapLoaded = {
+                    if (!mapLoaded) MapRenderTiming.loaded(context, renderStart, pins.size, display.mapClustering)
+                    mapLoaded = true
+                },
                 onMapClick = { selectedId = null },
             ) {
                 shownRoute?.let { walk ->
@@ -560,7 +574,8 @@ private fun SelectedLocationCard(
                         val uri = "https://www.google.com/maps/dir/?api=1&destination=${point.latitude},${point.longitude}&travelmode=walking".toUri()
                         try {
                             context.startActivity(Intent(Intent.ACTION_VIEW, uri))
-                        } catch (_: Exception) {
+                        } catch (e: Exception) {
+                            AppLog.caught(LogCategory.UI, "map.directions", e, LogLevel.WARNING)
                         }
                     }) { Text("Directions") }
                 }
@@ -580,5 +595,21 @@ private suspend fun zoomToUser(context: Context, camera: CameraPositionState) {
         val location = LocationServices.getFusedLocationProviderClient(context).lastLocation.await() ?: return
         camera.animate(CameraUpdateFactory.newLatLngZoom(LatLng(location.latitude, location.longitude), STREET_ZOOM))
     } catch (_: Exception) {
+    }
+}
+
+/** `map.first_render`: an async Trace section and a log line from first composition to the first loaded map. */
+private object MapRenderTiming {
+    class Start(val atMs: Long, val cookie: Int)
+
+    fun start() = Start(SystemClock.uptimeMillis(), AppLog.beginAsync(SECTION))
+
+    private const val SECTION = "map_first_render"
+
+    fun loaded(context: Context, start: Start, pins: Int, clustering: Boolean) {
+        AppLog.endAsync(SECTION, start.cookie)
+        val ms = SystemClock.uptimeMillis() - start.atMs
+        AppLog.info(LogCategory.MAP, LogEvent.MAP_FIRST_RENDER, "Map loaded in $ms ms", mapOf("ms" to ms, "pins" to pins, "clustered" to clustering))
+        (context.applicationContext as? AttndApplication)?.graph?.perf?.record(PerfMetric.MAP_FIRST_RENDER, PerfMetric.mapBucket(ms))
     }
 }

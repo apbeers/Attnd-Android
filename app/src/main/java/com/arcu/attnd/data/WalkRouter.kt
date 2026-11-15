@@ -2,13 +2,17 @@ package com.arcu.attnd.data
 
 import android.content.Context
 import android.content.pm.PackageManager
-import com.arcu.attnd.domain.EncodedPolyline
-import com.arcu.attnd.domain.GeoPoint
-import com.arcu.attnd.domain.Geo
-import com.arcu.attnd.domain.WalkRoute
-import com.arcu.attnd.domain.Walking
 import com.arcu.attnd.data.net.HttpClient
 import com.arcu.attnd.data.net.UrlConnectionHttpClient
+import com.arcu.attnd.domain.AppLog
+import com.arcu.attnd.domain.EncodedPolyline
+import com.arcu.attnd.domain.Geo
+import com.arcu.attnd.domain.GeoPoint
+import com.arcu.attnd.domain.LogCategory
+import com.arcu.attnd.domain.LogEvent
+import com.arcu.attnd.domain.LogLevel
+import com.arcu.attnd.domain.WalkRoute
+import com.arcu.attnd.domain.Walking
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -43,13 +47,23 @@ class WalkRouter(
             ?.takeIf { it.destination == destination && !Walking.shouldReroute(it.origin, origin) }
             ?.let { return it.route }
         val straight = Geo.distanceMeters(origin, destination)
+        val started = System.nanoTime()
         val fetched = try {
             fetch(origin, destination)
         } catch (e: CancellationException) {
             throw e
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            AppLog.debug(
+                LogCategory.NET, LogEvent.ROUTE_FETCHED, "Walking route failed (${AppLog.errorKind(e)}): estimate",
+                mapOf("ms" to (System.nanoTime() - started) / 1_000_000, "ok" to false, "fallback" to true, "m" to straight.toInt()),
+            )
             return Walking.estimate(origin, destination)
         }
+        val accepted = fetched?.takeIf { Walking.accept(it.distanceMeters, straight) }
+        AppLog.debug(
+            LogCategory.NET, LogEvent.ROUTE_FETCHED, if (accepted != null) "Walking route" else "No usable walking route: estimate",
+            mapOf("ms" to (System.nanoTime() - started) / 1_000_000, "ok" to (fetched != null), "fallback" to (accepted == null), "m" to (accepted?.distanceMeters ?: straight).toInt()),
+        )
         // A definite answer (a route, or none / an implausible one): cached.
         val route = fetched?.takeIf { Walking.accept(it.distanceMeters, straight) } ?: Walking.estimate(origin, destination)
         synchronized(cache) { cache[locationId] = Cached(origin, destination, route) }
@@ -144,7 +158,8 @@ object AppSignature {
             MessageDigest.getInstance("SHA-1").digest(certificate.toByteArray())
                 .joinToString("") { "%02X".format(it) }
                 .also { cached = it }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            AppLog.caught(LogCategory.NET, "app_signature", e, LogLevel.WARNING)
             null
         }
     }

@@ -3,11 +3,14 @@
 #                       app), and in parallel "Integration · dev" / "Integration · prod": the live API tests
 #                       (src/test/.../integration) against each server. The integration jobs never gate
 #                       delivery; prod may fail without failing the run (continue-on-error).
-#   push to develop   → also, in parallel: "Signed bundle" (release .aab, kept as an artifact); then
-#                       "Publish to Play" (Linux, needs the tests and the bundle) → internal testing (dev server).
-#   push to main      → the same → Play production (rollout set by PLAY_ROLLOUT), together with the store
-#                       listing text from store/en-US (same Play edit). Screenshots are separate and manual:
-#                       store-screenshots.yml; text-only updates: store-text.yml.
+#   push to develop   → also, in parallel: "Signed bundle" (the `dev` build type: release-signed, not
+#                       debuggable, no R8, BuildConfig.DEV = debug logging + uploads; kept as an artifact);
+#                       then "Publish to Play" (Linux, needs the tests and the bundle) → internal testing (dev server).
+#   push to main      → the same with the `release` build type (R8) → Play production (rollout set by
+#                       PLAY_ROLLOUT), together with the store listing text from store/en-US and the R8
+#                       mapping.txt (edits.deobfuscationfiles), all in one Play edit. The bundle job also posts
+#                       the mapping to attnd-web (POST /api/diagnostics/symbols/, API-013) for crash retrace.
+#                       Screenshots are separate and manual: store-screenshots.yml; text-only updates: store-text.yml.
 # Gradle caches (~/.gradle/caches incl. the build cache, and the wrapper) are kept between runs per job and
 # saved by every push (pull requests only read them).
 # Docs-only commits don't run; a newer push to develop cancels the older run (main never cancels).
@@ -106,6 +109,8 @@ jobs:
       VERSION_NAME: 2.0.${{ github.run_number }}
       ATTND_SERVER: ${{ vars.ATTND_SERVER || 'attnd.app' }}
       MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
+      # develop → the `dev` build type (readable code, debug logging); main → `release` (R8 minify).
+      BUILD_TYPE: ${{ github.ref == 'refs/heads/main' && 'release' || 'dev' }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-java@v6
@@ -142,10 +147,20 @@ jobs:
           } > signing.properties
           if [ -n "$GOOGLE_SERVICES_JSON" ]; then printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json; fi
       # lintVital (release lint for fatal issues) is skipped: "Unit tests & lint" runs the full lintDebug in
-      # parallel. The release Kotlin compile and R8 always run (the version code changes BuildConfig).
+      # parallel. The Kotlin compile (and R8 for release) always run (the version code changes BuildConfig).
       - name: Signed bundle
         id: bundle
-        run: ./gradlew bundleRelease -x lintVitalRelease
+        run: |
+          VARIANT="$(tr '[:lower:]' '[:upper:]' <<< "${BUILD_TYPE:0:1}")${BUILD_TYPE:1}"
+          ./gradlew "bundle$VARIANT" -x "lintVital$VARIANT"
+          mkdir -p "$RUNNER_TEMP/out"
+          cp "app/build/outputs/bundle/$BUILD_TYPE/app-$BUILD_TYPE.aab" "$RUNNER_TEMP/out/app.aab"
+          # R8 mapping (release only: the dev build type isn't minified) and native symbols, when built.
+          MAPPING="app/build/outputs/mapping/$BUILD_TYPE/mapping.txt"
+          if [ -f "$MAPPING" ]; then cp "$MAPPING" "$RUNNER_TEMP/out/mapping.txt"; fi
+          NATIVE="app/build/outputs/native-debug-symbols/$BUILD_TYPE/native-debug-symbols.zip"
+          if [ -f "$NATIVE" ]; then cp "$NATIVE" "$RUNNER_TEMP/out/native-debug-symbols.zip"; fi
+          ls -l "$RUNNER_TEMP/out"
       - name: Remove signing material
         if: always()
         run: rm -f signing.properties "$RUNNER_TEMP/upload.jks" app/google-services.json
@@ -153,9 +168,26 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: android-bundle
-          path: app/build/outputs/bundle/release/app-release.aab
+          path: ${{ runner.temp }}/out/
           if-no-files-found: error
           retention-days: 7
+      # API-013: the R8 mapping to attnd-web, keyed by version code, so the Diagnostics panel can retrace
+      # crash stacks. Production: ATTND_PROD_CI_KEY on attnd.app; the dev server takes its static key. Only
+      # when a mapping was built (main); a failure is a warning, never a failed release.
+      - name: Mapping to attnd-web
+        if: ${{ hashFiles('app/build/outputs/mapping/release/mapping.txt') != '' }}
+        env:
+          SYMBOLS_KEY: ${{ github.ref == 'refs/heads/main' && secrets.ATTND_PROD_CI_KEY || secrets.ATTND_API_KEY }}
+        run: |
+          if [ -z "$SYMBOLS_KEY" ]; then
+            echo "::warning title=Mapping to attnd-web::No CI key secret; the mapping was not uploaded."
+            exit 0
+          fi
+          if ! gzip -c "$RUNNER_TEMP/out/mapping.txt" | curl -sfS --retry 2 -X POST \
+              -H "Authorization: Bearer $SYMBOLS_KEY" -H "Content-Type: application/gzip" --data-binary @- \
+              "https://$ATTND_SERVER/api/diagnostics/symbols/?platform=android&version=$VERSION_NAME&build=$VERSION_CODE"; then
+            echo "::warning title=Mapping to attnd-web::Upload to $ATTND_SERVER failed; crash stacks of $VERSION_CODE can't be retraced there."
+          fi
       - name: Save Gradle caches
         if: ${{ !cancelled() && steps.bundle.outcome == 'success' }}
         uses: actions/cache/save@v6
@@ -192,9 +224,12 @@ jobs:
           LISTING: ${{ github.ref == 'refs/heads/main' && 'store/en-US' || '' }}
         run: |
           python3 -m pip install --quiet "pyjwt[crypto]"
-          python3 scripts/ci/play_publish.py bundle/app-release.aab \
+          # Release builds also give Play their R8 mapping (and native symbols, if any) in the same edit.
+          MAPPING=""; [ -f bundle/mapping.txt ] && MAPPING=bundle/mapping.txt
+          NATIVE=""; [ -f bundle/native-debug-symbols.zip ] && NATIVE=bundle/native-debug-symbols.zip
+          python3 scripts/ci/play_publish.py bundle/app.aab \
             --track "$TRACK" --rollout "$ROLLOUT" --notes "$NOTES" --notes-file store/en-US/release_notes.txt \
-            ${LISTING:+--listing "$LISTING"}
+            ${LISTING:+--listing "$LISTING"} ${MAPPING:+--mapping "$MAPPING"} ${NATIVE:+--native-symbols "$NATIVE"}
 
   integration:
     # Live API tests through the app's real client (HttpClient → AttndApi → ApiMapper), pure JVM, against
