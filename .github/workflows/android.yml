@@ -1,13 +1,15 @@
 # Android pipeline
-#   pull request      → unit tests, lint, debug build
-#   push to develop   → one job: unit tests + lint + signed bundle in a single Gradle run (built in
-#                       parallel), then Google Play internal testing (talks to the dev server)
-#   every run         → also "Integration · dev" and "Integration · prod": the live API tests
-#                       (src/test/.../integration) against each server, in parallel. They never gate
-#                       delivery; the prod job may fail without failing the run (continue-on-error).
-#   push to main      → the same, then Google Play production (rollout set by PLAY_ROLLOUT), together with
-#                       the store listing text from store/en-US (same Play edit). Screenshots are separate
-#                       and manual: store-screenshots.yml; text-only updates: store-text.yml.
+#   every run         → "Unit tests & lint" (debug unit tests + lint; pull requests also assemble the debug
+#                       app), and in parallel "Integration · dev" / "Integration · prod": the live API tests
+#                       (src/test/.../integration) against each server. The integration jobs never gate
+#                       delivery; prod may fail without failing the run (continue-on-error).
+#   push to develop   → also, in parallel: "Signed bundle" (release .aab, kept as an artifact); then
+#                       "Publish to Play" (Linux, needs the tests and the bundle) → internal testing (dev server).
+#   push to main      → the same → Play production (rollout set by PLAY_ROLLOUT), together with the store
+#                       listing text from store/en-US (same Play edit). Screenshots are separate and manual:
+#                       store-screenshots.yml; text-only updates: store-text.yml.
+# Gradle caches (~/.gradle/caches incl. the build cache, and the wrapper) are kept between runs per job and
+# saved by every push (pull requests only read them).
 # Docs-only commits don't run; a newer push to develop cancels the older run (main never cancels).
 #
 # Setup: see SETUP.md in attnd-web. Uses only GitHub's own actions + Google's APIs.
@@ -34,18 +36,28 @@ env:
 
 jobs:
   test:
-    name: Build & test
-    # Delivery runs the same checks in its own Gradle run, so this job is for pull requests and other refs.
-    if: github.event_name == 'pull_request' || (github.ref != 'refs/heads/develop' && github.ref != 'refs/heads/main')
+    name: Unit tests & lint
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    env:
+      ATTND_SERVER: ${{ vars.ATTND_SERVER || 'dev.attnd.app' }}
+      MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '21'
-          cache: gradle
+      - name: Restore Gradle caches
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-test-${{ hashFiles('**/*.gradle*', 'gradle/wrapper/gradle-wrapper.properties', 'gradle.properties') }}-${{ github.sha }}
+          restore-keys: |
+            gradle-test-${{ hashFiles('**/*.gradle*', 'gradle/wrapper/gradle-wrapper.properties', 'gradle.properties') }}-
+            gradle-test-
       - name: Accept Android SDK licenses
         # `yes` reports "Broken pipe" when sdkmanager exits before reading all of it; that is expected.
         run: yes 2> /dev/null | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
@@ -53,26 +65,37 @@ jobs:
         env:
           GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
         run: if [ -n "$GOOGLE_SERVICES_JSON" ]; then printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json; fi
-      - name: Unit tests, lint, debug build
-        env:
-          # Live API tests are the separate "Integration" jobs; this run excludes them (see app/build.gradle).
-          ATTND_SERVER: dev.attnd.app
-          MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
-        run: ./gradlew testDebugUnitTest lintDebug assembleDebug
+      # Live API tests are the separate "Integration" jobs; this run excludes them (see app/build.gradle).
+      # On pushes the "Signed bundle" job proves the app builds, so only pull requests assemble it here.
+      - name: Unit tests and lint
+        run: ./gradlew testDebugUnitTest lintDebug ${{ github.event_name == 'pull_request' && 'assembleDebug' || '' }}
       - name: Lint warnings
         if: ${{ !cancelled() }}
         run: python3 scripts/ci/lint_summary.py app/build/reports/lint-results-debug.xml
       - name: Reports
-        if: always()
+        if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: android-reports
-          path: app/build/reports/
+          path: |
+            app/build/reports/
+            app/build/test-results/
           if-no-files-found: ignore
           retention-days: 7
+      - name: Remove Firebase config
+        if: always()
+        run: rm -f app/google-services.json
+      - name: Save Gradle caches
+        if: ${{ !cancelled() && github.event_name != 'pull_request' }}
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-test-${{ hashFiles('**/*.gradle*', 'gradle/wrapper/gradle-wrapper.properties', 'gradle.properties') }}-${{ github.sha }}
 
-  deliver:
-    name: ${{ github.ref == 'refs/heads/main' && 'Test, build & Play production' || 'Test, build & Play internal testing' }}
+  bundle:
+    name: Signed bundle
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -89,7 +112,16 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-          cache: gradle
+      - name: Restore Gradle caches
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-bundle-${{ hashFiles('**/*.gradle*', 'gradle/wrapper/gradle-wrapper.properties', 'gradle.properties') }}-${{ github.sha }}
+          restore-keys: |
+            gradle-bundle-${{ hashFiles('**/*.gradle*', 'gradle/wrapper/gradle-wrapper.properties', 'gradle.properties') }}-
+            gradle-bundle-
       - name: Accept Android SDK licenses
         # `yes` reports "Broken pipe" when sdkmanager exits before reading all of it; that is expected.
         run: yes 2> /dev/null | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
@@ -109,21 +141,44 @@ jobs:
             echo "KEY_PASSWORD=$KEY_PASSWORD"
           } > signing.properties
           if [ -n "$GOOGLE_SERVICES_JSON" ]; then printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json; fi
-      - name: Unit tests, lint and signed bundle
-        run: ./gradlew testDebugUnitTest lintDebug bundleRelease
-      - name: Lint warnings
-        if: ${{ !cancelled() }}
-        run: python3 scripts/ci/lint_summary.py app/build/reports/lint-results-debug.xml
-      - name: Reports
-        if: failure()
+      - name: Signed bundle
+        id: bundle
+        run: ./gradlew bundleRelease
+      - name: Remove signing material
+        if: always()
+        run: rm -f signing.properties "$RUNNER_TEMP/upload.jks" app/google-services.json
+      - name: Keep bundle
         uses: actions/upload-artifact@v7
         with:
-          name: android-reports
-          path: |
-            app/build/reports/
-            app/build/test-results/
-          if-no-files-found: ignore
+          name: android-bundle
+          path: app/build/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
           retention-days: 7
+      - name: Save Gradle caches
+        if: ${{ !cancelled() && steps.bundle.outcome == 'success' }}
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-bundle-${{ hashFiles('**/*.gradle*', 'gradle/wrapper/gradle-wrapper.properties', 'gradle.properties') }}-${{ github.sha }}
+
+  publish:
+    name: ${{ github.ref == 'refs/heads/main' && 'Publish to Play production' || 'Publish to Play internal testing' }}
+    needs: [test, bundle]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'dev' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            scripts/ci
+            store
+      - uses: actions/download-artifact@v7
+        with:
+          name: android-bundle
+          path: bundle
       - name: Publish to Google Play
         env:
           GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
@@ -135,12 +190,9 @@ jobs:
           LISTING: ${{ github.ref == 'refs/heads/main' && 'store/en-US' || '' }}
         run: |
           python3 -m pip install --quiet "pyjwt[crypto]"
-          python3 scripts/ci/play_publish.py app/build/outputs/bundle/release/app-release.aab \
+          python3 scripts/ci/play_publish.py bundle/app-release.aab \
             --track "$TRACK" --rollout "$ROLLOUT" --notes "$NOTES" --notes-file store/en-US/release_notes.txt \
             ${LISTING:+--listing "$LISTING"}
-      - name: Remove signing material
-        if: always()
-        run: rm -f signing.properties "$RUNNER_TEMP/upload.jks" app/google-services.json
 
   integration:
     # Live API tests through the app's real client (HttpClient → AttndApi → ApiMapper), pure JVM, against
@@ -167,7 +219,16 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-          cache: gradle
+      - name: Restore Gradle caches
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-integration-${{ hashFiles('**/*.gradle*', 'gradle/wrapper/gradle-wrapper.properties', 'gradle.properties') }}-${{ github.sha }}
+          restore-keys: |
+            gradle-integration-${{ hashFiles('**/*.gradle*', 'gradle/wrapper/gradle-wrapper.properties', 'gradle.properties') }}-
+            gradle-integration-
       - name: Accept Android SDK licenses
         # `yes` reports "Broken pipe" when sdkmanager exits before reading all of it; that is expected.
         run: yes 2> /dev/null | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
@@ -201,3 +262,11 @@ jobs:
             app/build/test-results/
           if-no-files-found: ignore
           retention-days: 7
+      - name: Save Gradle caches
+        if: ${{ !cancelled() && github.event_name != 'pull_request' && matrix.target == 'dev' }}
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-integration-${{ hashFiles('**/*.gradle*', 'gradle/wrapper/gradle-wrapper.properties', 'gradle.properties') }}-${{ github.sha }}
