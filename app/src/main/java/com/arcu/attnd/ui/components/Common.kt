@@ -1,9 +1,12 @@
+@file:OptIn(ExperimentalMaterial3ExpressiveApi::class)
+
 package com.arcu.attnd.ui.components
 
 import android.text.format.DateFormat
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
@@ -26,6 +29,7 @@ import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.EventBusy
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
@@ -34,14 +38,17 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -159,6 +166,36 @@ fun OfflineNotice(sync: SyncState, modifier: Modifier = Modifier) {
     }
 }
 
+/**
+ * API-005 `search` usage for a search input: counts once per submitted or settled (~1.5 s) non-empty
+ * query, never the text. Returns the "submitted" callback for the IME search action. Shared by the
+ * per-tab [SearchField]s and the app-wide search screen, so both count exactly the same way.
+ */
+@Composable
+fun rememberSearchReporter(query: String, onSearch: () -> Unit): () -> Unit {
+    val currentOnSearch by rememberUpdatedState(onSearch)
+    val currentQuery by rememberUpdatedState(query)
+    val reported = rememberSaveable { mutableStateOf("") }
+    val report: (String) -> Unit = remember(reported) {
+        { text ->
+            val trimmed = text.trim()
+            if (trimmed.isNotEmpty() && trimmed != reported.value) {
+                reported.value = trimmed
+                currentOnSearch()
+            }
+        }
+    }
+    LaunchedEffect(query) {
+        if (query.isBlank()) {
+            reported.value = ""
+        } else {
+            delay(SEARCH_SETTLE_MS)
+            report(query)
+        }
+    }
+    return remember(report) { { report(currentQuery) } }
+}
+
 @Composable
 fun SearchField(
     query: String,
@@ -167,24 +204,7 @@ fun SearchField(
     modifier: Modifier = Modifier,
     onSearch: () -> Unit = {},
 ) {
-    // API-005 `search`: reported once per submitted or settled (~1.5 s) non-empty query; never the text.
-    val currentOnSearch by rememberUpdatedState(onSearch)
-    var reported by rememberSaveable { mutableStateOf("") }
-    val report: (String) -> Unit = { text ->
-        val trimmed = text.trim()
-        if (trimmed.isNotEmpty() && trimmed != reported) {
-            reported = trimmed
-            currentOnSearch()
-        }
-    }
-    LaunchedEffect(query) {
-        if (query.isBlank()) {
-            reported = ""
-        } else {
-            delay(SEARCH_SETTLE_MS)
-            report(query)
-        }
-    }
+    val submit = rememberSearchReporter(query, onSearch)
     OutlinedTextField(
         value = query,
         onValueChange = onQueryChange,
@@ -199,7 +219,7 @@ fun SearchField(
         },
         singleLine = true,
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-        keyboardActions = KeyboardActions(onSearch = { report(query) }),
+        keyboardActions = KeyboardActions(onSearch = { submit() }),
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp),
@@ -207,6 +227,31 @@ fun SearchField(
 }
 
 private const val SEARCH_SETTLE_MS = 1_500L
+
+/** Pull to refresh with the Material 3 Expressive loading indicator. */
+@Composable
+fun RefreshBox(
+    isRefreshing: Boolean,
+    onRefresh: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable BoxScope.() -> Unit,
+) {
+    val state = rememberPullToRefreshState()
+    PullToRefreshBox(
+        isRefreshing = isRefreshing,
+        onRefresh = onRefresh,
+        modifier = modifier,
+        state = state,
+        indicator = {
+            PullToRefreshDefaults.LoadingIndicator(
+                state = state,
+                isRefreshing = isRefreshing,
+                modifier = Modifier.align(Alignment.TopCenter),
+            )
+        },
+        content = content,
+    )
+}
 
 /** Horizontally scrolling category filter chips ("All" + one per category). */
 @Composable

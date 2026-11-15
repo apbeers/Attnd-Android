@@ -2,9 +2,10 @@ package com.arcu.attnd.ui.theme
 
 import android.app.Activity
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MaterialExpressiveTheme
+import androidx.compose.material3.MotionScheme
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
+import androidx.compose.material3.expressiveLightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.Color
@@ -22,7 +23,9 @@ private val DarkColorScheme = darkColorScheme(
     tertiary = Pink80,
 )
 
-private val LightColorScheme = lightColorScheme(
+// Material 3 Expressive's light baseline (its on-container colours are the higher-contrast tone 30),
+// with the brand purple on top.
+private val LightColorScheme = expressiveLightColorScheme().copy(
     primary = AttndPurple,
     onPrimary = AttndOnPurple,
     primaryContainer = AttndPurpleContainer,
@@ -33,9 +36,10 @@ private val LightColorScheme = lightColorScheme(
 )
 
 /**
- * App theme. The base is always the brand-purple scheme (no Material You dynamic colour, so the
- * wallpaper never replaces the brand). [accentColor] is the event's `accent_color`; when present it
- * replaces the scheme's primary (with a readable onPrimary).
+ * App theme: Material 3 Expressive ([MaterialExpressiveTheme] with the expressive motion scheme, the
+ * default expressive shapes). The base is always the brand-purple scheme (no Material You dynamic
+ * colour, so the wallpaper never replaces the brand). [accentColor] is the event's `accent_color`;
+ * when present it replaces the scheme's primary (with a readable onPrimary).
  */
 @Composable
 fun AttndTheme(
@@ -61,8 +65,9 @@ fun AttndTheme(
         }
     }
 
-    MaterialTheme(
+    MaterialExpressiveTheme(
         colorScheme = colorScheme,
+        motionScheme = MotionScheme.expressive(),
         typography = Typography,
         content = content,
     )

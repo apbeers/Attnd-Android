@@ -1,12 +1,10 @@
-@file:OptIn(ExperimentalMaterial3Api::class)
+@file:OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 
 package com.arcu.attnd.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.consumeWindowInsets
@@ -15,29 +13,23 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ContainedLoadingIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfoV2
+import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteItem
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffoldDefaults
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteType
@@ -48,11 +40,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.arcu.attnd.domain.DisplayConfig
@@ -61,7 +50,7 @@ import com.arcu.attnd.domain.Tab
 import com.arcu.attnd.domain.UpdateLevel
 import com.arcu.attnd.ui.components.EventStatusPills
 import com.arcu.attnd.ui.components.OfflineNotice
-import com.arcu.attnd.ui.components.RemoteImage
+import com.arcu.attnd.ui.screens.EventSearchBar
 import com.arcu.attnd.ui.screens.FlyerScreen
 import com.arcu.attnd.ui.screens.LaunchScreen
 import com.arcu.attnd.ui.screens.LocationDetail
@@ -90,7 +79,7 @@ fun AttndApp(viewModel: EventViewModel = viewModel(factory = EventViewModel.Fact
         Box(Modifier.fillMaxSize()) {
             when (state.phase) {
                 AppPhase.LOADING -> Surface(Modifier.fillMaxSize()) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { ContainedLoadingIndicator() }
                 }
                 AppPhase.LAUNCH -> LaunchScreen(
                     join = state.join,
@@ -108,7 +97,7 @@ fun AttndApp(viewModel: EventViewModel = viewModel(factory = EventViewModel.Fact
                     val supportInfo = state.supportInfo
                     if (state.showOptions && supportInfo != null) {
                         OptionsScreen(
-                            eventName = bundle.event.name,
+                            event = bundle.event,
                             supportInfo = supportInfo,
                             notificationsEnabled = state.notificationsEnabled,
                             onNotificationsChange = viewModel::setNotificationsEnabled,
@@ -188,32 +177,51 @@ private fun EventShell(state: AppUiState, bundle: EventBundle, viewModel: EventV
         return
     }
 
-    // Bar when the width or height is compact or in tabletop posture, otherwise a rail. The L/XL width
-    // classes that V2 adds only split widths of 1200 dp and more, so the choice is the same as before.
+    // Material 3 Expressive navigation: a short navigation bar (folded / cover screen, compact width;
+    // items side by side with their labels when the height is compact or in tabletop posture) and a
+    // collapsed wide navigation rail on the unfolded inner display.
     val adaptiveInfo = currentWindowAdaptiveInfoV2()
-    val navType = if (tabs.size < 2) NavigationSuiteType.None else NavigationSuiteScaffoldDefaults.calculateFromAdaptiveInfo(adaptiveInfo)
+    val navType = if (tabs.size < 2) NavigationSuiteType.None else NavigationSuiteScaffoldDefaults.navigationSuiteType(adaptiveInfo)
     // The bottom bar pads itself for the system bars; with a rail (or nothing) the content must.
-    val contentInsets = if (navType == NavigationSuiteType.NavigationBar) {
+    val isBar = navType == NavigationSuiteType.ShortNavigationBarCompact || navType == NavigationSuiteType.ShortNavigationBarMedium
+    val contentInsets = if (isBar) {
         WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
     } else {
         WindowInsets.safeDrawing.only(WindowInsetsSides.End + WindowInsetsSides.Bottom)
     }
 
     NavigationSuiteScaffold(
-        layoutType = navType,
-        navigationSuiteItems = {
+        navigationSuiteType = navType,
+        navigationItems = {
             tabs.forEach { tab ->
-                item(
+                NavigationSuiteItem(
                     selected = tab == state.selectedTab,
                     onClick = { viewModel.selectTab(tab) },
                     icon = { Icon(tab.icon, contentDescription = null) },
                     label = { Text(tab.label) },
+                    navigationSuiteType = navType,
                 )
             }
         },
     ) {
         Scaffold(
-            topBar = { EventTopBar(bundle, state.sync.isRefreshing, onOptions = { viewModel.showOptions(true) }) },
+            topBar = {
+                EventSearchBar(
+                    bundle = bundle,
+                    isRefreshing = state.sync.isRefreshing,
+                    request = state.searchRequest,
+                    assistant = state.assistant,
+                    onRequestConsumed = viewModel::consumeSearchRequest,
+                    onSearch = viewModel::onSearch,
+                    onOptions = { viewModel.showOptions(true) },
+                    onLocationShown = viewModel::onLocationShown,
+                    onScheduleItemShown = viewModel::onScheduleItemShown,
+                    onCheckAssistant = viewModel::checkAssistant,
+                    onDownloadAssistant = viewModel::downloadAssistant,
+                    onAsk = viewModel::ask,
+                    onClearAnswer = viewModel::clearAnswer,
+                )
+            },
             snackbarHost = { SnackbarHost(snackbar) },
             contentWindowInsets = contentInsets,
         ) { padding ->
@@ -266,33 +274,8 @@ private fun TabContent(state: AppUiState, bundle: EventBundle, viewModel: EventV
             isRefreshing = state.sync.isRefreshing,
             lastSyncedAt = state.sync.lastSyncedAt,
             onRefresh = viewModel::refresh,
+            highlightId = state.focusNotificationId,
+            onHighlightShown = viewModel::consumeFocusNotification,
         )
-    }
-}
-
-@Composable
-private fun EventTopBar(bundle: EventBundle, isRefreshing: Boolean, onOptions: () -> Unit) {
-    Column {
-        TopAppBar(
-            title = {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    bundle.display.logoUrl?.let { logo ->
-                        RemoteImage(
-                            url = logo,
-                            contentDescription = null,
-                            maxDimension = 128,
-                            modifier = Modifier.size(32.dp).clip(CircleShape),
-                            placeholder = {},
-                        )
-                        Spacer(Modifier.width(12.dp))
-                    }
-                    Text(bundle.event.name, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleLarge)
-                }
-            },
-            actions = {
-                IconButton(onClick = onOptions) { Icon(Icons.Filled.Settings, contentDescription = "Options") }
-            },
-        )
-        if (isRefreshing) LinearProgressIndicator(Modifier.fillMaxWidth())
     }
 }

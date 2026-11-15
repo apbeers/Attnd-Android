@@ -11,6 +11,7 @@ import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.arcu.attnd.assistant.OpenIntents
 import com.arcu.attnd.domain.JoinLinks
 import com.arcu.attnd.domain.ScreenshotRequest
 import com.arcu.attnd.push.PushNotifications
@@ -20,7 +21,8 @@ import kotlinx.coroutines.launch
 
 /**
  * Single activity. All state lives in [EventViewModel] / EventRepository; this class only wires
- * up intents (App Links, notification taps, debug store-screenshot extras) and the foreground refresh loop.
+ * up intents (App Links, notification taps, shortcuts / assistant results, debug store-screenshot extras)
+ * and the foreground refresh loop.
  */
 class MainActivity : ComponentActivity() {
 
@@ -73,6 +75,11 @@ class MainActivity : ComponentActivity() {
         }
         if (PushNotifications.opensNotifications(intent)) {
             viewModel.openNotifications(PushNotifications.notificationId(intent))
+            return
+        }
+        // Internal open links (launcher shortcuts, AppFunctions results): attnd-open://<event>/<target>
+        OpenIntents.parse(intent)?.let {
+            viewModel.open(it)
             return
         }
         // App Link: https://attnd.app/join/<code>/

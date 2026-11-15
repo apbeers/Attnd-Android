@@ -77,7 +77,7 @@ jobs:
 
       - name: Build the debug app (dev server)
         env:
-          ATTND_SERVER: ${{ vars.SCREENSHOT_SERVER || 'attnd-dev-7ab893f37020.herokuapp.com' }}
+          ATTND_SERVER: ${{ vars.SCREENSHOT_SERVER || 'dev.attnd.app' }}
           ATTND_API_KEY: ${{ secrets.ATTND_API_KEY }}
           MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
         run: |

@@ -19,7 +19,7 @@ import java.util.UUID
  *
  * The server and key come from the environment, never from BuildConfig, so the tests can point at
  * dev or production without rebuilding the app:
- *   ATTND_IT_SERVER  host, e.g. `attnd-dev-7ab893f37020.herokuapp.com` or `attnd.app`
+ *   ATTND_IT_SERVER  host, e.g. `dev.attnd.app` or `attnd.app`
  *                    (an `https://…` / `http://…` origin also works, e.g. a local runserver)
  *   ATTND_IT_KEY     bearer key the server accepts (dev: its static key; prod: the CI key that only
  *                    works for the DEMO event)

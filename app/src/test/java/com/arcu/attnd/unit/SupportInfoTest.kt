@@ -37,7 +37,7 @@ class SupportInfoTest {
     @Test
     fun testBuild_whenServerIsNotProduction() {
         assertFalse(info.isTestBuild)
-        assertTrue(info.copy(serverHost = "attnd-dev-7ab893f37020.herokuapp.com").isTestBuild)
+        assertTrue(info.copy(serverHost = "dev.attnd.app").isTestBuild)
     }
 
     @Test

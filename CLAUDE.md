@@ -20,7 +20,9 @@ attnd-web is the coordinating repo. The API contract ([`API_V2.md`](https://gith
 
 **No third-party libraries.** Allowed: the Kotlin stdlib and kotlinx (coroutines, serialization), AndroidX/Jetpack, and the Google first-party SDKs the app genuinely needs. Do not add Retrofit, OkHttp, Gson, Coil, etc.
 
-- **Kotlin** with **Jetpack Compose** (Material3) and **Material3 adaptive** (`NavigationSuiteScaffold`, `ListDetailPaneScaffold`, `currentWindowAdaptiveInfoV2`)
+- **Kotlin** with **Jetpack Compose**, **Material 3 Expressive** (`androidx.compose.material3` **1.5.0-rc01**, pinned above the BOM's stable 1.4.0, which has no Expressive APIs: `MaterialExpressiveTheme` + `MotionScheme.expressive()`, `AppBarWithSearch` + `ExpandedFullScreenSearchBar` + `SearchBarState`, `ShortNavigationBar` / `WideNavigationRail` via `NavigationSuiteScaffold`, `VerticalFloatingToolbar`, `ButtonGroup`, connected `ToggleButton`s, `LoadingIndicator` / `ContainedLoadingIndicator`, `LinearWavyProgressIndicator`, the `ListItem(content = …)` overloads) and **Material3 adaptive** (`NavigationSuiteScaffold` 1.5.0-rc01, `ListDetailPaneScaffold`, `currentWindowAdaptiveInfoV2`). Return material3 to the BOM once a BOM ships 1.5.0
+- **AndroidX AppFunctions** `1.0.0-rc01` (+ KSP `com.google.devtools.ksp` 2.3.13 for its compiler) — assistants (Gemini) on Android 16+, see Assistant
+- **ML Kit GenAI Prompt API** `genai-prompt` `1.0.0-beta5` (**beta**) — on-device Gemini Nano for "Ask about this event", runtime-checked
 - **Networking**: `HttpURLConnection` + coroutines (`data/net/HttpClient.kt`)
 - **JSON**: kotlinx.serialization (`ignoreUnknownKeys`, every field defaulted)
 - **Images**: in-house loader (`ui/components/RemoteImage.kt`: memory LruCache → disk `data/ImageDiskCache.kt` in `filesDir/images/` → HttpURLConnection; BitmapFactory decode)
@@ -55,6 +57,12 @@ app/
       SupportInfo.kt              #   API-004 build/device/event details, support code, copy text
       ImageCachePlan.kt           #   API-007 image cache: file names, referenced URLs, stale files, budget
       LiveUpdates.kt              #   API-007 poll interval, push refresh rules + jitter, offline notice text
+      SearchText.kt               #   Search normalisation (lower-case, accents folded, punctuation → spaces) with index mapping
+      SearchQuery.kt              #   Query parsing: tokens + time words (now/next/tonight/days/clock times), keywords(); TimeMatcher
+      EventSearch.kt              #   Local search over the bundle: scoring, ranking, result detail lines, suggestions
+      EventFacts.kt               #   Structured items for AppFunctions (search, now/next, updates, event info)
+      AssistantPrompt.kt          #   On-device assistant: context retrieval, prompt, [S12]-style citations
+      OpenLinks.kt                #   attnd-open://<event>/<target> internal links (shortcuts, AppFunctions results)
     data/
       net/HttpClient.kt           #   HttpURLConnection client (no caching, so 304s reach us)
       api/AttndApi.kt             #   v2 endpoints; 401 → re-attest → retry once; ETag/If-None-Match
@@ -62,18 +70,20 @@ app/
       api/ApiMapper.kt            #   DTO → domain, applying defaults
       EventRepository.kt          #   Single source of truth (StateFlow bundle), join/leave/refresh, disk cache, push token state
       ImageDiskCache.kt           #   API-007 offline images (filesDir/images/): fetch, prefetch, clean-up
+      OnDeviceAssistant.kt        #   ML Kit GenAI Prompt API wrapper: availability, model download, answer (guarded)
       UsageReporter.kt            #   API-005 anonymous usage counts: aggregate, flush every ~60 s / background / leave
       AttestedTokenProvider.kt    #   Bearer token: attestation JWT or static key
       InstallReferrer.kt          #   Play Install Referrer → event_code
       attest/AttestationApi.kt    #   Unauthenticated /api/v1/attest/ endpoints
       prefs/DevicePrefs.kt        #   device id, joined event id/code, ETag, push token, preferences
+    assistant/                    # AppFunctions service (KSP generates AttndAppFunctionService), dynamic shortcuts, open intents
     push/                         # FCM service + notification channel / display
     ui/
       EventViewModel.kt           #   AppUiState + all user actions
       AttndApp.kt                 #   Root composable, theme (accent colour), EventShell with NavigationSuiteScaffold
       MapTab.kt                   #   Foldable-aware map + secondary pane
       components/                 #   RemoteImage, FoldAwareSplit, IdListDetail, banners, chips, QR scanner
-      screens/                    #   Launch, Map, Locations, Schedule, Notifications, Flyer, Options
+      screens/                    #   Launch, Map, Locations, Schedule, Notifications, Flyer, Options, Search (app-wide search + Ask)
       theme/
   src/test/java/com/arcu/attnd/
     unit/                         # JVM tests: decoding, display defaults, grouping in event tz, HTTP client, usage, support info
@@ -100,14 +110,32 @@ app/google-services.json          # (not committed) Firebase config for FCM
 |--------|-------|
 | `app_open` | `EventViewModel.foregroundSync` on the first resume after launch or after the app was backgrounded, while in an event |
 | `tab_view` (`map`…`notifications`, `options`) | `EventViewModel` init: counted whenever the visible tab (or Options) changes, including the initial tab |
-| `location_view` / `schedule_item_view` | `LaunchedEffect` in the Locations/Schedule detail panes and the hidden-tab overlays → `onLocationShown` / `onScheduleItemShown` |
+| `location_view` / `schedule_item_view` | `LaunchedEffect` in the Locations/Schedule detail panes, the search screen's details and the hidden-tab overlays → `onLocationShown` / `onScheduleItemShown` |
 | `notification_open` | `MainActivity` notification-tap intent (`notification_id` extra) → `openNotifications(id)` |
-| `search` | `SearchField`: on IME search or once the non-empty query settles for 1.5 s → `onSearch` |
+| `search` | `SearchField` and the app-wide search / Ask (`rememberSearchReporter`): on IME search or once the non-empty query settles for 1.5 s → `onSearch` |
 | `refresh` | `EventViewModel.refresh` (pull to refresh only) |
 
 ### Support info (API-004)
 
 Options shows an "Internal test build" card when `BuildConfig.ATTND_SERVER != "attnd.app"`, and an **About & support** section from `AppUiState.supportInfo` (built in `EventViewModel`): version/code, build type, server, API version, Android version, device, event name/code/id/content version, last refresh (device time zone), the **support code** (first 8 characters of the device id, no dashes, upper case) and **Copy support info** (plain text including the full device id, via `LocalClipboard`).
+
+## Search (local, app-wide)
+
+Shared spec with iOS (same rules and the same unit-test cases, `unit/EventSearchTest.kt`, fixed `now`, America/Chicago). No server call; it searches the bundle on disk, so it works offline.
+- **Entry point**: the event's top bar is a Material 3 `AppBarWithSearch` (event logo, "Search <event>", Options) on every tab; it expands into an `ExpandedFullScreenSearchBar` (`ui/screens/SearchScreen.kt`). Empty query → suggestion chips ("Happening now", "Up next", categories).
+- **Matching** (`domain/EventSearch.kt`, `SearchQuery.kt`, `SearchText.kt`): both sides normalised; every token must match (AND across fields); a word equal to the token (4), starting with it (3), containing it (2) or, for 5+ character tokens, Levenshtein ≤ 1 (1; a transposition is 2 edits). Weights: names 3; tags, location name, category, snippet, address, event code 2; descriptions and notification bodies 1. Schedule items without a location are searchable as "General". Boosts: now +8, next +4, ended −1000 (always last). Ties: kind (schedule, location, notification, event), title, id.
+- **Time words** in the event's time zone: `now`/`happening now`, `next`/`up next`/`soon` (2 h), `today`, `tonight` (starts ≥ 17:00 today), `tomorrow`, weekdays (`sat` only when no content word is "sat"), clock times `3pm`, `3 pm`, `15:00`, `3:30` (both 03:30 and 15:30), `noon` (in progress then, or starting ≤ 30 min after, on the event's days). A bare `7` is not a time. Time words filter only schedule items; a time-only query returns only schedule items. The search field never drops stop words; `SearchQuery.keywords()` (stop words removed) is only for questions (assistant, AppFunctions).
+- **Results**: kind icon, title with the match in bold primary, one detail line (`EventSearch.detail`: "Sat 7:30–8:30 PM · Main Stage", "Food · Street tacos", "Sat 3:55 PM · body…", "Nov 14–15 · address"), Now/Next/Ended label.
+- **Navigation**: a tapped result opens its detail on the search screen's own back stack (`SearchEntry`; Back returns to the results), so items in tabs that `display.tabs` hides still open; location ↔ schedule links push further entries. External requests (shortcuts, AppFunctions `openInApp`) open the item's own tab when it is visible (notifications scroll to and briefly highlight the item), otherwise open via the search screen (`SearchRequest.detail`).
+- **Usage**: the existing `search` metric only, counted exactly like the per-tab fields (`rememberSearchReporter`: IME search or a non-empty query settled for 1.5 s; never the text). No `tab_view` for search; detail views count `location_view` / `schedule_item_view` as elsewhere.
+
+## Assistant (Gemini, on-device AI)
+
+Everything is local: no server or API change, and the query only ever goes to the on-device model.
+- **AppFunctions** (`assistant/AttndAppFunctions.kt`, AndroidX `appfunctions` 1.0.0-rc01, Android 16+ only): `BaseAttndAppFunctionService` (`@AppFunctionServiceEntryPoint`; KSP generates `AttndAppFunctionService` and `assets/attnd_app_functions.xml`) exposes `searchEvent`, `getHappeningNow`, `findScheduleItems`, `findLocations`, `getLatestUpdates`, `getEventInfo`, returning `AttndEventItem`s (`@AppFunctionSerializable`; ISO times with the event's offset, place, coordinates) built by `domain/EventFacts.kt` from the bundle on disk (`repository.restore()`, works while the app isn't running), each with an `openInApp` `PendingIntent`. The manifest service is enabled only on API 36+ (`@bool/app_functions_enabled`, `values-v36`); app-level guidance for agents is `res/xml/app_functions_metadata.xml`. As of Nov 2026 Gemini's AppFunctions integration is a private preview; test with `adb shell cmd app_function list-app-functions --package com.arcu.attnd.debug`.
+- **Open links**: `attnd-open://<event id|any>/<location/5|schedule/3|update/9|updates|event|search?q=…>` (`domain/OpenLinks.kt`) as the data of explicit intents to MainActivity (`assistant/OpenIntents.kt`; no intent filter declares the scheme). A link for another event than the joined one is ignored.
+- **Dynamic shortcuts** (`assistant/AppShortcuts.kt`, `ShortcutManagerCompat`): Search, Happening now, Updates while an event is joined; removed without one. App Actions `shortcuts.xml` capabilities are not used (they target Google Assistant; Gemini uses AppFunctions).
+- **Ask about this event** (search screen, Search | Ask toggle): Gemini Nano via ML Kit GenAI Prompt API **beta** (`data/OnDeviceAssistant.kt`). Shown only when `checkStatus()` says AVAILABLE, DOWNLOADABLE (Download button) or DOWNLOADING (progress); otherwise plain search. `AssistantPrompt` retrieves context locally (keywords, any-token matches + now/next, ≤ 12 items), asks for ≤ 3 sentences citing `[S12]`/`[L5]`/`[U9]`/`[E]`, and the cited items (or the context) become tappable results; on any error the matches are shown instead. Never in screenshot mode.
 
 ## API (v2)
 
@@ -137,15 +165,15 @@ On a 401 the stored JWT is invalidated and the request is retried once after re-
 ## Server-driven Display
 
 `DisplayConfig` resolves the bundle's `display` object with the documented defaults:
-tabs (order/visibility, Flyer only if listed) and default tab → navigation items; `locations_style` cards/list/grouped; `schedule_style` timeline/by_day/by_location/now_next; `map_clustering` (maps-compose-utils `Clustering`); `map_fit_all` (LatLngBounds on open and on Map-tab reselect); `show_location_images`; `enable_search`; `group_by_category` (filter chips on Locations and Map); `secondary_pane` (beside/below the map on an unfolded foldable); `accent_color` → Material colour scheme `primary` (otherwise the brand purple: `#431F86` light / `#9D7BEA` dark, `ui/theme/Color.kt` + `res/values/colors.xml`; no Material You dynamic colour); `logo_url` in the header.
+tabs (order/visibility, Flyer only if listed) and default tab → navigation items; `locations_style` cards/list/grouped; `schedule_style` timeline/by_day/by_location/now_next; `map_clustering` (maps-compose-utils `Clustering`); `map_fit_all` (LatLngBounds on open and on Map-tab reselect); `show_location_images`; `enable_search`; `group_by_category` (filter chips on Locations and Map); `secondary_pane` (beside/below the map on an unfolded foldable); `accent_color` → Material colour scheme `primary` (otherwise the brand purple: `#431F86` light / `#9D7BEA` dark, `ui/theme/Color.kt` + `res/values/colors.xml`; no Material You dynamic colour; `MaterialExpressiveTheme` on `expressiveLightColorScheme()` / `darkColorScheme()`); `logo_url` at the start of the search top bar. Pull to refresh uses the Expressive loading indicator (`RefreshBox`), the Map's controls a vertical floating toolbar, location detail actions a button group.
 
 Status: a small floating pill (`EventStatusPills`, overlaid top-centre of the tab content, takes no layout space) shows **Demo event** when `event.is_demo` (falls back to `!paid` for old servers) and **Event ended** when `status == archived`; a slim offline notice row (`OfflineNotice`: "Offline · last updated 2:14 PM", from `SyncState.offline` / `lastSyncedAt`) sits above the content while `SyncState.error` is set.
 
 ## Foldables (adaptive layouts)
 
 **Phones and foldables only; no tablets.** Tablets are excluded from distribution in Play Console's device catalog (manifest settings can't do it without also excluding unfolded foldables). Don't add tablet-specific layouts; the adaptive layouts below exist for unfolded foldables and simply also work on any large window. No orientation lock (Android 16+ ignores it on large screens anyway).
-- **Folded / cover screen (compact width)**: bottom navigation bar; Locations/Schedule show list *or* detail.
-- **Unfolded inner display (medium width or more)**: `NavigationSuiteScaffold` switches to a rail; `ListDetailPaneScaffold` shows list + detail side by side; the Map tab shows the map beside `display.secondary_pane`, split exactly on the fold when a vertical hinge is reported (`FoldAwareSplit`).
+- **Folded / cover screen (compact width)**: Material 3 Expressive short navigation bar (`NavigationSuiteScaffoldDefaults.navigationSuiteType`; horizontal items when the height is compact or in tabletop posture); Locations/Schedule show list *or* detail.
+- **Unfolded inner display (medium width or more)**: `NavigationSuiteScaffold` switches to a collapsed wide navigation rail; `ListDetailPaneScaffold` shows list + detail side by side; the Map tab shows the map beside `display.secondary_pane`, split exactly on the fold when a vertical hinge is reported (`FoldAwareSplit`).
 - **Tabletop posture** (`currentWindowAdaptiveInfoV2().windowPosture.isTabletop`): map on the top half, pane on the bottom half, split on the horizontal hinge.
 - Content respects display cutouts and system bars via `WindowInsets.safeDrawing`.
 
@@ -198,7 +226,7 @@ CI sets `VERSION_CODE=<run number>000` and `VERSION_NAME=2.0.<run number>` (alwa
 | Pull request | `testDebugUnitTest lintDebug assembleDebug` on ubuntu-latest (JDK 21; SDK packages installed by AGP), then `scripts/ci/lint_summary.py` prints lint's findings and annotates them as warnings (never fails) |
 | Push to `develop` | One job: `testDebugUnitTest lintDebug bundleRelease` in a single Gradle run (parallel), lint summary as for pull requests, signed against the `dev` environment's `ATTND_SERVER` (Heroku dev app) → Play **internal testing** |
 | Push to `main` | The same against `attnd.app` → Play **production** (staged rollout if `PLAY_ROLLOUT` < 1), plus the store listing text in the same edit |
-| Every run (PR, `develop`, `main`) | In parallel: **Integration · dev** (`attnd-dev-7ab893f37020.herokuapp.com`, secret `ATTND_API_KEY`) and **Integration · prod** (`attnd.app`, secret `ATTND_PROD_CI_KEY`, accepted for the DEMO event only): `testDebugUnitTest -PintegrationTests`, then `scripts/ci/junit_summary.py` prints failures to the log and the job summary. Nothing depends on them, so they never gate delivery; prod is `continue-on-error` (a failure is a warning). A missing secret skips that job's tests |
+| Every run (PR, `develop`, `main`) | In parallel: **Integration · dev** (`dev.attnd.app`, secret `ATTND_API_KEY`) and **Integration · prod** (`attnd.app`, secret `ATTND_PROD_CI_KEY`, accepted for the DEMO event only): `testDebugUnitTest -PintegrationTests`, then `scripts/ci/junit_summary.py` prints failures to the log and the job summary. Nothing depends on them, so they never gate delivery; prod is `continue-on-error` (a failure is a warning). A missing secret skips that job's tests |
 
 Docs-only commits (`*.md`) don't run the pipeline; a newer push to `develop` cancels the older run (`main` never cancels). Gradle: parallel, build cache, configuration cache, 4 GB heap (`gradle.properties`). Publishing uses `scripts/ci/play_publish.py` (Play Developer API v3, service-account JWT) — no third-party actions or Gradle plugins. Release builds never contain the static API key. Server host: `ATTND_SERVER` → `BuildConfig.ATTND_SERVER` (default `attnd.app`). Setup checklist: `SETUP.md` in attnd-web.
 
@@ -213,7 +241,7 @@ Docs-only commits (`*.md`) don't run the pipeline; a newer push to `develop` can
 
 ```bash
 ./gradlew test                 # unit tests only; or ./run_tests.command
-ATTND_IT_SERVER=attnd-dev-7ab893f37020.herokuapp.com ATTND_IT_KEY=… \
+ATTND_IT_SERVER=dev.attnd.app ATTND_IT_KEY=… \
   ./gradlew testDebugUnitTest -PintegrationTests   # live API tests only
 ```
 Unit tests are pure JVM (domain + data/api) and never include `com.arcu.attnd.integration` (`app/build.gradle` excludes it unless `-PintegrationTests` is passed, which then runs only that package, never up to date or from the build cache).

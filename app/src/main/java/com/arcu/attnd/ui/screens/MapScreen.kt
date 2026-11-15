@@ -8,9 +8,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -18,10 +16,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Place
-import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.SmallFloatingActionButton
+import androidx.compose.material3.VerticalFloatingToolbar
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -237,21 +235,17 @@ fun EventMap(
             )
         }
 
-        Column(
+        // Material 3 Expressive vertical floating toolbar (replaces the stacked FABs).
+        VerticalFloatingToolbar(
+            expanded = true,
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(bottom = contentPadding.calculateBottomPadding() + 16.dp, end = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            SmallFloatingActionButton(
-                onClick = { goHome(animate = true) },
-                containerColor = MaterialTheme.colorScheme.primaryContainer,
-                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-            ) {
+            IconButton(onClick = { goHome(animate = true) }) {
                 Icon(Icons.Filled.Place, contentDescription = "Show the whole event")
             }
-            FloatingActionButton(
+            IconButton(
                 onClick = {
                     if (hasLocationPermission) {
                         onShowUserLocationChange(true)

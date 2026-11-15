@@ -8,13 +8,11 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
@@ -26,7 +24,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material3.AssistChip
-import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonGroup
+import androidx.compose.material3.ButtonGroupDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -36,10 +35,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -64,6 +61,7 @@ import com.arcu.attnd.ui.components.CategoryChips
 import com.arcu.attnd.ui.components.EmptyState
 import com.arcu.attnd.ui.components.IdListDetail
 import com.arcu.attnd.ui.components.ImagePlaceholder
+import com.arcu.attnd.ui.components.RefreshBox
 import com.arcu.attnd.ui.components.RemoteImage
 import com.arcu.attnd.ui.components.SearchField
 import com.arcu.attnd.ui.components.SectionHeader
@@ -139,7 +137,7 @@ fun LocationsList(
     Column(modifier.fillMaxSize()) {
         if (display.enableSearch) SearchField(query, { query = it }, "Search locations", onSearch = onSearch)
         if (display.groupByCategory) CategoryChips(categories, category, { category = it })
-        PullToRefreshBox(isRefreshing = isRefreshing, onRefresh = onRefresh, modifier = Modifier.fillMaxSize()) {
+        RefreshBox(isRefreshing = isRefreshing, onRefresh = onRefresh, modifier = Modifier.fillMaxSize()) {
             if (filtered.isEmpty()) {
                 EmptyState(
                     if (bundle.locations.isEmpty()) "No locations have been added yet."
@@ -180,7 +178,8 @@ private fun LazyListScope.locationRows(
 @Composable
 private fun LocationRow(location: EventLocation, showImage: Boolean, selected: Boolean, onClick: () -> Unit) {
     ListItem(
-        headlineContent = { Text(location.name) },
+        selected = selected,
+        onClick = onClick,
         supportingContent = if (location.snippet.isNotBlank()) {
             { Text(location.snippet, maxLines = 2, overflow = TextOverflow.Ellipsis) }
         } else {
@@ -204,13 +203,10 @@ private fun LocationRow(location: EventLocation, showImage: Boolean, selected: B
         } else {
             null
         },
-        colors = if (selected) {
-            ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
-        } else {
-            ListItemDefaults.colors()
-        },
-        modifier = Modifier.clickable(onClick = onClick),
-    )
+        colors = ListItemDefaults.colors(selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer),
+    ) {
+        Text(location.name)
+    }
 }
 
 @Composable
@@ -291,28 +287,36 @@ fun LocationDetail(
                 if (location.address.isNotBlank()) {
                     Text(location.address, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                location.coordinate?.let { point ->
-                    Button(
-                        onClick = {
-                            val uri = "https://www.google.com/maps/dir/?api=1&destination=${point.latitude},${point.longitude}&travelmode=walking".toUri()
-                            context.startActivity(Intent(Intent.ACTION_VIEW, uri))
-                        },
+                val directions = location.coordinate?.let { point ->
+                    "https://www.google.com/maps/dir/?api=1&destination=${point.latitude},${point.longitude}&travelmode=walking".toUri()
+                }
+                val website = location.website?.toUri()
+                if (directions != null || website != null) {
+                    // Material 3 Expressive button group: the pressed button widens, its neighbour yields.
+                    ButtonGroup(
+                        overflowIndicator = { menuState -> ButtonGroupDefaults.OverflowIndicator(menuState) },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Icon(Icons.AutoMirrored.Filled.DirectionsWalk, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("Walking directions")
+                        if (directions != null) {
+                            clickableItem(
+                                onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, directions)) },
+                                label = "Directions",
+                                icon = { Icon(Icons.AutoMirrored.Filled.DirectionsWalk, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                                weight = 1f,
+                            )
+                        }
+                        if (website != null) {
+                            clickableItem(
+                                onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, website)) },
+                                label = "Website",
+                                icon = { Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                                weight = 1f,
+                            )
+                        }
                     }
                 }
                 if (location.description.isNotBlank()) {
                     Text(location.description, style = MaterialTheme.typography.bodyLarge)
-                }
-                location.website?.let { url ->
-                    OutlinedButton(onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, url.toUri())) }) {
-                        Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("Visit website")
-                    }
                 }
                 if (items.isNotEmpty()) {
                     HorizontalDivider(Modifier.padding(vertical = 8.dp))

@@ -2,7 +2,6 @@
 
 package com.arcu.attnd.ui.screens
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -34,7 +33,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -53,6 +51,7 @@ import com.arcu.attnd.domain.ScheduleItem
 import com.arcu.attnd.domain.ScheduleStyle
 import com.arcu.attnd.ui.components.EmptyState
 import com.arcu.attnd.ui.components.IdListDetail
+import com.arcu.attnd.ui.components.RefreshBox
 import com.arcu.attnd.ui.components.SearchField
 import com.arcu.attnd.ui.components.SectionHeader
 import com.arcu.attnd.ui.components.rememberNow
@@ -149,7 +148,7 @@ fun ScheduleList(
                 FilterChip(selected = showPast, onClick = { showPast = !showPast }, label = { Text("Show past") })
             }
         }
-        PullToRefreshBox(isRefreshing = isRefreshing, onRefresh = onRefresh, modifier = Modifier.fillMaxSize()) {
+        RefreshBox(isRefreshing = isRefreshing, onRefresh = onRefresh, modifier = Modifier.fillMaxSize()) {
             if (sections.isEmpty()) {
                 EmptyState(
                     when {
@@ -193,25 +192,13 @@ private fun ScheduleRow(
     val live = ScheduleGrouping.isHappeningNow(item, now)
     val badge = if (live) "Now" else EventTime.startsInText(item.startTime, now)
     ListItem(
+        selected = selected,
+        onClick = onClick,
         overlineContent = {
             Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
                 Text(EventTime.formatTimeRange(item.startTime, item.endTime, zone), fontWeight = FontWeight.SemiBold)
                 if (showLocation && item.locationName != null) {
                     Text(item.locationName, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 8.dp))
-                }
-            }
-        },
-        headlineContent = {
-            Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-                Text(item.name, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f, fill = false))
-                if (badge != null) {
-                    Text(
-                        badge,
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(start = 8.dp),
-                    )
                 }
             }
         },
@@ -233,13 +220,21 @@ private fun ScheduleRow(
         } else {
             null
         },
-        colors = if (selected) {
-            ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
-        } else {
-            ListItemDefaults.colors()
-        },
-        modifier = Modifier.clickable(onClick = onClick),
-    )
+        colors = ListItemDefaults.colors(selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer),
+    ) {
+        Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+            Text(item.name, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f, fill = false))
+            if (badge != null) {
+                Text(
+                    badge,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(start = 8.dp),
+                )
+            }
+        }
+    }
 }
 
 @Composable

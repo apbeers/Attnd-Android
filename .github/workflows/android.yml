@@ -56,7 +56,7 @@ jobs:
       - name: Unit tests, lint, debug build
         env:
           # Live API tests are the separate "Integration" jobs; this run excludes them (see app/build.gradle).
-          ATTND_SERVER: attnd-dev-7ab893f37020.herokuapp.com
+          ATTND_SERVER: dev.attnd.app
           MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
         run: ./gradlew testDebugUnitTest lintDebug assembleDebug
       - name: Lint warnings
@@ -156,7 +156,7 @@ jobs:
       matrix:
         include:
           - target: dev
-            server: attnd-dev-7ab893f37020.herokuapp.com
+            server: dev.attnd.app
             key: ATTND_API_KEY        # the dev server's static key
           - target: prod
             server: attnd.app

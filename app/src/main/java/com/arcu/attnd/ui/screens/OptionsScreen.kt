@@ -61,7 +61,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.arcu.attnd.domain.Event
 import com.arcu.attnd.domain.SupportInfo
+import com.arcu.attnd.ui.components.EventInfoCard
 import com.arcu.attnd.push.PushNotifications
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -73,7 +75,7 @@ import java.time.ZoneId
  */
 @Composable
 fun OptionsScreen(
-    eventName: String,
+    event: Event,
     supportInfo: SupportInfo,
     notificationsEnabled: Boolean,
     onNotificationsChange: (Boolean) -> Unit,
@@ -83,6 +85,7 @@ fun OptionsScreen(
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
+    val eventName = event.name
     var confirmLeave by remember { mutableStateOf(false) }
     var permissionDenied by remember { mutableStateOf(false) }
     BackHandler(onBack = onBack)
@@ -116,10 +119,8 @@ fun OptionsScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 if (supportInfo.isTestBuild) TestBuildWarning(supportInfo.serverHost)
-                Text(eventName, style = MaterialTheme.typography.titleLarge)
-                HorizontalDivider()
+                EventInfoCard(event)
                 ListItem(
-                    headlineContent = { Text("Push notifications") },
                     supportingContent = {
                         Text(
                             if (permissionDenied) "Notifications are blocked. Allow them in system settings."
@@ -138,9 +139,10 @@ fun OptionsScreen(
                             },
                         )
                     },
-                )
+                ) {
+                    Text("Push notifications")
+                }
                 ListItem(
-                    headlineContent = { Text("Show my location") },
                     supportingContent = { Text("Your position on the event map") },
                     trailingContent = {
                         Switch(
@@ -156,7 +158,9 @@ fun OptionsScreen(
                             },
                         )
                     },
-                )
+                ) {
+                    Text("Show my location")
+                }
                 Spacer(Modifier.size(8.dp))
                 Button(
                     onClick = { confirmLeave = true },

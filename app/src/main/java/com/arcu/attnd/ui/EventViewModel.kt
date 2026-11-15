@@ -9,8 +9,11 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.arcu.attnd.AttndApplication
 import com.arcu.attnd.BuildConfig
+import com.arcu.attnd.data.AssistantAvailability
+import com.arcu.attnd.data.AssistantDownload
 import com.arcu.attnd.data.EventRepository
 import com.arcu.attnd.data.InstallReferrer
+import com.arcu.attnd.data.OnDeviceAssistant
 import com.arcu.attnd.data.RefreshResult
 import com.arcu.attnd.data.SyncState
 import com.arcu.attnd.data.UsageReporter
@@ -18,17 +21,23 @@ import com.arcu.attnd.data.api.AttndApi
 import com.arcu.attnd.data.net.ApiException
 import com.arcu.attnd.data.prefs.DevicePrefs
 import com.arcu.attnd.domain.AppUpdate
+import com.arcu.attnd.domain.AssistantPrompt
 import com.arcu.attnd.domain.Event
 import com.arcu.attnd.domain.EventBundle
 import com.arcu.attnd.domain.JoinLinks
 import com.arcu.attnd.domain.LiveUpdates
 import com.arcu.attnd.domain.NearbyEvent
+import com.arcu.attnd.domain.OpenRequest
+import com.arcu.attnd.domain.OpenTarget
 import com.arcu.attnd.domain.ScreenshotRequest
 import com.arcu.attnd.domain.ScreenshotScreen
+import com.arcu.attnd.domain.SearchKind
+import com.arcu.attnd.domain.SearchResult
 import com.arcu.attnd.domain.SupportInfo
 import com.arcu.attnd.domain.Tab
 import com.arcu.attnd.domain.UpdateLevel
 import com.arcu.attnd.domain.UsageMetric
+import com.arcu.attnd.ui.screens.SearchEntry
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -42,6 +51,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.IOException
+import java.time.Instant
 
 enum class AppPhase { LOADING, LAUNCH, EVENT }
 
@@ -53,6 +63,28 @@ data class JoinUiState(
 data class NearbyUiState(
     val isLoading: Boolean = false,
     val events: List<NearbyEvent> = emptyList(),
+    val error: String? = null,
+)
+
+/**
+ * A one-shot request to open the search screen with [query] and, optionally, an item's [detail] on its
+ * back stack (shortcuts and assistants; items whose tab is hidden open this way).
+ */
+data class SearchRequest(val query: String, val serial: Int, val detail: SearchEntry? = null)
+
+/** "Ask about this event" (on-device Gemini Nano). */
+data class AssistantUiState(
+    val availability: AssistantAvailability = AssistantAvailability.UNKNOWN,
+    val downloadedBytes: Long? = null,
+    val totalBytes: Long? = null,
+    val downloadError: String? = null,
+    val question: String? = null,
+    val isAnswering: Boolean = false,
+    /** The answer without citation markers. */
+    val answer: String? = null,
+    /** The items the answer cites (or the context it was given when it cites none), tappable. */
+    val sources: List<SearchResult> = emptyList(),
+    /** The model failed; the screen shows plain search results instead. */
     val error: String? = null,
 )
 
@@ -71,6 +103,11 @@ data class AppUiState(
     val focusLocationId: Int? = null,
     /** One-shot request to show a schedule item's detail (from a location's schedule). */
     val focusScheduleItemId: Int? = null,
+    /** Scroll the Notifications tab to this notification and highlight it (from search / an assistant). */
+    val focusNotificationId: Int? = null,
+    /** Open the search screen with a query (shortcut / assistant). */
+    val searchRequest: SearchRequest? = null,
+    val assistant: AssistantUiState = AssistantUiState(),
     /** Incremented when the Map tab is reselected, to recenter the camera. */
     val recenterRequest: Int = 0,
     /** One-shot user-facing message (snackbar / launch screen). */
@@ -93,6 +130,9 @@ private data class LocalState(
     val showUserLocation: Boolean = false,
     val focusLocationId: Int? = null,
     val focusScheduleItemId: Int? = null,
+    val focusNotificationId: Int? = null,
+    val searchRequest: SearchRequest? = null,
+    val assistant: AssistantUiState = AssistantUiState(),
     val recenterRequest: Int = 0,
     val message: String? = null,
     val dismissedUpdateVersion: String? = null,
@@ -107,6 +147,7 @@ class EventViewModel(
     private val repository: EventRepository,
     private val prefs: DevicePrefs,
     private val usage: UsageReporter,
+    private val assistant: OnDeviceAssistant,
 ) : ViewModel() {
 
     /** The parts of [SupportInfo] that never change while the process runs. */
@@ -128,6 +169,10 @@ class EventViewModel(
     /** Store-screenshot mode: no usage counts are sent (see [startScreenshot]). */
     @Volatile
     private var screenshotMode = false
+
+    /** The on-device assistant's current answer and model download (see [ask], [downloadAssistant]). */
+    private var answerJob: Job? = null
+    private var downloadJob: Job? = null
 
     private val local = MutableStateFlow(
         LocalState(
@@ -162,6 +207,10 @@ class EventViewModel(
                 showUserLocation = state.showUserLocation,
                 focusLocationId = state.focusLocationId,
                 focusScheduleItemId = state.focusScheduleItemId,
+                focusNotificationId = state.focusNotificationId,
+                searchRequest = state.searchRequest.takeIf { bundle != null },
+                // Store screenshots never show the on-device assistant.
+                assistant = if (screenshot != null) AssistantUiState(availability = AssistantAvailability.UNAVAILABLE) else state.assistant,
                 recenterRequest = state.recenterRequest,
                 message = state.message.takeIf { screenshot == null },
                 update = update,
@@ -259,6 +308,9 @@ class EventViewModel(
                     showOptions = false,
                     focusLocationId = null,
                     focusScheduleItemId = null,
+                    focusNotificationId = null,
+                    searchRequest = null,
+                    assistant = it.assistant.copy(question = null, answer = null, sources = emptyList(), error = null, isAnswering = false),
                     message = when (result) {
                         is RefreshResult.Failed -> "Joined, but the event couldn't be downloaded. ${result.message}"
                         RefreshResult.EventGone -> "This event is no longer available."
@@ -285,7 +337,18 @@ class EventViewModel(
     fun leaveEvent() {
         viewModelScope.launch {
             repository.leave()
-            local.update { it.copy(showOptions = false, selectedTab = null, focusLocationId = null) }
+            answerJob?.cancel()
+            local.update {
+                it.copy(
+                    showOptions = false,
+                    selectedTab = null,
+                    focusLocationId = null,
+                    focusScheduleItemId = null,
+                    focusNotificationId = null,
+                    searchRequest = null,
+                    assistant = it.assistant.copy(question = null, answer = null, sources = emptyList(), error = null, isAnswering = false),
+                )
+            }
         }
     }
 
@@ -427,6 +490,147 @@ class EventViewModel(
         local.update { it.copy(focusScheduleItemId = null) }
     }
 
+    /** Shows a notification on the Notifications tab (or as an overlay when that tab is hidden). */
+    fun focusNotification(notificationId: Int) {
+        local.update { it.copy(focusNotificationId = notificationId, selectedTab = Tab.NOTIFICATIONS, showOptions = false) }
+    }
+
+    fun consumeFocusNotification() {
+        local.update { it.copy(focusNotificationId = null) }
+    }
+
+    // ── Search & assistant ──────────────────────────────────────────────────
+
+    /**
+     * An internal open link (launcher shortcut, AppFunctions result). An item opens on its own tab
+     * when `display.tabs` shows it, otherwise on the search screen. Ignored when it names another
+     * event than the joined one; waits for the saved bundle on a cold start.
+     */
+    fun open(request: OpenRequest) {
+        viewModelScope.launch {
+            startJob.join()
+            val bundle = repository.bundle.value ?: return@launch
+            if (request.eventId != null && request.eventId != bundle.event.id) return@launch
+            val tabs = bundle.display.tabs
+            fun search(query: String, detail: SearchEntry? = null) = local.update {
+                it.copy(showOptions = false, searchRequest = SearchRequest(query, (it.searchRequest?.serial ?: 0) + 1, detail))
+            }
+            when (val target = request.target) {
+                is OpenTarget.Location ->
+                    if (Tab.LOCATIONS in tabs) {
+                        local.update { it.copy(showOptions = false) }
+                        focusLocation(target.id)
+                    } else {
+                        search("", SearchEntry(SearchKind.LOCATION, target.id))
+                    }
+                is OpenTarget.ScheduleItem ->
+                    if (Tab.SCHEDULE in tabs) {
+                        local.update { it.copy(showOptions = false) }
+                        focusScheduleItem(target.id)
+                    } else {
+                        search("", SearchEntry(SearchKind.SCHEDULE, target.id))
+                    }
+                is OpenTarget.Notification -> when {
+                    Tab.NOTIFICATIONS !in tabs -> search("", target.id?.let { SearchEntry(SearchKind.NOTIFICATION, it) })
+                    target.id != null -> focusNotification(target.id)
+                    else -> local.update { it.copy(selectedTab = Tab.NOTIFICATIONS, showOptions = false) }
+                }
+                OpenTarget.EventInfo -> showOptions(true)
+                is OpenTarget.Search -> search(target.query)
+            }
+        }
+    }
+
+    fun consumeSearchRequest() {
+        local.update { it.copy(searchRequest = null) }
+    }
+
+    /** Checks once (when the search screen opens) whether the on-device model can be used. */
+    fun checkAssistant() {
+        if (screenshotMode) return
+        val current = local.value.assistant.availability
+        if (current != AssistantAvailability.UNKNOWN && current != AssistantAvailability.DOWNLOADING) return
+        viewModelScope.launch {
+            val availability = assistant.availability()
+            local.update { it.copy(assistant = it.assistant.copy(availability = availability)) }
+        }
+    }
+
+    /** Downloads Gemini Nano (only when the person asks for it). */
+    fun downloadAssistant() {
+        if (downloadJob?.isActive == true) return
+        downloadJob = viewModelScope.launch {
+            local.update { it.copy(assistant = it.assistant.copy(availability = AssistantAvailability.DOWNLOADING, downloadError = null)) }
+            assistant.download().collect { status ->
+                local.update { state ->
+                    val a = state.assistant
+                    state.copy(
+                        assistant = when (status) {
+                            is AssistantDownload.Started -> a.copy(totalBytes = status.totalBytes, downloadedBytes = 0)
+                            is AssistantDownload.Progress -> a.copy(downloadedBytes = status.downloadedBytes)
+                            AssistantDownload.Completed -> a.copy(availability = AssistantAvailability.AVAILABLE)
+                            is AssistantDownload.Failed -> a.copy(availability = AssistantAvailability.DOWNLOADABLE, downloadError = status.message)
+                        }
+                    )
+                }
+            }
+            // The flow can end without a final status: ask AICore again.
+            if (local.value.assistant.availability == AssistantAvailability.DOWNLOADING) {
+                val availability = assistant.availability()
+                local.update { it.copy(assistant = it.assistant.copy(availability = availability)) }
+            }
+        }
+    }
+
+    /**
+     * Answers [question] with the on-device model from the local bundle only (the prompt and its
+     * context are built by [AssistantPrompt]; nothing is sent to a server). The question text is
+     * never reported; the search screen counts a `search` like any other search.
+     */
+    fun ask(question: String) {
+        val trimmed = question.trim()
+        val bundle = repository.bundle.value ?: return
+        if (trimmed.isEmpty() || local.value.assistant.availability != AssistantAvailability.AVAILABLE) return
+        answerJob?.cancel()
+        answerJob = viewModelScope.launch {
+            local.update {
+                it.copy(assistant = it.assistant.copy(question = trimmed, isAnswering = true, answer = null, sources = emptyList(), error = null))
+            }
+            val now = Instant.now()
+            val context = AssistantPrompt.context(bundle, trimmed, now)
+            val prompt = AssistantPrompt.build(bundle, trimmed, context, now)
+            val update = try {
+                val raw = assistant.answer(prompt)
+                val cited = AssistantPrompt.citations(raw, context, bundle)
+                val text = AssistantPrompt.displayText(raw)
+                if (text.isEmpty()) {
+                    AssistantUiState(error = "No answer this time. Here's what matches your question.", sources = context)
+                } else {
+                    AssistantUiState(answer = text, sources = cited.ifEmpty { context.take(MAX_UNCITED_SOURCES) })
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                AssistantUiState(error = "On-device AI couldn't answer right now. Here's what matches your question.", sources = context)
+            }
+            local.update {
+                it.copy(
+                    assistant = it.assistant.copy(
+                        isAnswering = false,
+                        answer = update.answer,
+                        sources = update.sources,
+                        error = update.error,
+                    )
+                )
+            }
+        }
+    }
+
+    fun clearAnswer() {
+        answerJob?.cancel()
+        local.update { it.copy(assistant = it.assistant.copy(question = null, isAnswering = false, answer = null, sources = emptyList(), error = null)) }
+    }
+
     // ── Usage reporting (API-005) ───────────────────────────────────────────
 
     /** A location's detail became visible (from the list, a map pin or a schedule item). */
@@ -479,11 +683,12 @@ class EventViewModel(
 
     companion object {
         private const val RESUME_DEBOUNCE_MS = 30 * 1000L
+        private const val MAX_UNCITED_SOURCES = 5
 
         val Factory: ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 val app = checkNotNull(this[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY]) as AttndApplication
-                EventViewModel(app, app.graph.repository, app.graph.prefs, app.graph.usage)
+                EventViewModel(app, app.graph.repository, app.graph.prefs, app.graph.usage, app.graph.assistant)
             }
         }
     }

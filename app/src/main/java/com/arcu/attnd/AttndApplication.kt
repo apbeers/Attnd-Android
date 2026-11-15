@@ -2,9 +2,11 @@ package com.arcu.attnd
 
 import android.app.Application
 import android.content.Context
+import com.arcu.attnd.assistant.AppShortcuts
 import com.arcu.attnd.data.AttestedTokenProvider
 import com.arcu.attnd.data.EventRepository
 import com.arcu.attnd.data.ImageDiskCache
+import com.arcu.attnd.data.OnDeviceAssistant
 import com.arcu.attnd.data.UsageReporter
 import com.arcu.attnd.data.api.AttndApi
 import com.arcu.attnd.data.prefs.DevicePrefs
@@ -14,6 +16,9 @@ import com.arcu.attnd.util.integrity.AttestationManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 import java.io.File
 
 class AttndApplication : Application() {
@@ -62,4 +67,18 @@ class AppGraph(context: Context, val prefs: DevicePrefs) {
         usage = usage,
         images = images,
     )
+
+    /** "Ask about this event": Gemini Nano on the device (ML Kit GenAI Prompt API), created lazily. */
+    val assistant = OnDeviceAssistant()
+
+    init {
+        // Launcher shortcuts follow the joined event (none without one).
+        val shortcuts = AppShortcuts(appContext)
+        appScope.launch {
+            repository.bundle
+                .map { it?.event?.id }
+                .distinctUntilChanged()
+                .collect { shortcuts.update(repository.bundle.value) }
+        }
+    }
 }
