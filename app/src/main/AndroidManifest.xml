@@ -7,6 +7,10 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Android 16 Live Updates (promoted ongoing notifications): a normal (install-time) permission. -->
+    <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
+    <!-- Re-schedule the Live Update's inexact alarms (and the venue geofence) after a reboot. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
@@ -78,6 +82,20 @@
         <property
             android:name="android.app.appfunctions.app_metadata"
             android:resource="@xml/app_functions_metadata" />
+
+        <!--
+            Live Update wake-ups (shared spec §8): inexact alarms, notification actions, the venue
+            geofence, and re-scheduling after boot / an app update / a time zone change.
+        -->
+        <receiver
+            android:name=".live.LiveUpdateReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+            </intent-filter>
+        </receiver>
 
         <service
             android:name=".push.AttndMessagingService"

@@ -21,9 +21,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -38,6 +40,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -71,6 +74,7 @@ import com.arcu.attnd.ui.components.RefreshBox
 import com.arcu.attnd.ui.components.SearchField
 import com.arcu.attnd.ui.components.SectionHeader
 import com.arcu.attnd.ui.components.rememberNow
+import com.arcu.attnd.ui.PlanUiState
 import java.time.Instant
 import java.time.ZoneId
 
@@ -86,6 +90,8 @@ fun ScheduleTab(
     modifier: Modifier = Modifier,
     onItemShown: (Int) -> Unit = {},
     onSearch: () -> Unit = {},
+    planner: PlanUiState? = null,
+    planActions: PlanActions = PlanActions(),
 ) {
     IdListDetail(
         requestedId = focusItemId,
@@ -100,6 +106,8 @@ fun ScheduleTab(
                 selectedId = selectedId,
                 onItemClick = open,
                 onSearch = onSearch,
+                planner = planner,
+                planActions = planActions,
             )
         },
         detail = { id, showBack, back ->
@@ -130,6 +138,9 @@ fun ScheduleList(
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(0.dp),
     onSearch: () -> Unit = {},
+    /** The planner (Schedule tab only; null beside the map): adds the "My plan" filter. */
+    planner: PlanUiState? = null,
+    planActions: PlanActions = PlanActions(),
 ) {
     val zone = bundle.event.zone
     val now = rememberNow()
@@ -139,6 +150,19 @@ fun ScheduleList(
     var showPast by rememberSaveable(bundle.event.id) { mutableStateOf(bundle.event.isArchived) }
     var heartedOnly by rememberSaveable { mutableStateOf(false) }
     var peek by rememberSaveable { mutableStateOf<Int?>(null) }
+    // "My plan": offered while the planner is available or a plan exists; a request (after planning,
+    // a Live Update link) selects it.
+    val showPlanChip = planner != null && (planner.available || planner.plan?.isEmpty == false)
+    var planOnly by rememberSaveable { mutableStateOf(false) }
+    var handledPlanRequest by rememberSaveable { mutableIntStateOf(0) }
+    LaunchedEffect(planner?.showRequest) {
+        val serial = planner?.showRequest ?: 0
+        if (serial > handledPlanRequest) {
+            handledPlanRequest = serial
+            planOnly = true
+        }
+    }
+    val inPlan = planOnly && showPlanChip
 
     val sections = remember(bundle.schedule, bundle.locations, style, query, showPast, heartedOnly, hearts, now) {
         val searched = ScheduleGrouping.filter(bundle.schedule, query)
@@ -153,7 +177,7 @@ fun ScheduleList(
     }
 
     Column(modifier.fillMaxSize()) {
-        if (bundle.display.enableSearch) SearchField(query, { query = it }, "Search schedule", onSearch = onSearch)
+        if (bundle.display.enableSearch && !inPlan) SearchField(query, { query = it }, "Search schedule", onSearch = onSearch)
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -169,11 +193,23 @@ fun ScheduleList(
                 Spacer(Modifier.width(1.dp))
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (heartedOnly || hearts.scheduleItems.isNotEmpty()) HeartedChip(heartedOnly, { heartedOnly = it })
-                if (style != ScheduleStyle.NOW_NEXT) {
+                if (showPlanChip) {
+                    FilterChip(
+                        selected = inPlan,
+                        onClick = { planOnly = !inPlan },
+                        label = { Text("My plan") },
+                        leadingIcon = { Icon(Icons.Filled.AutoAwesome, contentDescription = null, modifier = Modifier.size(FilterChipDefaults.IconSize)) },
+                    )
+                }
+                if (!inPlan && (heartedOnly || hearts.scheduleItems.isNotEmpty())) HeartedChip(heartedOnly, { heartedOnly = it })
+                if (!inPlan && style != ScheduleStyle.NOW_NEXT) {
                     FilterChip(selected = showPast, onClick = { showPast = !showPast }, label = { Text("Show past") })
                 }
             }
+        }
+        if (inPlan) {
+            MyPlanPane(bundle, planner, planActions, onItemClick = onItemClick, contentPadding = contentPadding)
+            return@Column
         }
         RefreshBox(isRefreshing = isRefreshing, onRefresh = onRefresh, modifier = Modifier.fillMaxSize()) {
             if (sections.isEmpty()) {

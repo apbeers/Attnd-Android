@@ -9,17 +9,21 @@ import com.arcu.attnd.data.HeadingSource
 import com.arcu.attnd.data.HeartStore
 import com.arcu.attnd.data.ImageDiskCache
 import com.arcu.attnd.data.OnDeviceAssistant
+import com.arcu.attnd.data.PlanStore
 import com.arcu.attnd.data.UsageReporter
 import com.arcu.attnd.data.UserLocationSource
 import com.arcu.attnd.data.WalkRouter
 import com.arcu.attnd.data.api.AttndApi
 import com.arcu.attnd.data.prefs.DevicePrefs
+import com.arcu.attnd.live.LiveNotifications
+import com.arcu.attnd.live.LiveUpdateController
 import com.arcu.attnd.push.PushNotifications
 import com.arcu.attnd.ui.components.ImageLoader
 import com.arcu.attnd.util.integrity.AttestationManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -38,6 +42,7 @@ class AttndApplication : Application() {
         AttestationManager.init(this) { prefs.deviceId }
         AttestationManager.warmup()
         PushNotifications.createChannel(this)
+        LiveNotifications.createChannels(this)
         graph = AppGraph(this, prefs)
     }
 }
@@ -82,8 +87,14 @@ class AppGraph(context: Context, val prefs: DevicePrefs) {
     /** Walking routes for the map card (Routes API with the Maps key, estimate fallback). */
     val walkRouter = WalkRouter(appContext, BuildConfig.MAPS_API_KEY)
 
-    /** "Ask about this event": Gemini Nano on the device (ML Kit GenAI Prompt API), created lazily. */
+    /** "Ask about this event" and the planner: Gemini Nano on the device (ML Kit GenAI Prompt API), created lazily. */
     val assistant = OnDeviceAssistant()
+
+    /** Plans, "Follow on Lock Screen", skipped items, urgent block and reminders, per event (on the device). */
+    val plans = PlanStore(prefs)
+
+    /** The device-driven Live Update, reminders and venue geofence (shared spec §8). */
+    val liveUpdates = LiveUpdateController(appContext, repository, hearts, plans, usage, appScope)
 
     init {
         // Launcher shortcuts follow the joined event (none without one).
@@ -93,6 +104,11 @@ class AppGraph(context: Context, val prefs: DevicePrefs) {
                 .map { it?.event?.id }
                 .distinctUntilChanged()
                 .collect { shortcuts.update(repository.bundle.value) }
+        }
+        // The Live Update follows the bundle (joins, refreshes, content_updated pushes), hearts and plans.
+        appScope.launch {
+            combine(repository.bundle, hearts.version, plans.version) { bundle, _, _ -> bundle?.contentVersion to bundle?.event?.id }
+                .collect { liveUpdates.refresh() }
         }
     }
 }

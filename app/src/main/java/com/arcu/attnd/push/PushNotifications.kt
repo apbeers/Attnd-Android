@@ -33,6 +33,10 @@ object PushNotifications {
     const val KEY_EVENT_ID = "event_id"
     const val KEY_NOTIFICATION_ID = "notification_id"
     const val KEY_CONTENT_VERSION = "content_version"
+    const val KEY_PRIORITY = "priority"
+    const val KEY_TITLE = "title"
+    const val KEY_BODY = "body"
+    const val PRIORITY_URGENT = "urgent"
     const val TYPE_NOTIFICATION = "notification"
     const val TYPE_CONTENT_UPDATED = "content_updated"
 
@@ -71,17 +75,7 @@ object PushNotifications {
     @SuppressLint("MissingPermission") // checked by hasPermission()
     fun show(context: Context, title: String, body: String, notificationId: Int, serverNotificationId: Int? = null) {
         if (!hasPermission(context)) return
-        val intent = Intent(context, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            putExtra(EXTRA_OPEN_TAB, TAB_NOTIFICATIONS)
-            if (serverNotificationId != null) putExtra(KEY_NOTIFICATION_ID, serverNotificationId.toString())
-        }
-        val pendingIntent = PendingIntent.getActivity(
-            context,
-            notificationId,
-            intent,
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-        )
+        val pendingIntent = openNotificationsIntent(context, notificationId, serverNotificationId)
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_attnd)
             .setColor(context.getColor(R.color.attnd_primary))
@@ -93,6 +87,16 @@ object PushNotifications {
             .setContentIntent(pendingIntent)
             .build()
         NotificationManagerCompat.from(context).notify(notificationId, notification)
+    }
+
+    /** Opens the Notifications tab (at [serverNotificationId] when known); [requestCode] keeps intents apart. */
+    fun openNotificationsIntent(context: Context, requestCode: Int, serverNotificationId: Int?): PendingIntent {
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra(EXTRA_OPEN_TAB, TAB_NOTIFICATIONS)
+            if (serverNotificationId != null) putExtra(KEY_NOTIFICATION_ID, serverNotificationId.toString())
+        }
+        return PendingIntent.getActivity(context, requestCode, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
     }
 
     /**

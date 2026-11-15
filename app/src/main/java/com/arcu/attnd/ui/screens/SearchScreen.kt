@@ -149,6 +149,7 @@ fun EventSearch(
     onDownloadAssistant: () -> Unit,
     onAsk: (String) -> Unit,
     onClearAnswer: () -> Unit,
+    onOpenPlan: () -> Unit = {},
 ) {
     val searchBarState = state
     val textFieldState = rememberTextFieldState()
@@ -175,8 +176,13 @@ fun EventSearch(
         val pending = request ?: return@LaunchedEffect
         textFieldState.setTextAndPlaceCursorAtEnd(pending.query)
         stackText = pending.detail?.let { SearchEntry.encodeStack(listOf(it)) }.orEmpty()
-        askMode = false
+        // An onboarding example question opens Ask with it (and asks right away when the model is ready).
+        askMode = pending.ask && assistantUsable
         searchBarState.animateToExpanded()
+        if (askMode && pending.query.isNotBlank() && assistant.availability == AssistantAvailability.AVAILABLE) {
+            submit()
+            onAsk(pending.query)
+        }
         // Consumed only once open: clearing it re-keys (cancels) this effect.
         onRequestConsumed()
     }
@@ -238,6 +244,7 @@ fun EventSearch(
             },
             onLocationShown = onLocationShown,
             onScheduleItemShown = onScheduleItemShown,
+            onOpenPlan = onOpenPlan,
         )
     }
 }
@@ -334,6 +341,7 @@ private fun SearchContent(
     onAsk: () -> Unit,
     onLocationShown: (Int) -> Unit,
     onScheduleItemShown: (Int) -> Unit,
+    onOpenPlan: () -> Unit,
 ) {
     val now = rememberNow()
     val top = stack.lastOrNull()
@@ -347,7 +355,7 @@ private fun SearchContent(
     Column(Modifier.fillMaxSize()) {
         if (assistantUsable) ModeToggle(askMode, onAskModeChange)
         if (askMode) {
-            AskPanel(bundle, query, assistant, now, onDownloadAssistant, onAsk, open)
+            AskPanel(bundle, query, assistant, now, onDownloadAssistant, onAsk, open, onOpenPlan)
         } else {
             ResultsPanel(bundle, query, now, open) { textFieldState.setTextAndPlaceCursorAtEnd(it) }
         }
@@ -526,6 +534,7 @@ private fun AskPanel(
     onDownload: () -> Unit,
     onAsk: () -> Unit,
     onOpen: (SearchResult) -> Unit,
+    onOpenPlan: () -> Unit,
 ) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         when (assistant.availability) {
@@ -559,6 +568,7 @@ private fun AskPanel(
                 assistant.answer != null -> {
                     AssistantCard {
                         Text(assistant.answer, style = MaterialTheme.typography.bodyLarge)
+                        if (assistant.madePlan) FilledTonalButton(onClick = onOpenPlan) { Text("Open My plan") }
                         Text(
                             "Answered on your phone from this event's info. AI can make mistakes; check the details.",
                             style = MaterialTheme.typography.labelSmall,
@@ -573,7 +583,8 @@ private fun AskPanel(
                 }
                 else -> Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        "Ask a question like \"Where can I get coffee?\" or \"What's on the main stage tonight?\", then press search. " +
+                        "Ask a question like \"Where can I get coffee?\" or \"What's on the main stage tonight?\", or ask for a plan " +
+                            "(\"Plan my afternoon around live music\"), then press search. " +
                             "Answers come only from this event's info on your phone.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,

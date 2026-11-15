@@ -377,6 +377,8 @@ class EventSearchTest {
             OpenRequest(77, OpenTarget.Notification(9)),
             OpenRequest(77, OpenTarget.Notification(null)),
             OpenRequest(77, OpenTarget.EventInfo),
+            OpenRequest(77, OpenTarget.MapLocation(5)),
+            OpenRequest(77, OpenTarget.MyPlan),
             OpenRequest(null, OpenTarget.Search("music tonight & más")),
         )
         for (request in requests) assertEquals(request, OpenLinks.parse(OpenLinks.uri(request)))

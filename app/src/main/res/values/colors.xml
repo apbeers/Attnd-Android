@@ -2,4 +2,6 @@
 <resources>
     <!-- Brand purple from the app icon; keep in sync with ui/theme/Color.kt. -->
     <color name="attnd_primary">#431F86</color>
+    <!-- Live Update progress: the gaps between items (items use attnd_primary). -->
+    <color name="live_gap">#B8B0C9</color>
 </resources>

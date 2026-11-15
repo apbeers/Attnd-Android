@@ -15,6 +15,7 @@ import com.arcu.attnd.data.EventRepository
 import com.arcu.attnd.data.HeartStore
 import com.arcu.attnd.data.InstallReferrer
 import com.arcu.attnd.data.OnDeviceAssistant
+import com.arcu.attnd.data.PlanStore
 import com.arcu.attnd.data.RefreshResult
 import com.arcu.attnd.data.SyncState
 import com.arcu.attnd.data.UsageReporter
@@ -26,12 +27,18 @@ import com.arcu.attnd.domain.AssistantPrompt
 import com.arcu.attnd.domain.Event
 import com.arcu.attnd.domain.EventBundle
 import com.arcu.attnd.domain.EventNotification
+import com.arcu.attnd.domain.EventSearch
 import com.arcu.attnd.domain.Hearts
 import com.arcu.attnd.domain.JoinLinks
 import com.arcu.attnd.domain.LiveUpdates
 import com.arcu.attnd.domain.NearbyEvent
 import com.arcu.attnd.domain.OpenRequest
 import com.arcu.attnd.domain.OpenTarget
+import com.arcu.attnd.domain.Plan
+import com.arcu.attnd.domain.PlanExample
+import com.arcu.attnd.domain.PlanRequest
+import com.arcu.attnd.domain.PlannedItem
+import com.arcu.attnd.domain.Planner
 import com.arcu.attnd.domain.ScreenshotRequest
 import com.arcu.attnd.domain.ScreenshotScreen
 import com.arcu.attnd.domain.SearchKind
@@ -41,6 +48,7 @@ import com.arcu.attnd.domain.Tab
 import com.arcu.attnd.domain.UnreadUpdates
 import com.arcu.attnd.domain.UpdateLevel
 import com.arcu.attnd.domain.UsageMetric
+import com.arcu.attnd.live.LiveUpdateController
 import com.arcu.attnd.ui.screens.SearchEntry
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -70,11 +78,25 @@ data class NearbyUiState(
     val error: String? = null,
 )
 
+/** The planner ("My plan" in Schedule), offered only when Gemini Nano is available on the device. */
+data class PlanUiState(
+    val available: Boolean = false,
+    val plan: Plan? = null,
+    /** A planned item changed or disappeared in a content update since the plan was made. */
+    val changed: Boolean = false,
+    val isPlanning: Boolean = false,
+    val error: String? = null,
+    /** Example requests from this event's data (onboarding, the empty plan card). */
+    val examples: List<PlanExample> = emptyList(),
+    /** Incremented to show My plan (after planning, or from a link). */
+    val showRequest: Int = 0,
+)
+
 /**
  * A one-shot request to open the search screen with [query] and, optionally, an item's [detail] on its
  * back stack (shortcuts and assistants; items whose tab is hidden open this way).
  */
-data class SearchRequest(val query: String, val serial: Int, val detail: SearchEntry? = null)
+data class SearchRequest(val query: String, val serial: Int, val detail: SearchEntry? = null, val ask: Boolean = false)
 
 /** "Ask about this event" (on-device Gemini Nano). */
 data class AssistantUiState(
@@ -90,6 +112,8 @@ data class AssistantUiState(
     val sources: List<SearchResult> = emptyList(),
     /** The model failed; the screen shows plain search results instead. */
     val error: String? = null,
+    /** The request made a plan (shown in Schedule → My plan); the answer is its summary. */
+    val madePlan: Boolean = false,
 )
 
 /** Everything the UI renders. Screens receive slices of this plus callbacks; they hold no app state. */
@@ -132,6 +156,11 @@ data class AppUiState(
     val mapFocusLocationId: Int? = null,
     /** Store-screenshot mode: no location tracking, map glance features, badge or banner. */
     val isScreenshot: Boolean = false,
+    val planner: PlanUiState = PlanUiState(),
+    /** The onboarding tour (first join of an event, or Options → Tour). */
+    val showOnboarding: Boolean = false,
+    /** "Follow on Lock Screen" for the joined event (Live Update + reminders). */
+    val followLive: Boolean = false,
 )
 
 private data class LocalState(
@@ -158,6 +187,10 @@ private data class LocalState(
     /** Per event: when its Updates tab was last seen (epoch ms) and which update banner was dismissed. */
     val updatesSeenAt: Map<Int, Long> = emptyMap(),
     val dismissedUpdateBanners: Map<Int, Int> = emptyMap(),
+    val isPlanning: Boolean = false,
+    val planError: String? = null,
+    val showPlanRequest: Int = 0,
+    val showOnboarding: Boolean = false,
 )
 
 class EventViewModel(
@@ -167,6 +200,8 @@ class EventViewModel(
     private val usage: UsageReporter,
     private val assistant: OnDeviceAssistant,
     private val heartStore: HeartStore,
+    private val planStore: PlanStore,
+    private val liveUpdates: LiveUpdateController,
 ) : ViewModel() {
 
     /** The parts of [SupportInfo] that never change while the process runs. */
@@ -191,6 +226,7 @@ class EventViewModel(
 
     /** The on-device assistant's current answer and model download (see [ask], [downloadAssistant]). */
     private var answerJob: Job? = null
+    private var planJob: Job? = null
     private var downloadJob: Job? = null
 
     private val local = MutableStateFlow(
@@ -202,7 +238,13 @@ class EventViewModel(
     )
 
     val uiState: StateFlow<AppUiState> =
-        combine(repository.bundle, repository.sync, local, repository.appUpdate, heartStore.version) { savedBundle, savedSync, state, savedUpdate, _ ->
+        combine(
+            repository.bundle,
+            repository.sync,
+            local,
+            repository.appUpdate,
+            combine(heartStore.version, planStore.version) { hearts, plans -> hearts to plans },
+        ) { savedBundle, savedSync, state, savedUpdate, _ ->
             val screenshot = state.screenshot
             // Screenshot mode: the screen's layout tweaks, and nothing on top (no update banner or
             // screen, status pill, offline notice or refresh spinner).
@@ -215,6 +257,9 @@ class EventViewModel(
                 (state.updatesSeenAt[id] ?: prefs.updatesSeenAt(id))?.let(Instant::ofEpochMilli)
             }
             val notifications = bundle?.notifications.orEmpty()
+            val hearts = eventId?.let(heartStore::hearts) ?: Hearts.NONE
+            val plan = eventId?.let(planStore::plan)
+            val plannerAvailable = screenshot == null && state.assistant.availability == AssistantAvailability.AVAILABLE
             AppUiState(
                 phase = when {
                     !state.ready || state.screenshotPending -> AppPhase.LOADING
@@ -247,7 +292,7 @@ class EventViewModel(
                     contentVersion = bundle?.contentVersion,
                     lastSyncedAt = sync.lastSyncedAt,
                 ),
-                hearts = eventId?.let(heartStore::hearts) ?: Hearts.NONE,
+                hearts = hearts,
                 unreadUpdates = if (screenshot != null) 0 else UnreadUpdates.unreadCount(notifications, updatesSeen),
                 // Store screenshots never show the banner.
                 updateBanner = if (screenshot != null || eventId == null) null else UnreadUpdates.banner(
@@ -258,6 +303,17 @@ class EventViewModel(
                 ),
                 mapFocusLocationId = state.mapFocusLocationId,
                 isScreenshot = screenshot != null,
+                planner = PlanUiState(
+                    available = plannerAvailable,
+                    plan = plan,
+                    changed = plan != null && Planner.changed(plan, bundle),
+                    isPlanning = state.isPlanning,
+                    error = state.planError,
+                    examples = if (bundle != null && plannerAvailable) PlanRequest.examples(bundle, Instant.now()) else emptyList(),
+                    showRequest = state.showPlanRequest,
+                ),
+                showOnboarding = state.showOnboarding && screenshot == null && bundle != null,
+                followLive = eventId != null && planStore.follows(eventId, hearts),
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, AppUiState())
 
@@ -292,6 +348,19 @@ class EventViewModel(
                 }
                 .distinctUntilChanged()
                 .collect { seen -> if (seen != null) markUpdatesSeen(seen.first, seen.second) }
+        }
+        checkAssistantInEvent()
+    }
+
+    /**
+     * The planner and the planner onboarding card need to know whether Gemini Nano is available, so the
+     * status is checked once an event is shown (not at app start, which never binds to AICore).
+     */
+    private fun checkAssistantInEvent() {
+        viewModelScope.launch {
+            uiState.map { it.phase == AppPhase.EVENT && !it.isScreenshot }.distinctUntilChanged().collect { inEvent ->
+                if (inEvent) checkAssistant()
+            }
         }
     }
 
@@ -358,9 +427,13 @@ class EventViewModel(
             val event = resolve()
             val alreadyIn = repository.currentEventId == event.id && repository.bundle.value != null
             val result = repository.join(event)
+            // The tour, the first time this event is joined (never in screenshot mode).
+            val tour = !alreadyIn && !screenshotMode && !prefs.onboardingSeen(event.id) && repository.bundle.value?.event?.id == event.id
             local.update {
                 it.copy(
                     join = JoinUiState(),
+                    showOnboarding = tour || (alreadyIn && it.showOnboarding),
+                    planError = null,
                     selectedTab = if (alreadyIn) it.selectedTab else null,
                     showOptions = false,
                     focusLocationId = null,
@@ -399,6 +472,8 @@ class EventViewModel(
             local.update {
                 it.copy(
                     showOptions = false,
+                    showOnboarding = false,
+                    planError = null,
                     selectedTab = null,
                     focusLocationId = null,
                     focusScheduleItemId = null,
@@ -418,11 +493,14 @@ class EventViewModel(
      */
     fun startScreenshot(request: ScreenshotRequest) {
         screenshotMode = true
+        liveUpdates.suspended = true
+        liveUpdates.requestRefresh()
         local.update {
             it.copy(
                 screenshot = request,
                 screenshotPending = true,
                 showOptions = false,
+                showOnboarding = false,
                 message = null,
                 focusLocationId = null,
             )
@@ -522,7 +600,7 @@ class EventViewModel(
 
     /** Opening the app from a push notification lands on the Notifications tab. */
     fun openNotifications(notificationId: Int? = null) {
-        local.update { it.copy(selectedTab = Tab.NOTIFICATIONS, showOptions = false) }
+        local.update { it.copy(selectedTab = Tab.NOTIFICATIONS, showOptions = false, focusNotificationId = notificationId ?: it.focusNotificationId) }
         viewModelScope.launch {
             // On a cold start the saved bundle (and so the event id) is only known after start().
             startJob.join()
@@ -624,6 +702,15 @@ class EventViewModel(
                 }
                 OpenTarget.EventInfo -> showOptions(true)
                 is OpenTarget.Search -> search(target.query)
+                is OpenTarget.MapLocation ->
+                    if (Tab.MAP in tabs) showOnMap(target.id)
+                    else if (Tab.LOCATIONS in tabs) {
+                        local.update { it.copy(showOptions = false) }
+                        focusLocation(target.id)
+                    } else {
+                        search("", SearchEntry(SearchKind.LOCATION, target.id))
+                    }
+                OpenTarget.MyPlan -> showPlan()
             }
         }
     }
@@ -678,10 +765,14 @@ class EventViewModel(
         val trimmed = question.trim()
         val bundle = repository.bundle.value ?: return
         if (trimmed.isEmpty() || local.value.assistant.availability != AssistantAvailability.AVAILABLE) return
+        if (PlanRequest.looksLikePlan(trimmed) && !screenshotMode) {
+            askForPlan(trimmed)
+            return
+        }
         answerJob?.cancel()
         answerJob = viewModelScope.launch {
             local.update {
-                it.copy(assistant = it.assistant.copy(question = trimmed, isAnswering = true, answer = null, sources = emptyList(), error = null))
+                it.copy(assistant = it.assistant.copy(question = trimmed, isAnswering = true, answer = null, sources = emptyList(), error = null, madePlan = false))
             }
             val now = Instant.now()
             val context = AssistantPrompt.context(bundle, trimmed, now)
@@ -713,9 +804,156 @@ class EventViewModel(
         }
     }
 
+    /** Ask with a plan request ("Plan my Saturday around …"): makes the plan, answers with its summary. */
+    private fun askForPlan(request: String) {
+        answerJob?.cancel()
+        answerJob = viewModelScope.launch {
+            local.update {
+                it.copy(assistant = it.assistant.copy(question = request, isAnswering = true, answer = null, sources = emptyList(), error = null, madePlan = false))
+            }
+            val plan = buildPlan(request)
+            val bundle = repository.bundle.value
+            local.update { state ->
+                state.copy(
+                    assistant = state.assistant.copy(
+                        isAnswering = false,
+                        answer = plan?.takeIf { !it.isEmpty && bundle != null }?.let { "Here's your plan: ${Planner.summary(it, bundle!!.event.zone)}. It's in Schedule → My plan." },
+                        error = if (plan == null || plan.isEmpty) state.planError ?: "Nothing on the schedule fits that. Try another day or fewer limits." else null,
+                        sources = if (plan != null && bundle != null) {
+                            val now = Instant.now()
+                            plan.itemIds.mapNotNull { bundle.scheduleItem(it) }.map { item ->
+                                SearchResult(SearchKind.SCHEDULE, item.id, item.name, emptyList(), 0.0, EventSearch.timing(item, now))
+                            }
+                        } else {
+                            emptyList()
+                        },
+                        madePlan = plan != null && !plan.isEmpty,
+                    )
+                )
+            }
+        }
+    }
+
+    // ── Planner ─────────────────────────────────────────────────────────────
+
+    /**
+     * Makes and stores a plan for [request]: the on-device model extracts preferences (JSON, validated
+     * against the bundle; the plain-rule reading fills gaps or replaces it on failure), then the
+     * deterministic [Planner] schedules. Returns null when there is no event or the planner is off.
+     */
+    private suspend fun buildPlan(request: String): Plan? {
+        val bundle = repository.bundle.value ?: return null
+        if (!uiState.value.planner.available) return null
+        local.update { it.copy(isPlanning = true, planError = null) }
+        try {
+            val now = Instant.now()
+            val hearts = heartStore.hearts(bundle.event.id)
+            val rules = PlanRequest.heuristic(request, bundle, now)
+            val model = try {
+                PlanRequest.parse(assistant.extractPreferences(PlanRequest.prompt(bundle, request, hearts, now)), bundle, now)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                null
+            }
+            val preferences = PlanRequest.merge(model, rules)
+            val plan = Planner(bundle, preferences, hearts).plan(now, request.trim())
+            if (plan.isEmpty) {
+                local.update { it.copy(planError = "Nothing on the schedule fits that. Try another day or fewer limits.") }
+                return plan
+            }
+            planStore.setPlan(bundle.event.id, plan)
+            return plan
+        } finally {
+            local.update { it.copy(isPlanning = false) }
+        }
+    }
+
+    /** From the plan card in Schedule (or an example chip). */
+    fun makePlan(request: String) {
+        val trimmed = request.trim()
+        if (trimmed.isEmpty() || planJob?.isActive == true) return
+        planJob = viewModelScope.launch { buildPlan(trimmed) }
+    }
+
+    /** "Re-plan from now": the same preferences from the current time (also after a content change). */
+    fun replanFromNow() {
+        val bundle = repository.bundle.value ?: return
+        val plan = planStore.plan(bundle.event.id) ?: return
+        val replanned = Planner(bundle, plan.preferences, heartStore.hearts(bundle.event.id)).plan(Instant.now(), plan.request)
+        if (replanned.isEmpty) {
+            local.update { it.copy(planError = "Nothing left on the schedule fits this plan.") }
+        } else {
+            local.update { it.copy(planError = null) }
+            planStore.setPlan(bundle.event.id, replanned)
+        }
+    }
+
+    fun swapPlanItem(oldId: Int, newId: Int) {
+        val bundle = repository.bundle.value ?: return
+        val plan = planStore.plan(bundle.event.id) ?: return
+        val swapped = Planner(bundle, plan.preferences, heartStore.hearts(bundle.event.id)).swap(plan, oldId, newId) ?: return
+        planStore.setPlan(bundle.event.id, swapped)
+    }
+
+    /** "Keep my plan" after a content change: the changed items are accepted as they are now. */
+    fun keepChangedPlan() {
+        val bundle = repository.bundle.value ?: return
+        val plan = planStore.plan(bundle.event.id) ?: return
+        val kept = plan.days.map { day -> day.copy(entries = day.entries.filter { it !is PlannedItem || bundle.scheduleItem(it.itemId) != null }) }
+        val updated = plan.copy(
+            days = kept,
+            fingerprints = kept.flatMap { it.items }.mapNotNull { bundle.scheduleItem(it.itemId) }.associate { it.id to Planner.fingerprint(it) },
+        )
+        planStore.setPlan(bundle.event.id, updated)
+    }
+
+    fun clearPlan() {
+        val eventId = repository.bundle.value?.event?.id ?: return
+        planStore.setPlan(eventId, null)
+        local.update { it.copy(planError = null) }
+    }
+
+    /** Opens Schedule → My plan. */
+    fun showPlan() {
+        val bundle = repository.bundle.value ?: return
+        if (Tab.SCHEDULE !in bundle.display.tabs) return
+        local.update { it.copy(selectedTab = Tab.SCHEDULE, showOptions = false, showPlanRequest = it.showPlanRequest + 1) }
+    }
+
+    // ── Live Update and onboarding ─────────────────────────────────────────
+
+    /** "Follow on Lock Screen" (the caller holds POST_NOTIFICATIONS when turning it on). */
+    fun setFollowLive(follow: Boolean) {
+        val eventId = repository.bundle.value?.event?.id ?: return
+        planStore.setFollows(eventId, follow)
+    }
+
+    fun showTour() {
+        local.update { it.copy(showOptions = false, showOnboarding = true) }
+    }
+
+    fun finishOnboarding() {
+        repository.bundle.value?.event?.id?.let(prefs::setOnboardingSeen)
+        local.update { it.copy(showOnboarding = false) }
+    }
+
+    /** An onboarding / plan-card example: a plan request plans, a question opens Ask with it. */
+    fun useExample(example: PlanExample) {
+        finishOnboarding()
+        if (example.isPlan) {
+            makePlan(example.text)
+            showPlan()
+        } else {
+            local.update {
+                it.copy(showOptions = false, searchRequest = SearchRequest(example.text, (it.searchRequest?.serial ?: 0) + 1, ask = true))
+            }
+        }
+    }
+
     fun clearAnswer() {
         answerJob?.cancel()
-        local.update { it.copy(assistant = it.assistant.copy(question = null, isAnswering = false, answer = null, sources = emptyList(), error = null)) }
+        local.update { it.copy(assistant = it.assistant.copy(question = null, isAnswering = false, answer = null, sources = emptyList(), error = null, madePlan = false)) }
     }
 
     // ── Usage reporting (API-005) ───────────────────────────────────────────
@@ -775,7 +1013,10 @@ class EventViewModel(
         val Factory: ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 val app = checkNotNull(this[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY]) as AttndApplication
-                EventViewModel(app, app.graph.repository, app.graph.prefs, app.graph.usage, app.graph.assistant, app.graph.hearts)
+                EventViewModel(
+                    app, app.graph.repository, app.graph.prefs, app.graph.usage, app.graph.assistant, app.graph.hearts,
+                    app.graph.plans, app.graph.liveUpdates,
+                )
             }
         }
     }

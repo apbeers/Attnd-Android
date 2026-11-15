@@ -93,13 +93,22 @@ class OnDeviceAssistant {
     }
 
     /** Runs [prompt] on the device. Throws on failure (quota, model busy, …); callers fall back to search. */
-    suspend fun answer(prompt: String): String {
+    suspend fun answer(prompt: String): String = generate(prompt, TEMPERATURE, MAX_OUTPUT_TOKENS)
+
+    /**
+     * The planner's preference extraction ([com.arcu.attnd.domain.PlanRequest.prompt]): one JSON
+     * object, read and validated by `PlanRequest.parse`. Deterministic (temperature 0). Throws on
+     * failure; the caller falls back to the plain-rule reading.
+     */
+    suspend fun extractPreferences(prompt: String): String = generate(prompt, 0f, MAX_JSON_TOKENS)
+
+    private suspend fun generate(prompt: String, temperature: Float, maxTokens: Int): String {
         val model = model() ?: throw IllegalStateException("On-device AI isn't available on this device.")
         val response = model.generateContent(
             generateContentRequest(TextPart(prompt)) {
-                temperature = TEMPERATURE
+                this.temperature = temperature
                 topK = TOP_K
-                maxOutputTokens = MAX_OUTPUT_TOKENS
+                maxOutputTokens = maxTokens
             }
         )
         return response.candidates.firstOrNull()?.text.orEmpty().trim()
@@ -110,5 +119,6 @@ class OnDeviceAssistant {
         const val TEMPERATURE = 0.2f
         const val TOP_K = 16
         const val MAX_OUTPUT_TOKENS = 256
+        const val MAX_JSON_TOKENS = 320
     }
 }

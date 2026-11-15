@@ -79,6 +79,57 @@ class DevicePrefs(context: Context) {
     fun setDismissedUpdateBanner(eventId: Int, notificationId: Int) =
         prefs.edit { putInt("$KEY_UPDATE_BANNER$eventId", notificationId) }
 
+    // ── Planner, Live Update, onboarding (per event) ──────────────────────────
+
+    /** The stored plan ([com.arcu.attnd.domain.PlanCodec] JSON). Kept after leaving, like hearts. */
+    fun plan(eventId: Int): String? = prefs.getString("$KEY_PLAN$eventId", null)
+
+    fun setPlan(eventId: Int, value: String?) = prefs.edit {
+        if (value == null) remove("$KEY_PLAN$eventId") else putString("$KEY_PLAN$eventId", value)
+    }
+
+    /** "Follow on Lock Screen": null = never set (the default applies). */
+    fun followLive(eventId: Int): Boolean? =
+        if (prefs.contains("$KEY_FOLLOW$eventId")) prefs.getBoolean("$KEY_FOLLOW$eventId", true) else null
+
+    fun setFollowLive(eventId: Int, follow: Boolean) = prefs.edit { putBoolean("$KEY_FOLLOW$eventId", follow) }
+
+    /** Schedule items skipped from the Live Update, as `<date>|<id>,<id>` (only that event day counts). */
+    fun liveSkipped(eventId: Int): String? = prefs.getString("$KEY_SKIPPED$eventId", null)
+
+    fun setLiveSkipped(eventId: Int, value: String) = prefs.edit { putString("$KEY_SKIPPED$eventId", value) }
+
+    /** The day (ISO date) on which the user swiped the Live Update away: not reposted that day. */
+    fun liveDismissedDay(eventId: Int): String? = prefs.getString("$KEY_LIVE_DISMISSED$eventId", null)
+
+    fun setLiveDismissedDay(eventId: Int, day: String?) = prefs.edit {
+        if (day == null) remove("$KEY_LIVE_DISMISSED$eventId") else putString("$KEY_LIVE_DISMISSED$eventId", day)
+    }
+
+    /** The day (ISO date) the venue geofence last reported an arrival. */
+    fun liveArrivedDay(eventId: Int): String? = prefs.getString("$KEY_ARRIVED$eventId", null)
+
+    fun setLiveArrivedDay(eventId: Int, day: String) = prefs.edit { putString("$KEY_ARRIVED$eventId", day) }
+
+    /** API-011: the latest urgent announcement, as `id|sentAtEpochMs|title|body` (body may contain `|`). */
+    fun urgent(eventId: Int): String? = prefs.getString("$KEY_URGENT$eventId", null)
+
+    fun setUrgent(eventId: Int, value: String) = prefs.edit { putString("$KEY_URGENT$eventId", value) }
+
+    fun dismissedUrgent(eventId: Int): Int? = prefs.getInt("$KEY_URGENT_DISMISSED$eventId", NO_EVENT).takeIf { it != NO_EVENT }
+
+    fun setDismissedUrgent(eventId: Int, notificationId: Int) = prefs.edit { putInt("$KEY_URGENT_DISMISSED$eventId", notificationId) }
+
+    /** Schedule items whose reminder was already shown (comma-separated ids). */
+    fun remindersShown(eventId: Int): String? = prefs.getString("$KEY_REMINDERS$eventId", null)
+
+    fun setRemindersShown(eventId: Int, value: String) = prefs.edit { putString("$KEY_REMINDERS$eventId", value) }
+
+    /** Whether the onboarding tour was shown (or skipped) for an event. */
+    fun onboardingSeen(eventId: Int): Boolean = prefs.getBoolean("$KEY_ONBOARDING$eventId", false)
+
+    fun setOnboardingSeen(eventId: Int) = prefs.edit { putBoolean("$KEY_ONBOARDING$eventId", true) }
+
     fun clearEvent() = prefs.edit {
         remove(KEY_EVENT_ID)
         remove(KEY_EVENT_CODE)
@@ -101,6 +152,15 @@ class DevicePrefs(context: Context) {
         private const val KEY_HEARTS = "hearts_"
         private const val KEY_UPDATES_SEEN = "updates_seen_"
         private const val KEY_UPDATE_BANNER = "update_banner_dismissed_"
+        private const val KEY_PLAN = "plan_"
+        private const val KEY_FOLLOW = "follow_live_"
+        private const val KEY_SKIPPED = "live_skipped_"
+        private const val KEY_LIVE_DISMISSED = "live_dismissed_"
+        private const val KEY_ARRIVED = "live_arrived_"
+        private const val KEY_URGENT = "urgent_"
+        private const val KEY_URGENT_DISMISSED = "urgent_dismissed_"
+        private const val KEY_REMINDERS = "reminders_shown_"
+        private const val KEY_ONBOARDING = "onboarding_seen_"
         private const val NO_EVENT = -1
     }
 }

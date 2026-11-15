@@ -4,6 +4,9 @@ package com.arcu.attnd.ui.screens
 
 import android.Manifest
 import android.content.ClipData
+import android.content.Intent
+import android.os.Build
+import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -28,6 +31,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -61,6 +65,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.core.app.NotificationManagerCompat
 import com.arcu.attnd.domain.Event
 import com.arcu.attnd.domain.SupportInfo
 import com.arcu.attnd.ui.components.EventInfoCard
@@ -81,6 +86,9 @@ fun OptionsScreen(
     onNotificationsChange: (Boolean) -> Unit,
     showUserLocation: Boolean,
     onShowUserLocationChange: (Boolean) -> Unit,
+    followLive: Boolean,
+    onFollowLiveChange: (Boolean) -> Unit,
+    onTour: () -> Unit,
     onLeaveEvent: () -> Unit,
     onBack: () -> Unit,
 ) {
@@ -97,6 +105,15 @@ fun OptionsScreen(
     val locationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
         if (result.values.any { it }) onShowUserLocationChange(true)
     }
+    var followDenied by remember { mutableStateOf(false) }
+    val followPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        followDenied = !granted
+        if (granted) onFollowLiveChange(true)
+    }
+    val liveOn = followLive && PushNotifications.hasPermission(context)
+    // Android 16+: the user can turn Live Updates (promoted notifications) off for the app.
+    val promotedOff = Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA &&
+        !NotificationManagerCompat.from(context).canPostPromotedNotifications()
 
     // The switch reflects both the preference and the system permission (which can be revoked).
     val pushOn = notificationsEnabled && PushNotifications.hasPermission(context)
@@ -160,6 +177,46 @@ fun OptionsScreen(
                     },
                 ) {
                     Text("Show my location")
+                }
+                ListItem(
+                    supportingContent = {
+                        Column {
+                            Text(
+                                when {
+                                    followDenied -> "Notifications are blocked. Allow them in system settings."
+                                    else -> "What's on now and next in your plan or hearts, as a Live Update, plus a reminder with the walk time before each hearted item"
+                                }
+                            )
+                            if (liveOn && promotedOff) {
+                                // promotedOff implies Android 16+ (lint follows the SDK_INT check).
+                                TextButton(onClick = {
+                                    context.startActivity(
+                                        Intent(Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS)
+                                            .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                                    )
+                                }) { Text("Live Updates are off for Attnd. Turn on") }
+                            }
+                        }
+                    },
+                    trailingContent = {
+                        Switch(
+                            checked = liveOn,
+                            onCheckedChange = { checked ->
+                                when {
+                                    !checked -> onFollowLiveChange(false)
+                                    PushNotifications.hasPermission(context) -> onFollowLiveChange(true)
+                                    else -> followPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                }
+                            },
+                        )
+                    },
+                ) {
+                    Text("Follow on Lock Screen")
+                }
+                OutlinedButton(onClick = onTour, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Filled.Explore, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Tour")
                 }
                 Spacer(Modifier.size(8.dp))
                 Button(

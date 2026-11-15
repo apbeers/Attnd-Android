@@ -9,6 +9,12 @@ sealed interface OpenTarget {
     data class Location(val id: Int) : OpenTarget
     data class ScheduleItem(val id: Int) : OpenTarget
 
+    /** The Map tab with this location selected (Live Update "Show on map"; its detail when the map is hidden). */
+    data class MapLocation(val id: Int) : OpenTarget
+
+    /** Schedule → My plan (the Live Update's "plan changed"). */
+    data object MyPlan : OpenTarget
+
     /** The Notifications (Updates) tab, scrolled to [id] and briefly highlighting it when set. */
     data class Notification(val id: Int?) : OpenTarget
 
@@ -30,6 +36,7 @@ data class OpenRequest(val eventId: Int?, val target: OpenTarget)
  *
  *     attnd-open://12/location/5    attnd-open://12/schedule/3    attnd-open://12/update/9
  *     attnd-open://12/updates       attnd-open://12/event         attnd-open://any/search?q=now
+ *     attnd-open://12/map/5         attnd-open://12/plan
  */
 object OpenLinks {
     const val SCHEME = "attnd-open"
@@ -41,6 +48,8 @@ object OpenLinks {
         val path = when (val target = request.target) {
             is OpenTarget.Location -> "location/${target.id}"
             is OpenTarget.ScheduleItem -> "schedule/${target.id}"
+            is OpenTarget.MapLocation -> "map/${target.id}"
+            OpenTarget.MyPlan -> "plan"
             is OpenTarget.Notification -> target.id?.let { "update/$it" } ?: "updates"
             OpenTarget.EventInfo -> "event"
             is OpenTarget.Search -> "search?q=" + URLEncoder.encode(target.query, StandardCharsets.UTF_8)
@@ -63,6 +72,8 @@ object OpenLinks {
         val target = when (kind) {
             "location" -> id?.let { OpenTarget.Location(it) }
             "schedule" -> id?.let { OpenTarget.ScheduleItem(it) }
+            "map" -> id?.let { OpenTarget.MapLocation(it) }
+            "plan" -> OpenTarget.MyPlan
             "update" -> id?.let { OpenTarget.Notification(it) }
             "updates" -> OpenTarget.Notification(null)
             "event" -> OpenTarget.EventInfo

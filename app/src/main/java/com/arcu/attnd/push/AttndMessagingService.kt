@@ -1,6 +1,7 @@
 package com.arcu.attnd.push
 
 import com.arcu.attnd.AttndApplication
+import com.arcu.attnd.live.LiveNotifications
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import kotlinx.coroutines.launch
@@ -8,6 +9,8 @@ import kotlinx.coroutines.launch
 /**
  * Receives FCM messages (API_V2.md, "Push notifications"):
  * - `type=notification`: an organizer notification. Shown with our channel; tapping opens the Notifications tab.
+ *   With `priority=urgent` (API-011; data-only, `title`/`body` in `data`): the urgent channel, whatever
+ *   the in-app opt-in, and the Live Update's urgent mode.
  * - `type=content_updated`: a silent data message (API-007: sent to every device in the event with
  *   a token, opted in to notifications or not; debounced and collapsible). The bundle is refetched
  *   silently after a random 0–10 s delay, unless it is already at the pushed `content_version`.
@@ -41,10 +44,18 @@ class AttndMessagingService : FirebaseMessagingService() {
             }
             else -> {
                 // Organizer notification (or an untyped message with a notification block).
-                val title = message.notification?.title ?: data["title"]
-                val body = message.notification?.body ?: data["body"]
-                if (title != null || body != null) {
-                    val serverId = data[PushNotifications.KEY_NOTIFICATION_ID]?.toIntOrNull()
+                val title = message.notification?.title ?: data[PushNotifications.KEY_TITLE]
+                val body = message.notification?.body ?: data[PushNotifications.KEY_BODY]
+                val serverId = data[PushNotifications.KEY_NOTIFICATION_ID]?.toIntOrNull()
+                if (data[PushNotifications.KEY_PRIORITY]?.trim()?.lowercase() == PushNotifications.PRIORITY_URGENT) {
+                    // API-011: data-only, high priority, sent to every device in the event. Shown on the
+                    // urgent channel whenever POST_NOTIFICATIONS is granted, even with the in-app opt-in
+                    // off; the Live Update switches to urgent mode.
+                    LiveNotifications.showUrgent(this, serverId, title ?: "Urgent update", body.orEmpty())
+                    if (isForCurrentEvent && eventId != null && serverId != null) {
+                        graph.appScope.launch { graph.liveUpdates.onUrgent(eventId, serverId, title.orEmpty(), body.orEmpty()) }
+                    }
+                } else if (title != null || body != null) {
                     val id = serverId ?: (System.currentTimeMillis() % Int.MAX_VALUE).toInt()
                     PushNotifications.show(this, title ?: "Event update", body.orEmpty(), id, serverId)
                 }

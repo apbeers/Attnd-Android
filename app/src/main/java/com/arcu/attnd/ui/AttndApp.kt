@@ -69,7 +69,9 @@ import com.arcu.attnd.ui.screens.LaunchScreen
 import com.arcu.attnd.ui.screens.LocationDetail
 import com.arcu.attnd.ui.screens.LocationsTab
 import com.arcu.attnd.ui.screens.NotificationsScreen
+import com.arcu.attnd.ui.screens.OnboardingScreen
 import com.arcu.attnd.ui.screens.OptionsScreen
+import com.arcu.attnd.ui.screens.PlanActions
 import com.arcu.attnd.ui.screens.ScheduleItemDetail
 import com.arcu.attnd.ui.screens.ScheduleTab
 import com.arcu.attnd.ui.screens.SearchFab
@@ -119,6 +121,9 @@ fun AttndApp(viewModel: EventViewModel = viewModel(factory = EventViewModel.Fact
                                 onNotificationsChange = viewModel::setNotificationsEnabled,
                                 showUserLocation = state.showUserLocation,
                                 onShowUserLocationChange = viewModel::setShowUserLocation,
+                                followLive = state.followLive,
+                                onFollowLiveChange = viewModel::setFollowLive,
+                                onTour = viewModel::showTour,
                                 onLeaveEvent = viewModel::leaveEvent,
                                 onBack = { viewModel.showOptions(false) },
                             )
@@ -134,6 +139,17 @@ fun AttndApp(viewModel: EventViewModel = viewModel(factory = EventViewModel.Fact
                             }
                             CompositionLocalProvider(LocalEventActions provides actions) {
                                 EventShell(state, bundle, viewModel)
+                            }
+                            // First join of an event (or Options → Tour); never in screenshot mode.
+                            if (state.showOnboarding) {
+                                OnboardingScreen(
+                                    bundle = bundle,
+                                    planner = state.planner,
+                                    onExample = viewModel::useExample,
+                                    onShowUserLocation = viewModel::setShowUserLocation,
+                                    onNotificationsGranted = { viewModel.setNotificationsEnabled(true) },
+                                    onDone = viewModel::finishOnboarding,
+                                )
                             }
                         }
                     }
@@ -315,6 +331,10 @@ private fun EventShell(state: AppUiState, bundle: EventBundle, viewModel: EventV
         onDownloadAssistant = viewModel::downloadAssistant,
         onAsk = viewModel::ask,
         onClearAnswer = viewModel::clearAnswer,
+        onOpenPlan = {
+            scope.launch { searchBarState.animateToCollapsed() }
+            viewModel.showPlan()
+        },
     )
 }
 
@@ -341,6 +361,17 @@ private fun TabContent(state: AppUiState, bundle: EventBundle, viewModel: EventV
             onLocationClick = viewModel::focusLocation,
             onItemShown = viewModel::onScheduleItemShown,
             onSearch = viewModel::onSearch,
+            planner = state.planner,
+            planActions = remember(viewModel) {
+                PlanActions(
+                    onMakePlan = viewModel::makePlan,
+                    onReplan = viewModel::replanFromNow,
+                    onSwap = viewModel::swapPlanItem,
+                    onKeepChanged = viewModel::keepChangedPlan,
+                    onClear = viewModel::clearPlan,
+                    onExample = viewModel::useExample,
+                )
+            },
         )
         Tab.FLYER -> FlyerScreen(bundle.event.flyerUrl)
         Tab.NOTIFICATIONS -> NotificationsScreen(
