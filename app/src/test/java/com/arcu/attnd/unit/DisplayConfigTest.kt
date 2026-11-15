@@ -37,6 +37,14 @@ class DisplayConfigTest {
     }
 
     @Test
+    fun tabs_atMostFiveInListedOrder() {
+        val all = listOf("notifications", "flyer", "schedule", "locations", "map")
+        val config = resolve(tabs = all, hasFlyer = true)
+        assertEquals(DisplayConfig.MAX_TABS, config.tabs.size)
+        assertEquals(listOf(Tab.NOTIFICATIONS, Tab.FLYER, Tab.SCHEDULE, Tab.LOCATIONS, Tab.MAP), config.tabs)
+    }
+
+    @Test
     fun defaultTab_mustBeVisible() {
         assertEquals(Tab.SCHEDULE, resolve(tabs = listOf("map", "schedule"), defaultTab = "schedule").defaultTab)
         assertEquals(Tab.MAP, resolve(tabs = listOf("schedule", "map"), defaultTab = "flyer").defaultTab)

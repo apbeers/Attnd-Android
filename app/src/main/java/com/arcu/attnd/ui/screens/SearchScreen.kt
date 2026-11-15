@@ -34,7 +34,6 @@ import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.AppBarWithSearch
 import androidx.compose.material3.ButtonGroupDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -43,6 +42,7 @@ import androidx.compose.material3.ExpandedFullScreenSearchBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -50,13 +50,14 @@ import androidx.compose.material3.LinearWavyProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SearchBarDefaults
+import androidx.compose.material3.SearchBarState
 import androidx.compose.material3.SearchBarValue
 import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.ToggleButton
 import androidx.compose.material3.ToggleButtonDefaults
-import androidx.compose.material3.rememberSearchBarState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -65,10 +66,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
@@ -93,6 +101,7 @@ import com.arcu.attnd.ui.components.RemoteImage
 import com.arcu.attnd.ui.components.SectionHeader
 import com.arcu.attnd.ui.components.rememberNow
 import com.arcu.attnd.ui.components.rememberSearchReporter
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.time.Instant
 
@@ -112,23 +121,24 @@ data class SearchEntry(val kind: SearchKind, val id: Int) {
 }
 
 /**
- * The app-wide search (reachable from every tab): a Material 3 [AppBarWithSearch] as the event's top
- * bar that expands into an [ExpandedFullScreenSearchBar]. It searches the local bundle
- * ([EventSearch]); tapped results open their detail on the search screen's own back stack, so Back
- * returns to the results and items whose tab `display.tabs` hides still open. With on-device Gemini
- * Nano available, "Ask" answers questions from the same local data.
+ * The app-wide search (reachable from every tab): the search FAB ([SearchFab]) expands [state] into
+ * this [ExpandedFullScreenSearchBar], with the text field focused and the keyboard up. It searches
+ * the local bundle ([EventSearch]); tapped results open their detail on the search screen's own back
+ * stack, so Back returns to the results and items whose tab `display.tabs` hides still open. With
+ * on-device Gemini Nano available, "Ask" answers questions from the same local data.
  *
- * [request] (from a shortcut or an assistant) opens the search with a query and optionally an item.
+ * Always composed while an event is shown (the expanded bar is a dialog that exists only while
+ * [state] is expanded), so [request] (from a shortcut or an assistant) can open it with a query and
+ * optionally an item.
  */
 @Composable
-fun EventSearchBar(
+fun EventSearch(
+    state: SearchBarState,
     bundle: EventBundle,
-    isRefreshing: Boolean,
     request: SearchRequest?,
     assistant: AssistantUiState,
     onRequestConsumed: () -> Unit,
     onSearch: () -> Unit,
-    onOptions: () -> Unit,
     onLocationShown: (Int) -> Unit,
     onScheduleItemShown: (Int) -> Unit,
     onCheckAssistant: () -> Unit,
@@ -136,7 +146,7 @@ fun EventSearchBar(
     onAsk: (String) -> Unit,
     onClearAnswer: () -> Unit,
 ) {
-    val searchBarState = rememberSearchBarState()
+    val searchBarState = state
     val textFieldState = rememberTextFieldState()
     val scope = rememberCoroutineScope()
     var stackText by rememberSaveable { mutableStateOf("") }
@@ -147,6 +157,7 @@ fun EventSearchBar(
     // API-005 `search`, counted exactly like the per-tab search fields (submit or 1.5 s settle).
     val submit = rememberSearchReporter(query, onSearch)
     val assistantUsable = assistant.availability in USABLE
+    val fieldFocus = remember { FocusRequester() }
 
     // Closing the search empties its back stack. Declared before the request effect, which may fill it.
     LaunchedEffect(expanded) {
@@ -178,17 +189,14 @@ fun EventSearchBar(
                     onAsk(text)
                 }
             },
+            modifier = Modifier.focusRequester(fieldFocus),
             placeholder = { Text(placeholder, maxLines = 1, overflow = TextOverflow.Ellipsis) },
             leadingIcon = {
-                if (expanded) {
-                    IconButton(onClick = { scope.launch { searchBarState.animateToCollapsed() } }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Close search")
-                    }
-                } else {
-                    Icon(Icons.Filled.Search, contentDescription = null)
+                IconButton(onClick = { scope.launch { searchBarState.animateToCollapsed() } }) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Close search")
                 }
             },
-            trailingIcon = if (expanded && query.isNotEmpty()) {
+            trailingIcon = if (query.isNotEmpty()) {
                 {
                     IconButton(onClick = { textFieldState.clearText() }) {
                         Icon(Icons.Filled.Clear, contentDescription = "Clear search")
@@ -200,32 +208,11 @@ fun EventSearchBar(
         )
     }
 
-    val logoUrl = bundle.display.logoUrl
-    Column {
-        AppBarWithSearch(
-            state = searchBarState,
-            inputField = inputField,
-            navigationIcon = if (logoUrl != null) {
-                {
-                    RemoteImage(
-                        url = logoUrl,
-                        contentDescription = null,
-                        maxDimension = 128,
-                        modifier = Modifier.size(32.dp).clip(CircleShape),
-                        placeholder = {},
-                    )
-                }
-            } else {
-                null
-            },
-            actions = {
-                IconButton(onClick = onOptions) { Icon(Icons.Filled.Settings, contentDescription = "Options") }
-            },
-        )
-        if (isRefreshing) LinearWavyProgressIndicator(Modifier.fillMaxWidth())
-    }
-
+    // There is no collapsed bar any more (the FAB opens it), so the expanded bar is the only place
+    // the input field lives. Back (system or predictive) collapses it through the dialog itself.
     ExpandedFullScreenSearchBar(state = searchBarState, inputField = inputField) {
+        // Composed once per opening, inside the search dialog's window.
+        FocusFieldOnOpen(fieldFocus, showKeyboard = remember { stack.isEmpty() })
         SearchContent(
             bundle = bundle,
             query = query,
@@ -248,6 +235,80 @@ fun EventSearchBar(
             onLocationShown = onLocationShown,
             onScheduleItemShown = onScheduleItemShown,
         )
+    }
+}
+
+/**
+ * Focuses the search field and shows the keyboard as soon as the search opens. The expanded search
+ * bar requests focus itself, but in its brand-new dialog window that can happen before the window
+ * has input focus, when the IME won't attach; so this waits for the dialog window to be focused,
+ * then requests focus and shows the keyboard explicitly. Opened straight onto a detail (a shortcut
+ * or assistant link to an item), the keyboard stays hidden instead.
+ */
+@Composable
+private fun FocusFieldOnOpen(focusRequester: FocusRequester, showKeyboard: Boolean) {
+    val windowInfo = LocalWindowInfo.current
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+    LaunchedEffect(Unit) {
+        snapshotFlow { windowInfo.isWindowFocused }.first { it }
+        // One frame, so the field is attached and the search bar's own focus request has run.
+        withFrameNanos { }
+        if (showKeyboard) {
+            try {
+                focusRequester.requestFocus()
+            } catch (_: IllegalStateException) {
+                // Not attached (the search closed again within the frame): nothing to focus.
+            }
+            keyboard?.show()
+        } else {
+            focusManager.clearFocus()
+            keyboard?.hide()
+        }
+    }
+}
+
+/**
+ * The search entry point: a Material 3 Expressive floating action button with a search icon. It
+ * opens the full-screen search ([EventSearch]) with the field focused.
+ */
+@Composable
+fun SearchFab(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    FloatingActionButton(onClick = onClick, modifier = modifier) {
+        Icon(Icons.Filled.Search, contentDescription = "Search")
+    }
+}
+
+/**
+ * The event's top app bar on every tab: the event logo (`display.logo_url`) and name, and the
+ * Options action (Options never goes into the navigation bar). A wavy progress line shows a
+ * pull-to-refresh in progress.
+ */
+@Composable
+fun EventTopBar(bundle: EventBundle, isRefreshing: Boolean, onOptions: () -> Unit) {
+    val logoUrl = bundle.display.logoUrl
+    Column {
+        TopAppBar(
+            title = { Text(bundle.event.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            navigationIcon = {
+                if (logoUrl != null) {
+                    // Sized like an icon button, so the title lines up as it would after one.
+                    Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                        RemoteImage(
+                            url = logoUrl,
+                            contentDescription = null,
+                            maxDimension = 128,
+                            modifier = Modifier.size(32.dp).clip(CircleShape),
+                            placeholder = {},
+                        )
+                    }
+                }
+            },
+            actions = {
+                IconButton(onClick = onOptions) { Icon(Icons.Filled.Settings, contentDescription = "Options") }
+            },
+        )
+        if (isRefreshing) LinearWavyProgressIndicator(Modifier.fillMaxWidth())
     }
 }
 

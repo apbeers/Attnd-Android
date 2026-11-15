@@ -65,6 +65,9 @@ data class DisplayConfig(
         const val DEFAULT_GROUP_BY_CATEGORY = false
         val DEFAULT_SECONDARY_PANE = SecondaryPane.LOCATIONS
 
+        /** Most items a Material navigation bar holds; extra listed tabs are dropped (no overflow item). */
+        const val MAX_TABS = 5
+
         /** `[map, locations, schedule, notifications]`, plus `flyer` when the event has a flyer. */
         fun defaultTabs(hasFlyer: Boolean): List<Tab> = buildList {
             add(Tab.MAP)
@@ -94,7 +97,8 @@ data class DisplayConfig(
             hasFlyer: Boolean,
         ): DisplayConfig {
             val parsedTabs = rawTabs?.mapNotNull { Tab.fromKey(it) }?.distinct().orEmpty()
-            val tabs = parsedTabs.ifEmpty { defaultTabs(hasFlyer) }
+            // The navigation bar holds only event tabs, never a "more" item: at most MAX_TABS, in the listed order.
+            val tabs = parsedTabs.ifEmpty { defaultTabs(hasFlyer) }.take(MAX_TABS)
             val requestedDefault = Tab.fromKey(rawDefaultTab)
             val defaultTab = when {
                 requestedDefault != null && requestedDefault in tabs -> requestedDefault

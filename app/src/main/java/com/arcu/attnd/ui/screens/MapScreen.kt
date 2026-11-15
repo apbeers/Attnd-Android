@@ -9,6 +9,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -16,11 +17,15 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.FloatingActionButtonDefaults
+import androidx.compose.material3.FloatingToolbarDefaults
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.VerticalFloatingToolbar
 import androidx.compose.material3.Text
+import androidx.compose.material3.contentColorFor
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -91,6 +96,8 @@ fun EventMap(
     onLocationClick: (Int) -> Unit,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(0.dp),
+    /** Set: the app-wide search FAB is the floating toolbar's FAB (the toolbar + FAB pattern). */
+    onSearch: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
@@ -235,13 +242,13 @@ fun EventMap(
             )
         }
 
-        // Material 3 Expressive vertical floating toolbar (replaces the stacked FABs).
-        VerticalFloatingToolbar(
-            expanded = true,
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(bottom = contentPadding.calculateBottomPadding() + 16.dp, end = 16.dp),
-        ) {
+        // Material 3 Expressive vertical floating toolbar (replaces the stacked FABs). With the search
+        // FAB it becomes a floating toolbar with a FAB below it, so the map controls and search share
+        // the bottom-end corner without overlapping.
+        val toolbarModifier = Modifier
+            .align(Alignment.BottomEnd)
+            .padding(bottom = contentPadding.calculateBottomPadding() + 16.dp, end = 16.dp)
+        val toolbarContent: @Composable ColumnScope.() -> Unit = {
             IconButton(onClick = { goHome(animate = true) }) {
                 Icon(Icons.Filled.Place, contentDescription = "Show the whole event")
             }
@@ -259,6 +266,25 @@ fun EventMap(
             ) {
                 Icon(Icons.Filled.MyLocation, contentDescription = "My location")
             }
+        }
+        if (onSearch != null) {
+            VerticalFloatingToolbar(
+                expanded = true,
+                floatingActionButton = {
+                    // Same colours as the Scaffold's search FAB on the other tabs.
+                    FloatingToolbarDefaults.VibrantFloatingActionButton(
+                        onClick = onSearch,
+                        containerColor = FloatingActionButtonDefaults.containerColor,
+                        contentColor = contentColorFor(FloatingActionButtonDefaults.containerColor),
+                    ) {
+                        Icon(Icons.Filled.Search, contentDescription = "Search")
+                    }
+                },
+                modifier = toolbarModifier,
+                content = toolbarContent,
+            )
+        } else {
+            VerticalFloatingToolbar(expanded = true, modifier = toolbarModifier, content = toolbarContent)
         }
     }
 }

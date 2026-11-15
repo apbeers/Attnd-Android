@@ -25,9 +25,11 @@ import com.arcu.attnd.ui.screens.ScheduleList
  *   `display.secondary_pane`, split on the fold;
  * - half-opened in tabletop posture: map on the top half, the pane on the bottom half,
  *   split on the horizontal hinge.
+ *
+ * [onSearch], when set, puts the app-wide search FAB into the map's floating toolbar (see EventShell).
  */
 @Composable
-fun MapTab(state: AppUiState, viewModel: EventViewModel) {
+fun MapTab(state: AppUiState, viewModel: EventViewModel, onSearch: (() -> Unit)? = null) {
     val bundle = state.bundle ?: return
     // V2 adds the L (1200 dp) and XL (1600 dp) width classes; "at least medium" (600 dp) is unchanged.
     val adaptiveInfo = currentWindowAdaptiveInfoV2()
@@ -42,6 +44,7 @@ fun MapTab(state: AppUiState, viewModel: EventViewModel) {
             onShowUserLocationChange = viewModel::setShowUserLocation,
             recenterRequest = state.recenterRequest,
             onLocationClick = viewModel::focusLocation,
+            onSearch = onSearch,
         )
     }
     val secondary: @Composable () -> Unit = {

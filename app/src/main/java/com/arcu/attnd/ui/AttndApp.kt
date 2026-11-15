@@ -33,10 +33,12 @@ import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteItem
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffoldDefaults
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteType
+import androidx.compose.material3.rememberSearchBarState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -50,7 +52,8 @@ import com.arcu.attnd.domain.Tab
 import com.arcu.attnd.domain.UpdateLevel
 import com.arcu.attnd.ui.components.EventStatusPills
 import com.arcu.attnd.ui.components.OfflineNotice
-import com.arcu.attnd.ui.screens.EventSearchBar
+import com.arcu.attnd.ui.screens.EventSearch
+import com.arcu.attnd.ui.screens.EventTopBar
 import com.arcu.attnd.ui.screens.FlyerScreen
 import com.arcu.attnd.ui.screens.LaunchScreen
 import com.arcu.attnd.ui.screens.LocationDetail
@@ -59,9 +62,11 @@ import com.arcu.attnd.ui.screens.NotificationsScreen
 import com.arcu.attnd.ui.screens.OptionsScreen
 import com.arcu.attnd.ui.screens.ScheduleItemDetail
 import com.arcu.attnd.ui.screens.ScheduleTab
+import com.arcu.attnd.ui.screens.SearchFab
 import com.arcu.attnd.ui.screens.UpdateAvailableBanner
 import com.arcu.attnd.ui.screens.UpdateRequiredScreen
 import com.arcu.attnd.ui.theme.AttndTheme
+import kotlinx.coroutines.launch
 
 /** Root composable: theme (with the event's accent colour) and launch vs. event UI. */
 @Composable
@@ -141,9 +146,10 @@ private val Tab.icon: ImageVector
     }
 
 /**
- * The joined-event UI. Tabs come from `display.tabs` (order, visibility, default). The navigation
- * is a bottom bar on the folded/cover screen and a rail on the unfolded inner display
- * (NavigationSuiteScaffold picks this from the window size class and posture).
+ * The joined-event UI. Tabs come from `display.tabs` (order, visibility, default; at most
+ * [DisplayConfig.MAX_TABS], never a "more" item). The navigation is a bottom bar on the
+ * folded/cover screen and a rail on the unfolded inner display (NavigationSuiteScaffold picks this
+ * from the window size class and posture). Options sits in the top bar, search behind a FAB.
  */
 @Composable
 private fun EventShell(state: AppUiState, bundle: EventBundle, viewModel: EventViewModel) {
@@ -190,6 +196,20 @@ private fun EventShell(state: AppUiState, bundle: EventBundle, viewModel: EventV
         WindowInsets.safeDrawing.only(WindowInsetsSides.End + WindowInsetsSides.Bottom)
     }
 
+    // App-wide search: a FAB opens the full-screen search (EventSearch, always composed so shortcut /
+    // AppFunctions / attnd-open requests can open it too). Where the FAB sits follows the Material
+    // patterns for each navigation: in the wide navigation rail's header on the unfolded display;
+    // on the Map tab (bar or no navigation) as the FAB of the map's vertical floating toolbar, so the
+    // two never overlap; elsewhere in the Scaffold's FAB slot, bottom-end above the navigation bar.
+    val searchBarState = rememberSearchBarState()
+    val scope = rememberCoroutineScope()
+    val openSearch: () -> Unit = { scope.launch { searchBarState.animateToExpanded() } }
+    val isRail = navType == NavigationSuiteType.WideNavigationRailCollapsed ||
+        navType == NavigationSuiteType.WideNavigationRailExpanded ||
+        navType == NavigationSuiteType.NavigationRail
+    val fabInMapToolbar = !isRail && state.selectedTab == Tab.MAP
+    val fabInScaffold = !isRail && !fabInMapToolbar
+
     NavigationSuiteScaffold(
         navigationSuiteType = navType,
         navigationItems = {
@@ -203,26 +223,20 @@ private fun EventShell(state: AppUiState, bundle: EventBundle, viewModel: EventV
                 )
             }
         },
+        // Only shown by the rail (as its header); with a bar the FAB goes in the Scaffold below,
+        // which also keeps snackbars above it.
+        primaryActionContent = { if (isRail) SearchFab(onClick = openSearch) },
     ) {
         Scaffold(
             topBar = {
-                EventSearchBar(
+                EventTopBar(
                     bundle = bundle,
                     isRefreshing = state.sync.isRefreshing,
-                    request = state.searchRequest,
-                    assistant = state.assistant,
-                    onRequestConsumed = viewModel::consumeSearchRequest,
-                    onSearch = viewModel::onSearch,
                     onOptions = { viewModel.showOptions(true) },
-                    onLocationShown = viewModel::onLocationShown,
-                    onScheduleItemShown = viewModel::onScheduleItemShown,
-                    onCheckAssistant = viewModel::checkAssistant,
-                    onDownloadAssistant = viewModel::downloadAssistant,
-                    onAsk = viewModel::ask,
-                    onClearAnswer = viewModel::clearAnswer,
                 )
             },
             snackbarHost = { SnackbarHost(snackbar) },
+            floatingActionButton = { if (fabInScaffold) SearchFab(onClick = openSearch) },
             contentWindowInsets = contentInsets,
         ) { padding ->
             Column(
@@ -234,7 +248,7 @@ private fun EventShell(state: AppUiState, bundle: EventBundle, viewModel: EventV
                 OfflineNotice(state.sync)
                 Box(Modifier.fillMaxWidth().weight(1f)) {
                     tabStates.SaveableStateProvider(state.selectedTab.key) {
-                        TabContent(state, bundle, viewModel)
+                        TabContent(state, bundle, viewModel, onMapSearch = if (fabInMapToolbar) openSearch else null)
                     }
                     // Floats over the content (no layout space) so demo / ended events stay obvious.
                     EventStatusPills(bundle.event, Modifier.align(Alignment.TopCenter))
@@ -242,12 +256,27 @@ private fun EventShell(state: AppUiState, bundle: EventBundle, viewModel: EventV
             }
         }
     }
+
+    EventSearch(
+        state = searchBarState,
+        bundle = bundle,
+        request = state.searchRequest,
+        assistant = state.assistant,
+        onRequestConsumed = viewModel::consumeSearchRequest,
+        onSearch = viewModel::onSearch,
+        onLocationShown = viewModel::onLocationShown,
+        onScheduleItemShown = viewModel::onScheduleItemShown,
+        onCheckAssistant = viewModel::checkAssistant,
+        onDownloadAssistant = viewModel::downloadAssistant,
+        onAsk = viewModel::ask,
+        onClearAnswer = viewModel::clearAnswer,
+    )
 }
 
 @Composable
-private fun TabContent(state: AppUiState, bundle: EventBundle, viewModel: EventViewModel) {
+private fun TabContent(state: AppUiState, bundle: EventBundle, viewModel: EventViewModel, onMapSearch: (() -> Unit)?) {
     when (state.selectedTab) {
-        Tab.MAP -> MapTab(state, viewModel)
+        Tab.MAP -> MapTab(state, viewModel, onSearch = onMapSearch)
         Tab.LOCATIONS -> LocationsTab(
             bundle = bundle,
             isRefreshing = state.sync.isRefreshing,
