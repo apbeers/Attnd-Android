@@ -386,4 +386,15 @@ class EventSearchTest {
         assertNull(OpenLinks.parse("attnd-open://x/event"))
         assertNull(OpenLinks.parse(null))
     }
+
+    @Test
+    fun locationTags_matchWithWeight2_api010() {
+        val tagged = bundle.copy(
+            locations = bundle.locations.map { if (it.id == 11) it.copy(tags = listOf("bbq", "kid-friendly")) else it },
+        )
+        val results = EventSearch.search(tagged, "kid friendly", now)
+        assertEquals(listOf(SearchKind.LOCATION to 11), results.map { it.kind to it.id })
+        // Tag weight 2 × exact 4 per token: same as a snippet match.
+        assertEquals(16.0, results.single().score, 1e-9)
+    }
 }

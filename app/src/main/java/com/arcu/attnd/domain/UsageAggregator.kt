@@ -21,6 +21,12 @@ object UsageMetric {
     const val SEARCH = "search"
     const val REFRESH = "refresh"
 
+    // API-009: hearts (detail = the location / schedule item id).
+    const val LOCATION_HEART = "location_heart"
+    const val LOCATION_UNHEART = "location_unheart"
+    const val SCHEDULE_ITEM_HEART = "schedule_item_heart"
+    const val SCHEDULE_ITEM_UNHEART = "schedule_item_unheart"
+
     /** `tab_view` detail for the Options screen (it is not a [Tab]). */
     const val TAB_OPTIONS = "options"
 }

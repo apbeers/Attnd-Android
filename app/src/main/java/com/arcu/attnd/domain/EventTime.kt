@@ -1,6 +1,5 @@
 package com.arcu.attnd.domain
 
-import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
 import java.time.OffsetDateTime
@@ -82,22 +81,6 @@ object EventTime {
     /** Short zone label for headers, e.g. "CST". */
     fun zoneLabel(zone: ZoneId, at: Instant = Instant.now(), locale: Locale = Locale.getDefault()): String =
         DateTimeFormatter.ofPattern("zzz", locale).format(at.atZone(zone))
-
-    /** "Starts in 1h 20m" for items starting within the next day; null otherwise. */
-    fun startsInText(start: OffsetDateTime?, now: Instant): String? {
-        start ?: return null
-        val seconds = Duration.between(now, start.toInstant()).seconds
-        if (seconds <= 0 || seconds > Duration.ofDays(1).seconds) return null
-        val totalMinutes = seconds / 60
-        if (totalMinutes < 1) return "Starting now"
-        val hours = totalMinutes / 60
-        val minutes = totalMinutes % 60
-        return when {
-            hours == 0L -> "Starts in ${minutes}m"
-            minutes == 0L -> "Starts in ${hours}h"
-            else -> "Starts in ${hours}h ${minutes}m"
-        }
-    }
 
     /**
      * True when "now" falls on an event day in the event's zone: between the start date and the

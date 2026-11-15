@@ -12,6 +12,7 @@ import com.arcu.attnd.BuildConfig
 import com.arcu.attnd.data.AssistantAvailability
 import com.arcu.attnd.data.AssistantDownload
 import com.arcu.attnd.data.EventRepository
+import com.arcu.attnd.data.HeartStore
 import com.arcu.attnd.data.InstallReferrer
 import com.arcu.attnd.data.OnDeviceAssistant
 import com.arcu.attnd.data.RefreshResult
@@ -24,6 +25,8 @@ import com.arcu.attnd.domain.AppUpdate
 import com.arcu.attnd.domain.AssistantPrompt
 import com.arcu.attnd.domain.Event
 import com.arcu.attnd.domain.EventBundle
+import com.arcu.attnd.domain.EventNotification
+import com.arcu.attnd.domain.Hearts
 import com.arcu.attnd.domain.JoinLinks
 import com.arcu.attnd.domain.LiveUpdates
 import com.arcu.attnd.domain.NearbyEvent
@@ -35,6 +38,7 @@ import com.arcu.attnd.domain.SearchKind
 import com.arcu.attnd.domain.SearchResult
 import com.arcu.attnd.domain.SupportInfo
 import com.arcu.attnd.domain.Tab
+import com.arcu.attnd.domain.UnreadUpdates
 import com.arcu.attnd.domain.UpdateLevel
 import com.arcu.attnd.domain.UsageMetric
 import com.arcu.attnd.ui.screens.SearchEntry
@@ -118,6 +122,16 @@ data class AppUiState(
     val showUpdateBanner: Boolean = false,
     /** API-004: build, server, device and event details for Options → About & support. */
     val supportInfo: SupportInfo? = null,
+    /** Hearted schedule items and locations of the joined event (on the device only). */
+    val hearts: Hearts = Hearts.NONE,
+    /** Organizer updates sent since the Updates tab was last seen (its navigation badge). */
+    val unreadUpdates: Int = 0,
+    /** The newest unread update (sent within 24 h, not dismissed), as a banner on the other tabs. */
+    val updateBanner: EventNotification? = null,
+    /** One-shot request to select a location on the map ("Show on map", peek). */
+    val mapFocusLocationId: Int? = null,
+    /** Store-screenshot mode: no location tracking, map glance features, badge or banner. */
+    val isScreenshot: Boolean = false,
 )
 
 private data class LocalState(
@@ -140,6 +154,10 @@ private data class LocalState(
     val screenshot: ScreenshotRequest? = null,
     /** The screenshot event is still being joined: keep showing the loading screen, not the launch screen. */
     val screenshotPending: Boolean = false,
+    val mapFocusLocationId: Int? = null,
+    /** Per event: when its Updates tab was last seen (epoch ms) and which update banner was dismissed. */
+    val updatesSeenAt: Map<Int, Long> = emptyMap(),
+    val dismissedUpdateBanners: Map<Int, Int> = emptyMap(),
 )
 
 class EventViewModel(
@@ -148,6 +166,7 @@ class EventViewModel(
     private val prefs: DevicePrefs,
     private val usage: UsageReporter,
     private val assistant: OnDeviceAssistant,
+    private val heartStore: HeartStore,
 ) : ViewModel() {
 
     /** The parts of [SupportInfo] that never change while the process runs. */
@@ -183,7 +202,7 @@ class EventViewModel(
     )
 
     val uiState: StateFlow<AppUiState> =
-        combine(repository.bundle, repository.sync, local, repository.appUpdate) { savedBundle, savedSync, state, savedUpdate ->
+        combine(repository.bundle, repository.sync, local, repository.appUpdate, heartStore.version) { savedBundle, savedSync, state, savedUpdate, _ ->
             val screenshot = state.screenshot
             // Screenshot mode: the screen's layout tweaks, and nothing on top (no update banner or
             // screen, status pill, offline notice or refresh spinner).
@@ -191,6 +210,11 @@ class EventViewModel(
             val update = if (screenshot != null) AppUpdate() else savedUpdate
             val sync = if (screenshot != null) savedSync.copy(isRefreshing = false, error = null) else savedSync
             val display = bundle?.display
+            val eventId = bundle?.event?.id
+            val updatesSeen = eventId?.let { id ->
+                (state.updatesSeenAt[id] ?: prefs.updatesSeenAt(id))?.let(Instant::ofEpochMilli)
+            }
+            val notifications = bundle?.notifications.orEmpty()
             AppUiState(
                 phase = when {
                     !state.ready || state.screenshotPending -> AppPhase.LOADING
@@ -223,6 +247,17 @@ class EventViewModel(
                     contentVersion = bundle?.contentVersion,
                     lastSyncedAt = sync.lastSyncedAt,
                 ),
+                hearts = eventId?.let(heartStore::hearts) ?: Hearts.NONE,
+                unreadUpdates = if (screenshot != null) 0 else UnreadUpdates.unreadCount(notifications, updatesSeen),
+                // Store screenshots never show the banner.
+                updateBanner = if (screenshot != null || eventId == null) null else UnreadUpdates.banner(
+                    notifications,
+                    updatesSeen,
+                    state.dismissedUpdateBanners[eventId] ?: prefs.dismissedUpdateBanner(eventId),
+                    Instant.now(),
+                ),
+                mapFocusLocationId = state.mapFocusLocationId,
+                isScreenshot = screenshot != null,
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, AppUiState())
 
@@ -243,6 +278,28 @@ class EventViewModel(
                     if (view != null && !screenshotMode) usage.track(view.first, UsageMetric.TAB_VIEW, view.second)
                 }
         }
+        // Unread updates: the Updates tab counts as seen while it is visible, including updates that
+        // arrive while it is open.
+        viewModelScope.launch {
+            uiState
+                .map { state ->
+                    val bundle = state.bundle
+                    if (state.phase == AppPhase.EVENT && bundle != null && !state.showOptions && state.selectedTab == Tab.NOTIFICATIONS) {
+                        bundle.event.id to bundle.notifications
+                    } else {
+                        null
+                    }
+                }
+                .distinctUntilChanged()
+                .collect { seen -> if (seen != null) markUpdatesSeen(seen.first, seen.second) }
+        }
+    }
+
+    private fun markUpdatesSeen(eventId: Int, notifications: List<EventNotification>) {
+        if (screenshotMode) return
+        val at = UnreadUpdates.seenAt(notifications, Instant.now()).toEpochMilli()
+        prefs.setUpdatesSeenAt(eventId, at)
+        local.update { it.copy(updatesSeenAt = it.updatesSeenAt + (eventId to at)) }
     }
 
     /**
@@ -309,6 +366,7 @@ class EventViewModel(
                     focusLocationId = null,
                     focusScheduleItemId = null,
                     focusNotificationId = null,
+                    mapFocusLocationId = null,
                     searchRequest = null,
                     assistant = it.assistant.copy(question = null, answer = null, sources = emptyList(), error = null, isAnswering = false),
                     message = when (result) {
@@ -497,6 +555,35 @@ class EventViewModel(
 
     fun consumeFocusNotification() {
         local.update { it.copy(focusNotificationId = null) }
+    }
+
+    /** Selects a location on the Map tab (when the event shows one). */
+    fun showOnMap(locationId: Int) {
+        val bundle = uiState.value.bundle ?: return
+        if (Tab.MAP !in bundle.display.tabs) return
+        local.update { it.copy(selectedTab = Tab.MAP, showOptions = false, mapFocusLocationId = locationId) }
+    }
+
+    fun consumeMapFocus() {
+        local.update { it.copy(mapFocusLocationId = null) }
+    }
+
+    /** The update banner's ✕: hides that update's banner (the badge stays until the tab is seen). */
+    fun dismissLatestUpdate(notificationId: Int) {
+        val eventId = uiState.value.bundle?.event?.id ?: return
+        prefs.setDismissedUpdateBanner(eventId, notificationId)
+        local.update { it.copy(dismissedUpdateBanners = it.dismissedUpdateBanners + (eventId to notificationId)) }
+    }
+
+    // ── Hearts ──────────────────────────────────────────────────────────────
+
+    /** Hearts or un-hearts a schedule item / location (stored per event; API-009 usage count). */
+    fun toggleHeart(kind: SearchKind, id: Int) {
+        val eventId = repository.bundle.value?.event?.id ?: return
+        val hearted = !heartStore.hearts(eventId).has(kind, id)
+        if (heartStore.set(eventId, kind, id, hearted)) {
+            Hearts.metric(kind, hearted)?.let { track(it, id.toString()) }
+        }
     }
 
     // ── Search & assistant ──────────────────────────────────────────────────
@@ -688,7 +775,7 @@ class EventViewModel(
         val Factory: ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 val app = checkNotNull(this[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY]) as AttndApplication
-                EventViewModel(app, app.graph.repository, app.graph.prefs, app.graph.usage, app.graph.assistant)
+                EventViewModel(app, app.graph.repository, app.graph.prefs, app.graph.usage, app.graph.assistant, app.graph.hearts)
             }
         }
     }

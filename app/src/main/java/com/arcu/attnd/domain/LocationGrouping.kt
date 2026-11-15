@@ -47,7 +47,8 @@ object LocationGrouping {
                     location.snippet.contains(needle, ignoreCase = true) ||
                     location.description.contains(needle, ignoreCase = true) ||
                     location.address.contains(needle, ignoreCase = true) ||
-                    (location.category?.contains(needle, ignoreCase = true) == true))
+                    (location.category?.contains(needle, ignoreCase = true) == true) ||
+                    location.tags.any { it.contains(needle, ignoreCase = true) })
         }
     }
 

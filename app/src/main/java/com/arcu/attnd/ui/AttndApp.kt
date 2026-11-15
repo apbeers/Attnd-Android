@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material3.Badge
 import androidx.compose.material3.ContainedLoadingIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -35,6 +36,7 @@ import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffo
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteType
 import androidx.compose.material3.rememberSearchBarState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -44,13 +46,21 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.arcu.attnd.domain.DisplayConfig
 import com.arcu.attnd.domain.EventBundle
+import com.arcu.attnd.domain.OpenRequest
+import com.arcu.attnd.domain.OpenTarget
 import com.arcu.attnd.domain.Tab
 import com.arcu.attnd.domain.UpdateLevel
+import com.arcu.attnd.ui.components.EventActions
 import com.arcu.attnd.ui.components.EventStatusPills
+import com.arcu.attnd.ui.components.LocalEventActions
+import com.arcu.attnd.ui.components.LocalScreenshotMode
+import com.arcu.attnd.ui.components.UpdateBanner
 import com.arcu.attnd.ui.components.OfflineNotice
 import com.arcu.attnd.ui.screens.EventSearch
 import com.arcu.attnd.ui.screens.EventTopBar
@@ -77,51 +87,64 @@ fun AttndApp(viewModel: EventViewModel = viewModel(factory = EventViewModel.Fact
     }
 
     AttndTheme(accentColor = accent) {
-        if (state.update.level == UpdateLevel.REQUIRED) {
-            UpdateRequiredScreen(state.update)
-            return@AttndTheme
-        }
-        Box(Modifier.fillMaxSize()) {
-            when (state.phase) {
-                AppPhase.LOADING -> Surface(Modifier.fillMaxSize()) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { ContainedLoadingIndicator() }
-                }
-                AppPhase.LAUNCH -> LaunchScreen(
-                    join = state.join,
-                    nearby = state.nearby,
-                    message = state.message ?: state.sync.error,
-                    onJoinCode = viewModel::joinByCode,
-                    onJoinEvent = viewModel::joinEvent,
-                    onNearbyLoading = viewModel::setNearbyLoading,
-                    onNearbyLocation = viewModel::loadNearby,
-                    onNearbyError = viewModel::setNearbyError,
-                    onClearJoinError = viewModel::clearJoinError,
-                )
-                AppPhase.EVENT -> {
-                    val bundle = state.bundle ?: return@AttndTheme
-                    val supportInfo = state.supportInfo
-                    if (state.showOptions && supportInfo != null) {
-                        OptionsScreen(
-                            event = bundle.event,
-                            supportInfo = supportInfo,
-                            notificationsEnabled = state.notificationsEnabled,
-                            onNotificationsChange = viewModel::setNotificationsEnabled,
-                            showUserLocation = state.showUserLocation,
-                            onShowUserLocationChange = viewModel::setShowUserLocation,
-                            onLeaveEvent = viewModel::leaveEvent,
-                            onBack = { viewModel.showOptions(false) },
-                        )
-                    } else {
-                        EventShell(state, bundle, viewModel)
+        CompositionLocalProvider(LocalScreenshotMode provides state.isScreenshot) {
+            if (state.update.level == UpdateLevel.REQUIRED) {
+                UpdateRequiredScreen(state.update)
+                return@CompositionLocalProvider
+            }
+            Box(Modifier.fillMaxSize()) {
+                when (state.phase) {
+                    AppPhase.LOADING -> Surface(Modifier.fillMaxSize()) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { ContainedLoadingIndicator() }
+                    }
+                    AppPhase.LAUNCH -> LaunchScreen(
+                        join = state.join,
+                        nearby = state.nearby,
+                        message = state.message ?: state.sync.error,
+                        onJoinCode = viewModel::joinByCode,
+                        onJoinEvent = viewModel::joinEvent,
+                        onNearbyLoading = viewModel::setNearbyLoading,
+                        onNearbyLocation = viewModel::loadNearby,
+                        onNearbyError = viewModel::setNearbyError,
+                        onClearJoinError = viewModel::clearJoinError,
+                    )
+                    AppPhase.EVENT -> {
+                        val bundle = state.bundle ?: return@CompositionLocalProvider
+                        val supportInfo = state.supportInfo
+                        if (state.showOptions && supportInfo != null) {
+                            OptionsScreen(
+                                event = bundle.event,
+                                supportInfo = supportInfo,
+                                notificationsEnabled = state.notificationsEnabled,
+                                onNotificationsChange = viewModel::setNotificationsEnabled,
+                                showUserLocation = state.showUserLocation,
+                                onShowUserLocationChange = viewModel::setShowUserLocation,
+                                onLeaveEvent = viewModel::leaveEvent,
+                                onBack = { viewModel.showOptions(false) },
+                            )
+                        } else {
+                            // Hearts and "Show on map" for every row, detail, card and the search screen.
+                            val hasMap = Tab.MAP in bundle.display.tabs
+                            val actions = remember(state.hearts, hasMap, viewModel) {
+                                EventActions(
+                                    hearts = state.hearts,
+                                    onToggleHeart = viewModel::toggleHeart,
+                                    onShowOnMap = if (hasMap) viewModel::showOnMap else null,
+                                )
+                            }
+                            CompositionLocalProvider(LocalEventActions provides actions) {
+                                EventShell(state, bundle, viewModel)
+                            }
+                        }
                     }
                 }
-            }
-            if (state.showUpdateBanner) {
-                UpdateAvailableBanner(
-                    update = state.update,
-                    onDismiss = viewModel::dismissUpdateBanner,
-                    modifier = Modifier.align(Alignment.TopCenter),
-                )
+                if (state.showUpdateBanner) {
+                    UpdateAvailableBanner(
+                        update = state.update,
+                        onDismiss = viewModel::dismissUpdateBanner,
+                        modifier = Modifier.align(Alignment.TopCenter),
+                    )
+                }
             }
         }
     }
@@ -214,12 +237,22 @@ private fun EventShell(state: AppUiState, bundle: EventBundle, viewModel: EventV
         navigationSuiteType = navType,
         navigationItems = {
             tabs.forEach { tab ->
+                val unread = if (tab == Tab.NOTIFICATIONS && tab != state.selectedTab) state.unreadUpdates else 0
                 NavigationSuiteItem(
                     selected = tab == state.selectedTab,
                     onClick = { viewModel.selectTab(tab) },
                     icon = { Icon(tab.icon, contentDescription = null) },
                     label = { Text(tab.label) },
                     navigationSuiteType = navType,
+                    badge = if (unread > 0) {
+                        {
+                            Badge(Modifier.semantics { contentDescription = "$unread unread" }) {
+                                Text(if (unread > 99) "99+" else unread.toString())
+                            }
+                        }
+                    } else {
+                        null
+                    },
                 )
             }
         },
@@ -246,6 +279,18 @@ private fun EventShell(state: AppUiState, bundle: EventBundle, viewModel: EventV
                     .consumeWindowInsets(padding),
             ) {
                 OfflineNotice(state.sync)
+                // The newest unread organizer update, on the other tabs, for 24 h (dismissible).
+                state.updateBanner?.takeIf { state.selectedTab != Tab.NOTIFICATIONS }?.let { update ->
+                    UpdateBanner(
+                        notification = update,
+                        bundle = bundle,
+                        onOpen = {
+                            if (Tab.NOTIFICATIONS in tabs) viewModel.focusNotification(update.id)
+                            else viewModel.open(OpenRequest(bundle.event.id, OpenTarget.Notification(update.id)))
+                        },
+                        onDismiss = { viewModel.dismissLatestUpdate(update.id) },
+                    )
+                }
                 Box(Modifier.fillMaxWidth().weight(1f)) {
                     tabStates.SaveableStateProvider(state.selectedTab.key) {
                         TabContent(state, bundle, viewModel, onMapSearch = if (fabInMapToolbar) openSearch else null)

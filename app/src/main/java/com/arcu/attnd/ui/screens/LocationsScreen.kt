@@ -1,11 +1,14 @@
-@file:OptIn(ExperimentalMaterial3Api::class)
+@file:OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 
 package com.arcu.attnd.ui.screens
 
 import android.content.Intent
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -23,7 +26,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.Map
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.ButtonGroup
 import androidx.compose.material3.ButtonGroupDefaults
 import androidx.compose.material3.Card
@@ -44,6 +49,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
@@ -54,10 +60,21 @@ import androidx.core.net.toUri
 import com.arcu.attnd.domain.EventBundle
 import com.arcu.attnd.domain.EventLocation
 import com.arcu.attnd.domain.EventTime
+import com.arcu.attnd.domain.Glance
 import com.arcu.attnd.domain.LocationGrouping
 import com.arcu.attnd.domain.LocationsStyle
+import com.arcu.attnd.domain.RelativeTime
 import com.arcu.attnd.domain.ScheduleGrouping
+import com.arcu.attnd.domain.SearchKind
+import com.arcu.attnd.domain.Tags
 import com.arcu.attnd.ui.components.CategoryChips
+import com.arcu.attnd.ui.components.DistanceArrow
+import com.arcu.attnd.ui.components.HeartButton
+import com.arcu.attnd.ui.components.LiveDot
+import com.arcu.attnd.ui.components.LocalEventActions
+import com.arcu.attnd.ui.components.PeekSheet
+import com.arcu.attnd.ui.components.PeekTarget
+import com.arcu.attnd.ui.components.WalkTime
 import com.arcu.attnd.ui.components.EmptyState
 import com.arcu.attnd.ui.components.IdListDetail
 import com.arcu.attnd.ui.components.ImagePlaceholder
@@ -66,6 +83,7 @@ import com.arcu.attnd.ui.components.RemoteImage
 import com.arcu.attnd.ui.components.SearchField
 import com.arcu.attnd.ui.components.SectionHeader
 import com.arcu.attnd.ui.components.rememberNow
+import java.time.Instant
 
 /** Locations tab: list (styled by `display.locations_style`) with a detail pane. */
 @Composable
@@ -125,36 +143,56 @@ fun LocationsList(
     onSearch: () -> Unit = {},
 ) {
     val display = bundle.display
+    val hearts = LocalEventActions.current.hearts
+    val now = rememberNow()
     var query by rememberSaveable { mutableStateOf("") }
     var category by rememberSaveable { mutableStateOf<String?>(null) }
+    var heartedOnly by rememberSaveable { mutableStateOf(false) }
+    var peek by rememberSaveable { mutableStateOf<Int?>(null) }
     val categories = remember(bundle.locations, bundle.categories) {
         LocationGrouping.availableCategories(bundle.locations, bundle.categories)
     }
-    val filtered = remember(bundle.locations, query, category) {
-        LocationGrouping.filter(bundle.locations, query, category)
+    val filtered = remember(bundle.locations, query, category, heartedOnly, hearts) {
+        LocationGrouping.filter(bundle.locations, query, category).filter { !heartedOnly || it.id in hearts.locations }
+    }
+    val showHeartedChip = heartedOnly || hearts.locations.isNotEmpty()
+    val open: (Int) -> Unit = onLocationClick
+    val longPress: (Int) -> Unit = { peek = it }
+
+    peek?.let { id ->
+        PeekSheet(bundle, PeekTarget(SearchKind.LOCATION, id), now, onOpen = { onLocationClick(id) }, onDismiss = { peek = null })
     }
 
     Column(modifier.fillMaxSize()) {
         if (display.enableSearch) SearchField(query, { query = it }, "Search locations", onSearch = onSearch)
-        if (display.groupByCategory) CategoryChips(categories, category, { category = it })
+        if (display.groupByCategory || showHeartedChip) {
+            CategoryChips(
+                categories = if (display.groupByCategory) categories else emptyList(),
+                selected = category,
+                onSelect = { category = it },
+                hearted = heartedOnly,
+                onHeartedChange = if (showHeartedChip) ({ value: Boolean -> heartedOnly = value }) else null,
+            )
+        }
         RefreshBox(isRefreshing = isRefreshing, onRefresh = onRefresh, modifier = Modifier.fillMaxSize()) {
             if (filtered.isEmpty()) {
                 EmptyState(
-                    if (bundle.locations.isEmpty()) "No locations have been added yet."
-                    else "No locations match your search."
+                    when {
+                        bundle.locations.isEmpty() -> "No locations have been added yet."
+                        heartedOnly && query.isBlank() && category == null -> "No hearted locations yet. Tap the heart on a location to keep it here."
+                        else -> "No locations match your search."
+                    }
                 )
             } else {
                 LazyColumn(Modifier.fillMaxSize(), contentPadding = contentPadding) {
                     when (display.locationsStyle) {
                         LocationsStyle.CARDS -> items(filtered, key = { it.id }) { location ->
-                            LocationCard(location, display.showLocationImages, location.id == selectedId) {
-                                onLocationClick(location.id)
-                            }
+                            LocationCard(bundle, location, display.showLocationImages, location.id == selectedId, now, open, longPress)
                         }
-                        LocationsStyle.LIST -> locationRows(filtered, display.showLocationImages, selectedId, onLocationClick)
+                        LocationsStyle.LIST -> locationRows(bundle, filtered, display.showLocationImages, selectedId, now, open, longPress)
                         LocationsStyle.GROUPED -> LocationGrouping.byCategory(filtered, bundle.categories).forEach { section ->
                             item(key = section.key) { SectionHeader(section.title) }
-                            locationRows(section.locations, display.showLocationImages, selectedId, onLocationClick)
+                            locationRows(bundle, section.locations, display.showLocationImages, selectedId, now, open, longPress)
                         }
                     }
                 }
@@ -164,26 +202,69 @@ fun LocationsList(
 }
 
 private fun LazyListScope.locationRows(
+    bundle: EventBundle,
     locations: List<EventLocation>,
     showImages: Boolean,
     selectedId: Int?,
+    now: Instant,
     onClick: (Int) -> Unit,
+    onLongClick: (Int) -> Unit,
 ) {
     items(locations, key = { it.id }) { location ->
-        LocationRow(location, showImages, location.id == selectedId) { onClick(location.id) }
+        LocationRow(bundle, location, showImages, location.id == selectedId, now, { onClick(location.id) }, { onLongClick(location.id) })
         HorizontalDivider()
     }
 }
 
+/** "Now: X · Next 8:30 Y" for a location with a schedule (stages etc.). */
 @Composable
-private fun LocationRow(location: EventLocation, showImage: Boolean, selected: Boolean, onClick: () -> Unit) {
+private fun NowNextLine(bundle: EventBundle, location: EventLocation, now: Instant) {
+    val line = remember(bundle.schedule, location.id, now) { Glance.locationLine(bundle, location.id, now) } ?: return
+    val live = remember(bundle.schedule, location.id, now) { Glance.isLive(bundle, location.id, now) }
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (live) LiveDot()
+        Text(
+            line,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun LocationRow(
+    bundle: EventBundle,
+    location: EventLocation,
+    showImage: Boolean,
+    selected: Boolean,
+    now: Instant,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+) {
+    val hasSchedule = remember(bundle.schedule, location.id) { bundle.schedule.any { it.locationId == location.id } }
     ListItem(
         selected = selected,
         onClick = onClick,
-        supportingContent = if (location.snippet.isNotBlank()) {
-            { Text(location.snippet, maxLines = 2, overflow = TextOverflow.Ellipsis) }
+        onLongClick = onLongClick,
+        onLongClickLabel = "Preview",
+        supportingContent = if (location.snippet.isNotBlank() || hasSchedule) {
+            {
+                Column {
+                    if (location.snippet.isNotBlank()) Text(location.snippet, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    if (hasSchedule) NowNextLine(bundle, location, now)
+                }
+            }
         } else {
             null
+        },
+        trailingContent = {
+            Column(horizontalAlignment = Alignment.End) {
+                HeartButton(SearchKind.LOCATION, location.id, name = location.name)
+                DistanceArrow(location.coordinate)
+            }
         },
         overlineContent = if (location.category != null) {
             { Text(location.category) }
@@ -215,9 +296,16 @@ private fun PinPlaceholder() {
 }
 
 @Composable
-private fun LocationCard(location: EventLocation, showImage: Boolean, selected: Boolean, onClick: () -> Unit) {
+private fun LocationCard(
+    bundle: EventBundle,
+    location: EventLocation,
+    showImage: Boolean,
+    selected: Boolean,
+    now: Instant,
+    onClick: (Int) -> Unit,
+    onLongClick: (Int) -> Unit,
+) {
     Card(
-        onClick = onClick,
         colors = if (selected) {
             CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
         } else {
@@ -225,7 +313,13 @@ private fun LocationCard(location: EventLocation, showImage: Boolean, selected: 
         },
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 6.dp),
+            .padding(horizontal = 16.dp, vertical = 6.dp)
+            .clip(CardDefaults.shape)
+            .combinedClickable(
+                onClick = { onClick(location.id) },
+                onLongClick = { onLongClick(location.id) },
+                onLongClickLabel = "Preview",
+            ),
     ) {
         if (showImage && location.imageUrl != null) {
             RemoteImage(
@@ -234,13 +328,20 @@ private fun LocationCard(location: EventLocation, showImage: Boolean, selected: 
                 modifier = Modifier.fillMaxWidth().height(180.dp),
             )
         }
-        Column(Modifier.padding(16.dp)) {
-            location.category?.let {
-                Text(it, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+        Row(Modifier.padding(start = 16.dp, top = 16.dp, bottom = 16.dp, end = 4.dp)) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                location.category?.let {
+                    Text(it, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                }
+                Text(location.name, style = MaterialTheme.typography.titleLarge)
+                if (location.snippet.isNotBlank()) {
+                    Text(location.snippet, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                NowNextLine(bundle, location, now)
             }
-            Text(location.name, style = MaterialTheme.typography.titleLarge)
-            if (location.snippet.isNotBlank()) {
-                Text(location.snippet, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Column(horizontalAlignment = Alignment.End) {
+                HeartButton(SearchKind.LOCATION, location.id, name = location.name)
+                DistanceArrow(location.coordinate, modifier = Modifier.padding(end = 12.dp))
             }
         }
     }
@@ -256,6 +357,7 @@ fun LocationDetail(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
+    val actions = LocalEventActions.current
     val zone = bundle.event.zone
     val now = rememberNow()
     val items = remember(bundle.schedule, location.id) {
@@ -283,20 +385,37 @@ fun LocationDetail(
             }
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 location.category?.let { AssistChip(onClick = {}, label = { Text(it) }) }
-                Text(location.name, style = MaterialTheme.typography.headlineMedium)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(location.name, style = MaterialTheme.typography.headlineMedium, modifier = Modifier.weight(1f))
+                    HeartButton(SearchKind.LOCATION, location.id, name = location.name)
+                }
                 if (location.address.isNotBlank()) {
                     Text(location.address, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    DistanceArrow(location.coordinate, style = MaterialTheme.typography.labelLarge)
+                    WalkTime(location.coordinate)
+                }
+                NowNextLine(bundle, location, now)
                 val directions = location.coordinate?.let { point ->
                     "https://www.google.com/maps/dir/?api=1&destination=${point.latitude},${point.longitude}&travelmode=walking".toUri()
                 }
                 val website = location.website?.toUri()
-                if (directions != null || website != null) {
+                val showOnMap = actions.onShowOnMap?.takeIf { location.coordinate != null }
+                if (directions != null || website != null || showOnMap != null) {
                     // Material 3 Expressive button group: the pressed button widens, its neighbour yields.
                     ButtonGroup(
                         overflowIndicator = { menuState -> ButtonGroupDefaults.OverflowIndicator(menuState) },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
+                        if (showOnMap != null) {
+                            clickableItem(
+                                onClick = { showOnMap(location.id) },
+                                label = "Map",
+                                icon = { Icon(Icons.Filled.Map, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                                weight = 1f,
+                            )
+                        }
                         if (directions != null) {
                             clickableItem(
                                 onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, directions)) },
@@ -318,6 +437,11 @@ fun LocationDetail(
                 if (location.description.isNotBlank()) {
                     Text(location.description, style = MaterialTheme.typography.bodyLarge)
                 }
+                if (location.tags.isNotEmpty()) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        location.tags.forEach { tag -> SuggestionChip(onClick = {}, label = { Text(Tags.display(tag)) }) }
+                    }
+                }
                 if (items.isNotEmpty()) {
                     HorizontalDivider(Modifier.padding(vertical = 8.dp))
                     Text("Schedule", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
@@ -334,7 +458,7 @@ fun LocationDetail(
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
-                                EventTime.startsInText(item.startTime, now)?.let {
+                                RelativeTime.forItem(item, now, zone)?.let {
                                     Text(it, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
                                 }
                             }

@@ -72,6 +72,8 @@ data class EventLocation(
     val address: String,
     val coordinate: GeoPoint?,
     val sortOrder: Int,
+    /** API-010: lower-case labels ("live music", "kid-friendly"); filter and search as sent, see [Tags.display]. */
+    val tags: List<String> = emptyList(),
 )
 
 data class ScheduleItem(
@@ -90,7 +92,19 @@ data class EventNotification(
     val title: String,
     val body: String,
     val sendTime: OffsetDateTime?,
-)
+    /** API-011: urgent announcements (cancellations, safety) are highlighted. */
+    val priority: NotificationPriority = NotificationPriority.NORMAL,
+) {
+    val isUrgent: Boolean get() = priority == NotificationPriority.URGENT
+}
+
+enum class NotificationPriority { NORMAL, URGENT }
+
+/** Tags arrive lower case (API-010): kept as sent for filtering and search, capitalised only for display. */
+object Tags {
+    /** "live music" → "Live music". */
+    fun display(tag: String): String = tag.trim().replaceFirstChar { it.titlecase(java.util.Locale.ROOT) }
+}
 
 /** Everything the app shows for one event, from `GET events/<id>/bundle/`. */
 data class EventBundle(

@@ -8,7 +8,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
@@ -22,6 +25,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.arcu.attnd.domain.EventBundle
 import com.arcu.attnd.domain.EventTime
@@ -82,14 +86,32 @@ fun NotificationsScreen(
                     }
                 }
                 items(bundle.notifications, key = { it.id }) { notification ->
-                    val colors = if (notification.id == highlighted) {
-                        ListItemDefaults.colors(
-                            containerColor = lerp(MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.primaryContainer, highlight.value),
+                    // API-011: urgent announcements (cancellations, safety) stand out in the error colours.
+                    val base = if (notification.isUrgent) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surface
+                    val colors = when {
+                        notification.id == highlighted -> ListItemDefaults.colors(
+                            containerColor = lerp(base, MaterialTheme.colorScheme.primaryContainer, highlight.value),
                         )
-                    } else {
-                        ListItemDefaults.colors()
+                        notification.isUrgent -> ListItemDefaults.colors(
+                            containerColor = base,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                            supportingContentColor = MaterialTheme.colorScheme.onErrorContainer,
+                            overlineContentColor = MaterialTheme.colorScheme.onErrorContainer,
+                            leadingContentColor = MaterialTheme.colorScheme.onErrorContainer,
+                        )
+                        else -> ListItemDefaults.colors()
                     }
                     ListItem(
+                        overlineContent = if (notification.isUrgent) {
+                            { Text("Urgent", fontWeight = FontWeight.Bold) }
+                        } else {
+                            null
+                        },
+                        leadingContent = if (notification.isUrgent) {
+                            { Icon(Icons.Filled.Warning, contentDescription = "Urgent") }
+                        } else {
+                            null
+                        },
                         supportingContent = {
                             Column {
                                 if (notification.body.isNotBlank()) Text(notification.body)

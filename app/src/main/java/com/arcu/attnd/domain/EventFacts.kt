@@ -64,6 +64,10 @@ object EventFacts {
             .take(limit)
             .map { (item, _) -> schedule(item, bundle, now, locale) }
 
+    /** Hearted schedule items (in time order) then hearted locations (in the organizer's order). */
+    fun hearted(bundle: EventBundle, hearts: Hearts, now: Instant, locale: Locale = Locale.getDefault()): List<EventFact> =
+        EventSearch.hearted(bundle, hearts, now).mapNotNull { of(it, bundle, now, locale) }
+
     /** Organizer updates, newest first. */
     fun latestUpdates(bundle: EventBundle, limit: Int = DEFAULT_LIMIT, locale: Locale = Locale.getDefault()): List<EventFact> =
         bundle.notifications

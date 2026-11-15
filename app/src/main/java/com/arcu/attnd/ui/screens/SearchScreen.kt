@@ -29,6 +29,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Place
@@ -95,7 +96,10 @@ import com.arcu.attnd.domain.SearchKind
 import com.arcu.attnd.domain.SearchResult
 import com.arcu.attnd.ui.AssistantUiState
 import com.arcu.attnd.ui.SearchRequest
+import com.arcu.attnd.ui.components.DistanceArrow
 import com.arcu.attnd.ui.components.EmptyState
+import com.arcu.attnd.ui.components.HeartButton
+import com.arcu.attnd.ui.components.LocalEventActions
 import com.arcu.attnd.ui.components.EventInfoCard
 import com.arcu.attnd.ui.components.RemoteImage
 import com.arcu.attnd.ui.components.SectionHeader
@@ -388,6 +392,24 @@ private fun ResultsPanel(
     onOpen: (SearchResult) -> Unit,
     onSuggestion: (String) -> Unit,
 ) {
+    val hearts = LocalEventActions.current.hearts
+    var showHearted by rememberSaveable { mutableStateOf(false) }
+    if (query.isBlank() && showHearted) {
+        // The "Hearted" entry: the hearted list (not a query).
+        val hearted = remember(bundle, hearts, now) { EventSearch.hearted(bundle, hearts, now) }
+        Column(Modifier.fillMaxSize()) {
+            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(EventSearch.HEARTED_TITLE, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                TextButton(onClick = { showHearted = false }) { Text("Done") }
+            }
+            if (hearted.isEmpty()) {
+                EmptyState("Nothing hearted yet. Tap the heart on a place or schedule item to keep it here.")
+            } else {
+                LazyColumn(Modifier.fillMaxSize()) { resultRows(hearted, bundle, onOpen) }
+            }
+        }
+        return
+    }
     if (query.isBlank()) {
         val suggestions = remember(bundle, now) { EventSearch.suggestions(bundle, now) }
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -397,6 +419,13 @@ private fun ResultsPanel(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (!hearts.isEmpty) {
+                    SuggestionChip(
+                        onClick = { showHearted = true },
+                        label = { Text(EventSearch.HEARTED_TITLE) },
+                        icon = { Icon(Icons.Filled.Favorite, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                    )
+                }
                 suggestions.forEach { suggestion ->
                     SuggestionChip(onClick = { onSuggestion(suggestion.query) }, label = { Text(suggestion.label) })
                 }
@@ -434,14 +463,22 @@ private fun SearchResultRow(result: SearchResult, bundle: EventBundle, onClick: 
         } else {
             null
         },
-        trailingContent = if (timing != null) {
+        trailingContent = if (timing != null || result.kind == SearchKind.LOCATION || result.kind == SearchKind.SCHEDULE) {
             {
-                Text(
-                    timing.label,
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = if (timing == ItemTiming.ENDED) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.primary,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (timing != null) {
+                        Text(
+                            timing.label,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = if (timing == ItemTiming.ENDED) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                    if (result.kind == SearchKind.LOCATION) DistanceArrow(bundle.location(result.id)?.coordinate)
+                    if (result.kind == SearchKind.LOCATION || result.kind == SearchKind.SCHEDULE) {
+                        HeartButton(result.kind, result.id, name = result.title)
+                    }
+                }
             }
         } else {
             null
@@ -614,6 +651,9 @@ private fun SearchDetail(
                         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
+                        if (notification.isUrgent) {
+                            Text("Urgent", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
+                        }
                         Text(notification.title, style = MaterialTheme.typography.headlineSmall)
                         Text(
                             EventTime.formatDateTime(notification.sendTime, bundle.event.zone),

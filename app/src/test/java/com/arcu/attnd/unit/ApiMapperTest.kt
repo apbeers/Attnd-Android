@@ -144,4 +144,29 @@ class ApiMapperTest {
         // Only https store links are opened.
         assertEquals(AppUpdate.PLAY_STORE_URL, ApiMapper.appUpdate(AppStatusDto(update = "available", updateUrl = "javascript:x")).updateUrl)
     }
+
+    @Test
+    fun locationTagsAndNotificationPriority_api010_api011() {
+        val bundle = ApiMapper.parseBundle(
+            """
+            {"event": {"id": 1, "name": "E"},
+             "locations": [
+               {"id": 5, "name": "Main Stage", "tags": ["live music", null, "", "free"]},
+               {"id": 6, "name": "Old server"}
+             ],
+             "notifications": [
+               {"id": 1, "title": "Cancelled", "priority": "urgent"},
+               {"id": 2, "title": "Normal", "priority": "normal"},
+               {"id": 3, "title": "Future value", "priority": "emergency"},
+               {"id": 4, "title": "Old server"}
+             ]}
+            """
+        )!!
+        assertEquals(listOf("live music", "free"), bundle.location(5)!!.tags)
+        assertEquals(emptyList<String>(), bundle.location(6)!!.tags)
+        assertEquals(listOf(true, false, false, false), bundle.notifications.map { it.isUrgent })
+        assertEquals("Live music", com.arcu.attnd.domain.Tags.display("live music"))
+        assertEquals("Kid-friendly", com.arcu.attnd.domain.Tags.display("kid-friendly"))
+        assertEquals("21+", com.arcu.attnd.domain.Tags.display("21+"))
+    }
 }

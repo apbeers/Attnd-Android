@@ -45,6 +45,8 @@ fun MapTab(state: AppUiState, viewModel: EventViewModel, onSearch: (() -> Unit)?
             recenterRequest = state.recenterRequest,
             onLocationClick = viewModel::focusLocation,
             onSearch = onSearch,
+            focusLocationId = state.mapFocusLocationId,
+            onFocusConsumed = viewModel::consumeMapFocus,
         )
     }
     val secondary: @Composable () -> Unit = {

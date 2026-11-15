@@ -76,6 +76,8 @@ data class LocationDto(
     val latitude: Double? = null,
     val longitude: Double? = null,
     @SerialName("sort_order") val sortOrder: Int? = null,
+    /** API-010; missing from older servers. */
+    val tags: List<String?>? = null,
 )
 
 @Serializable
@@ -96,6 +98,8 @@ data class NotificationDto(
     val title: String? = null,
     val body: String? = null,
     @SerialName("send_time") val sendTime: String? = null,
+    /** API-011: "normal" or "urgent"; anything else (or missing) is normal. */
+    val priority: String? = null,
 )
 
 @Serializable

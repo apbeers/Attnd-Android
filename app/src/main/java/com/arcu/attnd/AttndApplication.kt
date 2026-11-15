@@ -5,9 +5,13 @@ import android.content.Context
 import com.arcu.attnd.assistant.AppShortcuts
 import com.arcu.attnd.data.AttestedTokenProvider
 import com.arcu.attnd.data.EventRepository
+import com.arcu.attnd.data.HeadingSource
+import com.arcu.attnd.data.HeartStore
 import com.arcu.attnd.data.ImageDiskCache
 import com.arcu.attnd.data.OnDeviceAssistant
 import com.arcu.attnd.data.UsageReporter
+import com.arcu.attnd.data.UserLocationSource
+import com.arcu.attnd.data.WalkRouter
 import com.arcu.attnd.data.api.AttndApi
 import com.arcu.attnd.data.prefs.DevicePrefs
 import com.arcu.attnd.push.PushNotifications
@@ -67,6 +71,16 @@ class AppGraph(context: Context, val prefs: DevicePrefs) {
         usage = usage,
         images = images,
     )
+
+    /** Hearted schedule items and locations, per event, on the device (UI and AppFunctions). */
+    val hearts = HeartStore(prefs)
+
+    /** The user's position and the compass heading, only while a screen showing distances / arrows is visible. */
+    val userLocation = UserLocationSource(appContext)
+    val heading = HeadingSource(appContext, userLocation)
+
+    /** Walking routes for the map card (Routes API with the Maps key, estimate fallback). */
+    val walkRouter = WalkRouter(appContext, BuildConfig.MAPS_API_KEY)
 
     /** "Ask about this event": Gemini Nano on the device (ML Kit GenAI Prompt API), created lazily. */
     val assistant = OnDeviceAssistant()

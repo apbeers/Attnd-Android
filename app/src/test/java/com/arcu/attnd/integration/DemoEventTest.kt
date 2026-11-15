@@ -135,6 +135,20 @@ class DemoEventTest {
 
         val main = locations.single { it.name == "Main Stage" }
         assertEquals("Stage", main.category)
+        // API-010: location tags.
+        assertEquals(listOf("live music", "headliners", "free"), main.tags)
+        locations.forEach { location ->
+            assertTrue("${location.name} has 2–6 tags: ${location.tags}", location.tags.size in 2..6)
+            location.tags.forEach { assertEquals("${location.name}: tags are lower case", it.lowercase(), it) }
+        }
+        assertEquals(
+            setOf("Main Stage", "Trinity Stage", "Panther Island Pavilion", "Roaming Mariachi"),
+            locations.filter { "live music" in it.tags }.map { it.name }.toSet(),
+        )
+        assertEquals(
+            setOf("Chef Demo Kitchen", "Taco Row", "BBQ Pit Lane", "Sweet Spot"),
+            locations.filter { "food" in it.tags }.map { it.name }.toSet(),
+        )
         assertEquals("Headliners every night", main.snippet)
         assertTrue(main.description, main.description.startsWith("The big one: headliners each night"))
         assertEquals("ids are unique", locations.size, locations.map { it.id }.toSet().size)
@@ -149,23 +163,29 @@ class DemoEventTest {
         val general = schedule.filter { it.locationId == null }
         assertEquals(3, general.size)
         assertEquals(listOf("Gates open", "Gates open", "Opening ceremony"), general.map { it.name }.sorted())
-        general.forEach { assertEquals(listOf("General"), it.tags) }
+        general.forEach { assertEquals(listOf("general", "free"), it.tags) }
 
         val stages = setOf("Main Stage", "Trinity Stage", "Panther Island Pavilion")
             .map { name -> bundle.locations.single { it.name == name }.id }.toSet()
-        val music = schedule.filter { "Music" in it.tags }
+        val music = schedule.filter { "live music" in it.tags }
         assertEquals(36, music.size)
         assertTrue("music is on the three stages", music.all { stages.contains(it.locationId ?: -1) })
 
         val kitchen = bundle.locations.single { it.name == "Chef Demo Kitchen" }.id
         val demos = schedule.filter { it.locationId == kitchen }
         assertEquals(9, demos.size)
-        assertTrue(demos.all { it.tags.containsAll(listOf("Food", "Demo")) })
+        assertTrue(demos.all { it.tags.containsAll(listOf("food", "demo")) })
 
         val kidsZone = bundle.locations.single { it.name == "Kids Zone" }.id
         val family = schedule.filter { it.locationId == kidsZone }
         assertEquals(3, family.size)
-        assertTrue(family.all { it.name == "Face painting & games" && "Family" in it.tags })
+        assertTrue(family.all { it.name == "Face painting & games" && it.tags.containsAll(listOf("family", "kid-friendly")) })
+
+        // API-010: every item has 2–6 lower-case tags.
+        schedule.forEach { item ->
+            assertTrue("${item.name} has 2–6 tags: ${item.tags}", item.tags.size in 2..6)
+            item.tags.forEach { assertEquals("${item.name}: tags are lower case", it.lowercase(), it) }
+        }
 
         schedule.forEach {
             val start = it.startTime?.toInstant()
@@ -194,6 +214,8 @@ class DemoEventTest {
         assertTrue("only the two scheduled ones may join them: $titles",
             (titles - setOf("Welcome!", "Taco Row is open", "Shade & water", "Set time change")).all { it in setOf("Headliner soon", "Day 2") })
         assertEquals("no duplicates", titles.size, notifications.size)
+        // API-011: only "Set time change" is urgent.
+        assertEquals(listOf("Set time change"), notifications.filter { it.isUrgent }.map { it.title })
         val times = notifications.map { it.sendTime!!.toInstant() }
         assertEquals("newest first", times.sortedDescending(), times)
         assertTrue("no scheduled (future) notification is in the bundle", times.all { !it.isAfter(Instant.now()) })

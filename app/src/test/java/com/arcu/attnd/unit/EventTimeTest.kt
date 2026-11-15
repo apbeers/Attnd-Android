@@ -61,14 +61,4 @@ class EventTimeTest {
         assertFalse(EventTime.isEventDay(event, Instant.parse("2026-11-13T12:00:00Z")))
         assertFalse(EventTime.isEventDay(event, Instant.parse("2026-11-16T12:00:00Z")))
     }
-
-    @Test
-    fun startsInText() {
-        val now = Instant.parse("2026-11-14T16:00:00Z")
-        assertEquals("Starts in 1h 30m", EventTime.startsInText(EventTime.parse("2026-11-14T17:30:00Z"), now))
-        assertEquals("Starts in 2h", EventTime.startsInText(EventTime.parse("2026-11-14T18:00:00Z"), now))
-        assertEquals("Starts in 5m", EventTime.startsInText(EventTime.parse("2026-11-14T16:05:00Z"), now))
-        assertNull(EventTime.startsInText(EventTime.parse("2026-11-14T15:00:00Z"), now))
-        assertNull(EventTime.startsInText(EventTime.parse("2026-11-20T15:00:00Z"), now))
-    }
 }

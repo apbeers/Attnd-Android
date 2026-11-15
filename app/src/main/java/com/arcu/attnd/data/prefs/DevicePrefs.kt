@@ -60,6 +60,25 @@ class DevicePrefs(context: Context) {
         get() = prefs.getBoolean(KEY_REFERRER_CHECKED, false)
         set(value) = prefs.edit { putBoolean(KEY_REFERRER_CHECKED, value) }
 
+    /** Hearted locations / schedule items of an event ([com.arcu.attnd.domain.Hearts] text). Kept after leaving. */
+    fun hearts(eventId: Int): String? = prefs.getString("$KEY_HEARTS$eventId", null)
+
+    fun setHearts(eventId: Int, value: String) = prefs.edit {
+        if (value.isEmpty()) remove("$KEY_HEARTS$eventId") else putString("$KEY_HEARTS$eventId", value)
+    }
+
+    /** When the Updates tab of an event was last seen (epoch ms); null = never. */
+    fun updatesSeenAt(eventId: Int): Long? = prefs.getLong("$KEY_UPDATES_SEEN$eventId", 0L).takeIf { it > 0L }
+
+    fun setUpdatesSeenAt(eventId: Int, epochMillis: Long) = prefs.edit { putLong("$KEY_UPDATES_SEEN$eventId", epochMillis) }
+
+    /** The organizer update whose banner the user dismissed, per event. */
+    fun dismissedUpdateBanner(eventId: Int): Int? =
+        prefs.getInt("$KEY_UPDATE_BANNER$eventId", NO_EVENT).takeIf { it != NO_EVENT }
+
+    fun setDismissedUpdateBanner(eventId: Int, notificationId: Int) =
+        prefs.edit { putInt("$KEY_UPDATE_BANNER$eventId", notificationId) }
+
     fun clearEvent() = prefs.edit {
         remove(KEY_EVENT_ID)
         remove(KEY_EVENT_CODE)
@@ -79,6 +98,9 @@ class DevicePrefs(context: Context) {
         private const val KEY_NOTIFICATIONS = "notifications_enabled"
         private const val KEY_SHOW_LOCATION = "show_user_location"
         private const val KEY_REFERRER_CHECKED = "install_referrer_checked"
+        private const val KEY_HEARTS = "hearts_"
+        private const val KEY_UPDATES_SEEN = "updates_seen_"
+        private const val KEY_UPDATE_BANNER = "update_banner_dismissed_"
         private const val NO_EVENT = -1
     }
 }

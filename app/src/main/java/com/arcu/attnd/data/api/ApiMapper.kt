@@ -10,6 +10,7 @@ import com.arcu.attnd.domain.EventStatus
 import com.arcu.attnd.domain.EventTime
 import com.arcu.attnd.domain.GeoPoint
 import com.arcu.attnd.domain.NearbyEvent
+import com.arcu.attnd.domain.NotificationPriority
 import com.arcu.attnd.domain.ScheduleItem
 import com.arcu.attnd.domain.UpdateLevel
 
@@ -115,6 +116,7 @@ object ApiMapper {
             address = dto.address.orEmpty(),
             coordinate = GeoPoint.of(dto.latitude, dto.longitude),
             sortOrder = dto.sortOrder ?: 0,
+            tags = tags(dto.tags),
         )
     }
 
@@ -129,7 +131,7 @@ object ApiMapper {
             endTime = EventTime.parse(dto.endTime),
             locationId = dto.locationId,
             locationName = dto.locationName?.takeIf { it.isNotBlank() },
-            tags = dto.tags.orEmpty().filterNotNull().filter { it.isNotBlank() },
+            tags = tags(dto.tags),
         )
     }
 
@@ -141,8 +143,12 @@ object ApiMapper {
             title = dto.title.orEmpty(),
             body = dto.body.orEmpty(),
             sendTime = EventTime.parse(dto.sendTime),
+            priority = if (dto.priority?.trim()?.lowercase() == "urgent") NotificationPriority.URGENT else NotificationPriority.NORMAL,
         )
     }
+
+    /** Tags as sent (API-010: lower case from current servers); nulls and blanks dropped. */
+    private fun tags(values: List<String?>?): List<String> = values.orEmpty().filterNotNull().filter { it.isNotBlank() }
 
     /** Unknown or missing `update` values mean no prompt, so a future state can't lock users out. */
     fun appUpdate(dto: AppStatusDto): AppUpdate = AppUpdate(

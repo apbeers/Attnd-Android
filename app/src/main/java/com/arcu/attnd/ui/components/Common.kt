@@ -27,6 +27,8 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.EventBusy
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -253,21 +255,28 @@ fun RefreshBox(
     )
 }
 
-/** Horizontally scrolling category filter chips ("All" + one per category). */
+/**
+ * Horizontally scrolling filter chips: "Hearted" first when [onHeartedChange] is set, then "All" +
+ * one per category (none when [categories] is empty). Emits nothing when there is neither.
+ */
 @Composable
 fun CategoryChips(
     categories: List<String>,
     selected: String?,
     onSelect: (String?) -> Unit,
     modifier: Modifier = Modifier,
+    hearted: Boolean = false,
+    onHeartedChange: ((Boolean) -> Unit)? = null,
 ) {
-    if (categories.isEmpty()) return
+    if (categories.isEmpty() && onHeartedChange == null) return
     Row(
         modifier = modifier
             .horizontalScroll(rememberScrollState())
             .padding(horizontal = 16.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        if (onHeartedChange != null) HeartedChip(hearted, onHeartedChange)
+        if (categories.isEmpty()) return@Row
         CategoryChip(label = "All", isSelected = selected == null) { onSelect(null) }
         categories.forEach { category ->
             CategoryChip(label = category, isSelected = selected == category) {
@@ -275,6 +284,24 @@ fun CategoryChips(
             }
         }
     }
+}
+
+/** "Hearted": show only hearted items / places. */
+@Composable
+fun HeartedChip(selected: Boolean, onChange: (Boolean) -> Unit, modifier: Modifier = Modifier) {
+    FilterChip(
+        selected = selected,
+        onClick = { onChange(!selected) },
+        label = { Text("Hearted") },
+        leadingIcon = {
+            Icon(
+                if (selected) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
+                contentDescription = null,
+                modifier = Modifier.size(FilterChipDefaults.IconSize),
+            )
+        },
+        modifier = modifier,
+    )
 }
 
 @Composable

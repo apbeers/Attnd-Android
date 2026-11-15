@@ -46,12 +46,14 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
@@ -62,7 +64,12 @@ import com.arcu.attnd.domain.NearbyEvent
 import com.arcu.attnd.ui.JoinUiState
 import com.arcu.attnd.ui.NearbyUiState
 import com.arcu.attnd.ui.components.QrScannerDialog
-import com.arcu.attnd.util.FormatUtils
+import com.arcu.attnd.domain.DistanceFormat
+import com.arcu.attnd.domain.RelativeTime
+import com.arcu.attnd.ui.components.DistanceArrow
+import com.arcu.attnd.ui.components.rememberDistanceUnits
+import com.arcu.attnd.ui.components.rememberNow
+import com.arcu.attnd.ui.components.rememberUserLocation
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
@@ -207,12 +214,24 @@ private fun NearbyEventCard(item: NearbyEvent, enabled: Boolean, onClick: () -> 
     Card(onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp)) {
             Text(event.name, style = MaterialTheme.typography.titleMedium)
-            val details = listOfNotNull(
-                item.distanceMiles?.let { FormatUtils.formatDistance(it) },
-                event.startTime?.let { EventTime.formatDateTime(it, event.zone) },
-            ).joinToString(" · ")
-            if (details.isNotEmpty()) {
-                Text(details, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+            val now = rememberNow()
+            val units = rememberDistanceUnits()
+            val user = rememberUserLocation()
+            val relative = remember(item, now) { RelativeTime.forNearby(item, now) }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // Live distance + arrow from the user's position; the server's distance otherwise.
+                val coordinate = event.coordinate
+                if (user != null && coordinate != null) {
+                    DistanceArrow(coordinate, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                } else {
+                    item.distanceMiles?.let {
+                        Text(DistanceFormat.formatMiles(it, units), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                    }
+                }
+                relative?.let { Text(it, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold) }
+            }
+            event.startTime?.let {
+                Text(EventTime.formatDateTime(it, event.zone), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
             }
             if (event.address.isNotEmpty()) {
                 Text(event.address, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)

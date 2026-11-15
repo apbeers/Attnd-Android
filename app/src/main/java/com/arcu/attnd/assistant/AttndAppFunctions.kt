@@ -9,10 +9,12 @@ import androidx.appfunctions.AppFunctionInvalidArgumentException
 import androidx.appfunctions.AppFunctionSerializable
 import androidx.appfunctions.AppFunctionService
 import androidx.appfunctions.AppFunctionServiceEntryPoint
+import com.arcu.attnd.AppGraph
 import com.arcu.attnd.AttndApplication
 import com.arcu.attnd.domain.EventBundle
 import com.arcu.attnd.domain.EventFact
 import com.arcu.attnd.domain.EventFacts
+import com.arcu.attnd.domain.Hearts
 import com.arcu.attnd.domain.OpenRequest
 import com.arcu.attnd.domain.SearchKind
 import java.time.Instant
@@ -140,6 +142,49 @@ abstract class BaseAttndAppFunctionService : AppFunctionService() {
         val bundle = bundle()
         return EventFacts.eventInfo(bundle).toItem(bundle)
     }
+
+    /**
+     * Lists what the user has hearted (saved) in the joined event: schedule items first, in time order,
+     * then places.
+     *
+     * @return The hearted items; empty when nothing is hearted.
+     */
+    @AppFunctionDeclaration(isDescribedByKDoc = true)
+    suspend fun getHeartedItems(): List<AttndEventItem> {
+        val bundle = bundle()
+        val hearts = graph().hearts.hearts(bundle.event.id)
+        return EventFacts.hearted(bundle, hearts, Instant.now()).map { it.toItem(bundle) }
+    }
+
+    /**
+     * Hearts (saves) or un-hearts a schedule item or a place in the joined event, e.g. "heart the
+     * fireworks show". Find the item's kind and id with the other functions first.
+     *
+     * @param kind "schedule_item" or "location", as in the item's kind.
+     * @param id The item's id.
+     * @param hearted True to heart the item, false to remove the heart.
+     * @return The item.
+     */
+    @AppFunctionDeclaration(isDescribedByKDoc = true)
+    suspend fun setHeart(kind: String, id: Int, hearted: Boolean): AttndEventItem {
+        val bundle = bundle()
+        val searchKind = when (kind.trim().lowercase(Locale.ROOT)) {
+            "schedule_item", "schedule" -> SearchKind.SCHEDULE
+            "location", "place" -> SearchKind.LOCATION
+            else -> throw AppFunctionInvalidArgumentException("Only schedule items and locations can be hearted.")
+        }
+        val fact = when (searchKind) {
+            SearchKind.SCHEDULE -> bundle.scheduleItem(id)?.let { EventFacts.schedule(it, bundle, Instant.now()) }
+            else -> bundle.location(id)?.let { EventFacts.location(it, bundle) }
+        } ?: throw AppFunctionElementNotFoundException("There is no $kind with id $id in this event.")
+        val graph = graph()
+        if (graph.hearts.set(bundle.event.id, searchKind, id, hearted)) {
+            Hearts.metric(searchKind, hearted)?.let { graph.usage.track(bundle.event.id, it, id.toString()) }
+        }
+        return fact.toItem(bundle)
+    }
+
+    private fun graph(): AppGraph = (application as AttndApplication).graph
 
     /** The joined event's bundle from disk (the app may not be running). */
     private suspend fun bundle(): EventBundle =

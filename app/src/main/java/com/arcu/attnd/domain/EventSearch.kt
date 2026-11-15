@@ -30,12 +30,13 @@ enum class SearchMode { ALL_TOKENS, ANY_TOKEN }
 /**
  * Local search across the joined event's bundle (shared spec with iOS; no network, works offline).
  *
+ *
  * - Both sides are normalised ([SearchText]); every query token must match somewhere in an item
  *   (AND across fields). A token matches a word that is equal to it, starts with it, contains it,
  *   or (tokens of 5+ characters) is one edit away.
  * - Time words ([SearchQuery]) filter schedule items in the event's time zone; when the query is only
  *   time words, only schedule items are returned.
- * - Score: field weight × match quality per token (weights: name 3; tags, location name, category,
+ * - Score: field weight × match quality per token (weights: name 3; tags (items and locations), location name, category,
  *   snippet, address, event code 2; descriptions and notification bodies 1; quality: exact word 4,
  *   prefix 3, substring 2, typo 1), + 8 for items happening now, + 4 for next, − 1000 for ended
  *   (always last). Ties: kind order, then title, then id. Same choices as iOS.
@@ -69,14 +70,16 @@ object EventSearch {
         val vocabulary = candidates.flatMapTo(HashSet()) { c -> c.fields.flatMap { f -> f.normalized.words.map { it.second } } }
         val parsed = SearchQuery.parse(query, vocabulary)
         if (parsed.isEmpty) return emptyList()
+        val tokens = parsed.tokens
+        val timeOnly = parsed.isTimeOnly
         val zone = bundle.event.zone
         val matcher = TimeMatcher(parsed.time, zone, now, TimeMatcher.eventDays(bundle, now))
 
         val results = candidates.mapNotNull { candidate ->
-            if (parsed.isTimeOnly && candidate.kind != SearchKind.SCHEDULE) return@mapNotNull null
+            if (timeOnly && candidate.kind != SearchKind.SCHEDULE) return@mapNotNull null
             val item = candidate.item
             if (item != null && !matcher.matches(item)) return@mapNotNull null
-            score(candidate, parsed.tokens, mode)?.let { (score, highlights) ->
+            score(candidate, tokens, mode)?.let { (score, highlights) ->
                 val timing = item?.let { timing(it, now) }
                 val boost = when (timing) {
                     ItemTiming.NOW -> BOOST_NOW
@@ -213,6 +216,7 @@ object EventSearch {
                     fields = listOfNotNull(
                         Field(location.name, WEIGHT_PRIMARY, isTitle = true),
                         location.category?.let { Field(it, WEIGHT_SECONDARY) },
+                        Field(location.tags.joinToString(" "), WEIGHT_SECONDARY),
                         Field(location.snippet, WEIGHT_SECONDARY),
                         Field(location.address, WEIGHT_SECONDARY),
                         Field(location.description, WEIGHT_TERTIARY),
@@ -331,6 +335,20 @@ object EventSearch {
 
     /** A chip shown for an empty query; tapping it searches [query]. */
     data class Suggestion(val label: String, val query: String)
+
+    const val HEARTED_TITLE = "Hearted"
+
+    /**
+     * The search screen's "Hearted" entry (shown once anything is hearted; it opens this list, it is
+     * not a query): hearted schedule items in time order (with their Now/Next/Ended), then hearted
+     * locations in the organizer's order. Ids no longer in the bundle are skipped.
+     */
+    fun hearted(bundle: EventBundle, hearts: Hearts, now: Instant): List<SearchResult> =
+        ScheduleGrouping.sortChronologically(bundle.schedule.filter { it.id in hearts.scheduleItems }).map { item ->
+            SearchResult(SearchKind.SCHEDULE, item.id, item.name, emptyList(), 0.0, timing(item, now))
+        } + bundle.locations.filter { it.id in hearts.locations }.sortedWith(compareBy({ it.sortOrder }, { it.id })).map { location ->
+            SearchResult(SearchKind.LOCATION, location.id, location.name, emptyList(), 0.0)
+        }
 
     /** "Happening now" / "Up next" (when something is), then the categories. */
     fun suggestions(bundle: EventBundle, now: Instant): List<Suggestion> = buildList {
