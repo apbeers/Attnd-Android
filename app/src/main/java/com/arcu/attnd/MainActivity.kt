@@ -11,6 +11,7 @@ import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.arcu.attnd.assistant.AppShortcuts
 import com.arcu.attnd.assistant.OpenIntents
 import com.arcu.attnd.domain.JoinLinks
 import com.arcu.attnd.domain.ScreenshotRequest
@@ -79,6 +80,7 @@ class MainActivity : ComponentActivity() {
         }
         // Internal open links (launcher shortcuts, AppFunctions results): attnd-open://<event>/<target>
         OpenIntents.parse(intent)?.let {
+            AppShortcuts.reportUsed(this, intent)
             viewModel.open(it)
             return
         }

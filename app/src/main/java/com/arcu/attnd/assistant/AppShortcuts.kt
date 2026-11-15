@@ -45,14 +45,25 @@ class AppShortcuts(context: Context) {
             .setShortLabel(context.getString(shortLabel))
             .setLongLabel(context.getString(longLabel))
             .setIcon(IconCompat.createWithResource(context, icon))
-            .setIntent(OpenIntents.intent(context, request))
+            .setIntent(OpenIntents.intent(context, request).putExtra(EXTRA_SHORTCUT_ID, id))
             .setRank(rank)
             .build()
 
-    private companion object {
-        const val TAG = "AppShortcuts"
-        const val ID_SEARCH = "search"
-        const val ID_NOW = "now"
-        const val ID_UPDATES = "updates"
+    companion object {
+        private const val TAG = "AppShortcuts"
+        private const val EXTRA_SHORTCUT_ID = "com.arcu.attnd.extra.SHORTCUT_ID"
+
+        /** Tells the launcher a shortcut was used (it ranks shortcuts by use). Call for every launch intent. */
+        fun reportUsed(context: Context, intent: android.content.Intent) {
+            val id = intent.getStringExtra(EXTRA_SHORTCUT_ID) ?: return
+            try {
+                ShortcutManagerCompat.reportShortcutUsed(context, id)
+            } catch (e: RuntimeException) {
+                Log.w(TAG, "Couldn't report shortcut use", e)
+            }
+        }
+        private const val ID_SEARCH = "search"
+        private const val ID_NOW = "now"
+        private const val ID_UPDATES = "updates"
     }
 }

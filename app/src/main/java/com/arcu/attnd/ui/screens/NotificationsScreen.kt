@@ -70,7 +70,7 @@ fun NotificationsScreen(
             EmptyState("No announcements yet. Organizer updates will appear here.")
         } else {
             LazyColumn(Modifier.fillMaxSize(), state = listState) {
-                if (showStale && lastSyncedAt != null) {
+                if (showStale) {
                     val minutes = Duration.ofMillis(now.toEpochMilli() - lastSyncedAt).toMinutes()
                     item(key = "stale") {
                         Text(
