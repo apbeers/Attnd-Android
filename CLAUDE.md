@@ -414,6 +414,8 @@ CI sets `VERSION_CODE=<run number>000` and `VERSION_NAME=2.0.<run number>` (alwa
 
 ## CI/CD (`.github/workflows/android.yml`)
 
+**Lean mode now (Nov 15, 2026, private repo minutes):** the pipeline never runs on push or pull requests; it runs only when started by hand (Actions → Android → Run workflow) and only when the owner asks for an Android build. The integration matrix additionally needs the repo variable `CI_FULL=true`. Full pipeline below and how to restore it: attnd-web `docs/CI_PIPELINES.md`.
+
 | Trigger | What happens |
 |---------|--------------|
 | Every run | In parallel: **Unit tests & lint** (`testDebugUnitTest lintDebug`, plus `assembleDebug` on pull requests; then `scripts/ci/lint_summary.py` prints lint's findings as warnings, never failing), **Integration · dev** (`dev.attnd.app`, secret `ATTND_API_KEY`) and **Integration · prod** (`attnd.app`, secret `ATTND_PROD_CI_KEY`, accepted for the DEMO event only): `testDebugUnitTest -PintegrationTests`, then `scripts/ci/junit_summary.py`. The integration jobs never gate delivery; prod is `continue-on-error` (a failure is a warning). A missing secret skips that job's tests |

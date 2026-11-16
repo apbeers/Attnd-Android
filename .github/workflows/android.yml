@@ -18,13 +18,10 @@
 # Setup: see SETUP.md in attnd-web. Uses only GitHub's own actions + Google's APIs.
 name: Android
 
+# LEAN MODE (early build-out, Nov 2026): the pipeline never runs on push or pull requests, only when started
+# by hand (Actions → Android → Run workflow, choose the branch). The integration matrix additionally needs the
+# repository variable CI_FULL = 'true'. Full pipeline + how to restore it: attnd-web docs/CI_PIPELINES.md.
 on:
-  push:
-    branches: [main, develop]
-    paths-ignore: ['**/*.md', 'scripts/ci/screenshots.sh', 'scripts/ci/compose_screenshots.py',
-                   'store/en-US/captions.txt', '.github/workflows/store-*.yml']
-  pull_request:
-    paths-ignore: ['**/*.md']
   workflow_dispatch:
 
 concurrency:
@@ -237,6 +234,7 @@ jobs:
     # depends on these. Prod uses a CI key the server accepts only for DEMO; until it is set there, that job
     # fails as a warning (continue-on-error) and the run stays green.
     name: Integration · ${{ matrix.target }}
+    if: vars.CI_FULL == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     continue-on-error: ${{ matrix.target == 'prod' }}
