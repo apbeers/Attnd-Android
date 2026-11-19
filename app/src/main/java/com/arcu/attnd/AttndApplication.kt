@@ -25,6 +25,7 @@ import com.arcu.attnd.data.log.LogStore
 import com.arcu.attnd.data.log.PerfRecorder
 import com.arcu.attnd.data.prefs.DevicePrefs
 import com.arcu.attnd.domain.AppLog
+import com.arcu.attnd.domain.DebugMode
 import com.arcu.attnd.domain.DiagnosticsSource
 import com.arcu.attnd.domain.LogCategory
 import com.arcu.attnd.domain.LogEvent
@@ -56,7 +57,7 @@ class AttndApplication : Application() {
         // Logging first (spec §2), so everything after it can log: logcat + the ring buffer.
         val logStore = LogStore(File(filesDir, "logs"))
         val logSink = AndroidLogSink(this, logStore, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE.toString()) { prefs.eventId }
-        AppLog.minLevel = if (BuildConfig.DEV) LogLevel.DEBUG else LogLevel.WARNING
+        AppLog.minLevel = if (BuildConfig.DEV) LogLevel.DEBUG else DebugMode.RELEASE_LEVEL
         AppLog.sink = logSink
         Trace.beginSection("app.onCreate")
         try {

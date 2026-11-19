@@ -48,7 +48,7 @@ class LoggingTest {
     @After
     fun tearDown() {
         AppLog.sink = null
-        AppLog.minLevel = LogLevel.WARNING
+        AppLog.minLevel = DebugMode.RELEASE_LEVEL
         AppLog.allowText = false
     }
 
@@ -218,13 +218,13 @@ class LoggingTest {
     }
 
     @Test
-    fun debugSession_tenMinutes_preRollAndCountdown() {
+    fun debugSession_tenMinutes_noPreRollAndCountdown() {
         val start = 1_000_000_000L
         val session = DebugSession.start("D-7K3QX", start)
         assertTrue(session.isActive(start))
         assertTrue(session.isActive(start + 9 * 60_000))
         assertFalse(session.isActive(start + 10 * 60_000))
-        assertEquals(start - 5 * 60_000, session.uploadFromMs)
+        assertEquals(start, session.uploadFromMs) // nothing from before it was turned on
         assertEquals("10:00", session.remainingText(start))
         assertEquals("9:41", session.remainingText(start + 19_000))
         assertEquals("0:01", session.remainingText(start + 599_500))
@@ -242,12 +242,12 @@ class LoggingTest {
     }
 
     @Test
-    fun levels_devAndDebugSessionsAreDebug_productionWarning() {
+    fun levels_devAndDebugSessionsAreDebug_productionErrorsOnly() {
         val session = DebugSession.start("D-7K3QX", 1_000L)
         assertEquals(LogLevel.DEBUG, DebugMode.level(dev = true, session = null, nowMs = 0))
-        assertEquals(LogLevel.WARNING, DebugMode.level(dev = false, session = null, nowMs = 0))
+        assertEquals(LogLevel.ERROR, DebugMode.level(dev = false, session = null, nowMs = 0))
         assertEquals(LogLevel.DEBUG, DebugMode.level(dev = false, session = session, nowMs = 2_000))
-        assertEquals(LogLevel.WARNING, DebugMode.level(dev = false, session = session, nowMs = 1_000 + DebugMode.DURATION_MS))
+        assertEquals(LogLevel.ERROR, DebugMode.level(dev = false, session = session, nowMs = 1_000 + DebugMode.DURATION_MS))
         assertTrue(DebugMode.uploads(dev = true, session = null, nowMs = 0))
         assertFalse(DebugMode.uploads(dev = false, session = null, nowMs = 0))
         assertEquals("dev", DebugMode.reason(true))

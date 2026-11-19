@@ -28,7 +28,7 @@ import java.util.zip.GZIPOutputStream
  * API-013 uploads of the ring buffer (`POST /api/v2/diagnostics/logs/`), only in dev builds or while a
  * debug session runs ([DiagnosticsController] starts and stops it). Every ~10 s in a debug session, every
  * ~30 s or 200 records ([nudge]) in dev builds, and on [flush] it sends the records after the session's cursor that belong to it (from
- * [DebugSession.uploadFromMs], i.e. with the 5-minute pre-roll), in batches of ≤ 500, gzip-compressed.
+ * [DebugSession.uploadFromMs]: the session's start, no pre-roll), in batches of ≤ 500, gzip-compressed.
  * `429` waits for `Retry-After`; a `413` or `400` batch is skipped; other failures back off and retry.
  * The cursor (last uploaded `seq` per debug code) is stored, so a restart neither repeats nor loses lines.
  */
@@ -116,8 +116,6 @@ class LogUploader(
         val seqOf = pending.associate { (seq, line) -> line to seq }
         for (batch in LogUpload.batches(pending.map { it.second })) {
             val compressed = gzip(LogUpload.body(current.code, reason, source, batch))
-            // Pre-roll: lines from before the session started (the 5 minutes before debug mode was turned on).
-            val preroll = batch.first().let { LogJson.decode(it)?.epochMillis }?.let { it < current.startedAtMs } == true
             val response = try {
                 send(compressed)
             } catch (e: CancellationException) {
@@ -138,7 +136,7 @@ class LogUploader(
                         LogCategory.LOGGING, if (response.isSuccessful) LogEvent.UPLOAD else LogEvent.UPLOAD_FAILED,
                         "Log upload: ${batch.size} lines, ${response.code}",
                         if (response.isSuccessful) {
-                            mapOf("entries" to batch.size, "bytes" to compressed.size, "status" to response.code, "preroll" to preroll)
+                            mapOf("entries" to batch.size, "bytes" to compressed.size, "status" to response.code)
                         } else {
                             mapOf("error" to "refused", "status" to response.code, "entries" to batch.size)
                         },
@@ -150,7 +148,7 @@ class LogUploader(
                     lastResult = "Server busy; retrying in ${wait / 1000} s"
                     AppLog.debug(
                         LogCategory.LOGGING, LogEvent.UPLOAD, "Log upload deferred ${wait / 1000} s",
-                        mapOf("entries" to batch.size, "bytes" to compressed.size, "status" to response.code, "retry_after_s" to wait / 1000, "preroll" to preroll),
+                        mapOf("entries" to batch.size, "bytes" to compressed.size, "status" to response.code, "retry_after_s" to wait / 1000),
                     )
                     return wait
                 }

@@ -26,9 +26,9 @@ object AppLog {
     @Volatile
     var sink: LogSink? = null
 
-    /** Records below this level are dropped (dev builds and debug mode: debug; production: warning). */
+    /** Records below this level are dropped (dev builds and debug mode: debug; production: error). */
     @Volatile
-    var minLevel: LogLevel = LogLevel.WARNING
+    var minLevel: LogLevel = DebugMode.RELEASE_LEVEL
 
     /** Dev builds may log what people typed (search, Ask, plan text); production logs lengths only. */
     @Volatile

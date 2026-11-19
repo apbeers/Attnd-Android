@@ -4,15 +4,14 @@ import java.util.Locale
 import kotlin.random.Random
 
 /**
- * Debug mode and log levels (logging spec §2–3). Production: `warning` and local only, until the user
- * turns on debug logging for [DURATION_MS] (About & support): level `debug` and upload, including the
- * [PRE_ROLL_MS] before it from the ring buffer, then back to normal; the expiry is stored, so it survives
- * restarts. Dev builds have one persistent debug code per install and are always in debug mode.
+ * Debug mode and log levels (logging spec §2–3). Production (release): errors only (`error` and above)
+ * and local only, until the user turns on debug logging for [DURATION_MS] (About & support): level `debug`
+ * and upload from the moment it is turned on (no pre-roll of what came before), then back to normal; the
+ * expiry is stored, so it survives restarts. Dev builds have one persistent debug code per install and are always in debug mode.
  * The debug code is random per session and never linked to the device id.
  */
 object DebugMode {
     const val DURATION_MS = 10 * 60 * 1000L
-    const val PRE_ROLL_MS = 5 * 60 * 1000L
 
     /** Crockford base32 (no I, L, O, U). */
     private const val ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
@@ -24,9 +23,12 @@ object DebugMode {
 
     fun isValidCode(code: String?): Boolean = code != null && CODE.matches(code)
 
-    /** The level records are kept at: dev builds and debug sessions `debug`, otherwise `warning`. */
+    /** Production builds keep only this level and above (errors only). */
+    val RELEASE_LEVEL = LogLevel.ERROR
+
+    /** The level records are kept at: dev builds and debug sessions `debug`, otherwise [RELEASE_LEVEL]. */
     fun level(dev: Boolean, session: DebugSession?, nowMs: Long): LogLevel =
-        if (dev || session?.isActive(nowMs) == true) LogLevel.DEBUG else LogLevel.WARNING
+        if (dev || session?.isActive(nowMs) == true) LogLevel.DEBUG else RELEASE_LEVEL
 
     /** Uploads happen only in dev builds or while a debug session runs. */
     fun uploads(dev: Boolean, session: DebugSession?, nowMs: Long): Boolean = dev || session?.isActive(nowMs) == true
@@ -39,8 +41,8 @@ object DebugMode {
 data class DebugSession(val code: String, val startedAtMs: Long, val expiresAtMs: Long) {
     fun isActive(nowMs: Long): Boolean = nowMs in startedAtMs until expiresAtMs
 
-    /** Records from here on are uploaded: the session start minus the pre-roll (dev: everything). */
-    val uploadFromMs: Long get() = if (expiresAtMs == Long.MAX_VALUE) 0L else startedAtMs - DebugMode.PRE_ROLL_MS
+    /** Records from here on are uploaded: the session start, nothing from before (dev: everything). */
+    val uploadFromMs: Long get() = if (expiresAtMs == Long.MAX_VALUE) 0L else startedAtMs
 
     /** Countdown `9:41` (minutes:seconds, rounded up), "0:00" once over. */
     fun remainingText(nowMs: Long): String {

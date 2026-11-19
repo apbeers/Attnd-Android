@@ -126,13 +126,13 @@ class DiagnosticsUploadTest {
     private fun gunzip(bytes: ByteArray) = GZIPInputStream(ByteArrayInputStream(bytes)).readBytes().toString(Charsets.UTF_8)
 
     @Test
-    fun uploader_sendsTheSessionWithPreRoll_onceEach() = runTest {
+    fun uploader_sendsOnlyTheSession_noPreRoll_onceEach() = runTest {
         val store = LogStore(folder.newFolder("logs"))
         val start = base + 10 * 60_000
         store.append(
             listOf(
                 record(start - 6 * 60_000, diag = null, msg = "too old"),
-                record(start - 4 * 60_000, diag = null, msg = "pre-roll"),
+                record(start - 4 * 60_000, diag = null, msg = "before the session"),
                 record(start - 60_000, diag = "D-OTHER", msg = "another session"),
                 record(start + 1_000, msg = "in session"),
             )
@@ -141,13 +141,13 @@ class DiagnosticsUploadTest {
         val cursors = MemoryCursors()
         val uploader = LogUploader(store, TestScope(testScheduler), source, cursors, send = { gz ->
             sent += gunzip(gz)
-            HttpResponse(200, """{"accepted":2}""", emptyMap())
+            HttpResponse(200, """{"accepted":1}""", emptyMap())
         }, clock = { start + 2_000 })
         uploader.start(DebugSession("D-7K3QX", start, start + 600_000), "debug_mode")
 
         assertEquals(LogUpload.INTERVAL_MS, uploader.uploadOnce())
         val entries = Json.parseToJsonElement(sent.single()).jsonObject["entries"]!!.jsonArray
-        assertEquals(listOf("pre-roll", "in session"), entries.map { it.jsonObject["msg"]!!.jsonPrimitive.content })
+        assertEquals(listOf("in session"), entries.map { it.jsonObject["msg"]!!.jsonPrimitive.content })
         assertEquals(4L, cursors.get("D-7K3QX"))
 
         uploader.uploadOnce()

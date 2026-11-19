@@ -41,9 +41,9 @@ data class DiagnosticsState(
 }
 
 /**
- * Debug mode, levels and uploads (logging spec §2–3). Production keeps `warning` and above on the device
- * only, until the user turns on debug logging for 10 minutes (a new random `D-XXXXX` code; the 5 minutes
- * before it from the ring buffer are uploaded too); the session's expiry is stored, so it ends on time
+ * Debug mode, levels and uploads (logging spec §2–3). Production keeps only errors (`error` and above) on
+ * the device, until the user turns on debug logging for 10 minutes (a new random `D-XXXXX` code; uploads
+ * start when it is turned on, nothing from before); the session's expiry is stored, so it ends on time
  * across restarts. Dev builds keep one code per install and always log `debug` and upload.
  * Diagnostics preferences are local only (excluded from backup; never linked to the device id).
  */

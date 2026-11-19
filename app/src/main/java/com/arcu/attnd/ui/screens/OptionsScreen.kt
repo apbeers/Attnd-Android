@@ -418,7 +418,7 @@ private fun DiagnosticsSection(
         when {
             session == null -> {
                 Text(
-                    "If support asks for it: records detailed diagnostics for 10 minutes, plus the 5 minutes before, " +
+                    "If support asks for it: records detailed diagnostics for the next 10 minutes " +
                         "and sends them to Attnd under a random debug code. It doesn't include what you type, " +
                         "your location or anything that identifies you or this device.",
                     style = MaterialTheme.typography.bodySmall,
