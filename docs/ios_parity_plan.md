@@ -428,15 +428,15 @@ Extend `store-screenshots.yml` / `screenshots.sh`:
 - **Upload from local `debug` builds**: iOS Xcode builds never upload; only `dev` builds do.
 - **Weather**: never built; the Weather API is disabled.
 
-### 4.3 One question for the owner
+### 4.3 Decided: Gemini Nano download (owner, Nov 22, 2026)
 
-**Gemini Nano download.** Apple Intelligence downloads its model by itself; ML Kit only downloads Gemini Nano when the
-app calls `download()`. If the assistant is hidden until the model is AVAILABLE and nothing triggers the download, a
-DOWNLOADABLE phone never gets the assistant.
-
-Recommendation: when `checkStatus()` says DOWNLOADABLE, start `download()` quietly in the background (once per
-install, retried at the next launch). Show the assistant once AVAILABLE, re-checked on every resume. No visible
-Download card.
+Apple Intelligence downloads its model by itself; ML Kit only downloads Gemini Nano when the app calls `download()`.
+Owner's rule: the **My plan button shows when `checkStatus()` is AVAILABLE, DOWNLOADABLE or DOWNLOADING** (never when
+the phone can't run Gemini Nano, and never in screenshot mode). Tapping it with the model not installed shows a small
+prompt ("Download Attnd's on-device assistant? · about N GB, over Wi-Fi recommended" · Download / Not now); Download
+calls `download()` and shows its progress in the prompt, then opens My plan once AVAILABLE (re-checked on every
+resume, so a download finished in the background just works). No silent background download. Everything else that
+needs the model (planner, "Plan your day" onboarding card) stays hidden until AVAILABLE, as on iOS.
 
 Note for the owner: Gemini Nano runs on a narrower set of phones than Apple Intelligence (recent Pixel / Galaxy
 flagships), so most Android attendees will see the plain search button and no planner.
