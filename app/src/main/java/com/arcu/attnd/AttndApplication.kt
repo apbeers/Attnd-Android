@@ -5,7 +5,6 @@ import android.content.Context
 import android.os.Build
 import android.os.Process
 import android.os.Trace
-import com.arcu.attnd.assistant.AppShortcuts
 import com.arcu.attnd.data.AttestedTokenProvider
 import com.arcu.attnd.data.EventRepository
 import com.arcu.attnd.data.HeadingSource
@@ -35,7 +34,6 @@ import com.arcu.attnd.live.LiveUpdateController
 import com.arcu.attnd.push.PushNotifications
 import com.arcu.attnd.ui.components.ImageLoader
 import com.arcu.attnd.util.integrity.AttestationManager
-import com.arcu.attnd.widget.PlanWidget
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -137,7 +135,7 @@ class AppGraph(context: Context, val prefs: DevicePrefs, logStore: LogStore, val
         images = images,
     )
 
-    /** Hearted schedule items and locations, per event, on the device (UI and AppFunctions). */
+    /** Hearted schedule items and locations, per event, on the device (UI and the Live Update). */
     val hearts = HeartStore(prefs)
 
     /** The user's position and the compass heading, only while a screen showing distances / arrows is visible. */
@@ -163,21 +161,10 @@ class AppGraph(context: Context, val prefs: DevicePrefs, logStore: LogStore, val
         appScope.launch {
             repository.bundle.map { it?.event?.id }.distinctUntilChanged().collect { perf.onEvent(it) }
         }
-        // Launcher shortcuts follow the joined event (none without one).
-        val shortcuts = AppShortcuts(appContext)
-        appScope.launch {
-            repository.bundle
-                .map { it?.event?.id }
-                .distinctUntilChanged()
-                .collect { shortcuts.update(repository.bundle.value) }
-        }
         // The Live Update follows the bundle (joins, refreshes, content_updated pushes), hearts and plans.
         appScope.launch {
             combine(repository.bundle, hearts.version, plans.version) { bundle, _, _ -> bundle?.contentVersion to bundle?.event?.id }
-                .collect {
-                    liveUpdates.refresh()
-                    PlanWidget.refresh(appContext)
-                }
+                .collect { liveUpdates.refresh() }
         }
     }
 }

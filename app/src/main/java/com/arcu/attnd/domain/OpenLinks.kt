@@ -4,7 +4,7 @@ import java.net.URLDecoder
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 
-/** A place in the app that a shortcut, an assistant (AppFunctions) result or a search result opens. */
+/** A place in the app that a notification, a Live Update link or a search result opens. */
 sealed interface OpenTarget {
     data class Location(val id: Int) : OpenTarget
     data class ScheduleItem(val id: Int) : OpenTarget
@@ -30,7 +30,7 @@ data class OpenRequest(val eventId: Int?, val target: OpenTarget)
 
 /**
  * The app's internal open links, `attnd-open://<event id or "any">/<target>`, carried as the data of
- * explicit intents to MainActivity (dynamic shortcuts, AppFunctions `PendingIntent`s). No intent
+ * explicit intents to MainActivity (the Live Update's and reminders' `PendingIntent`s). No intent
  * filter declares the scheme: other apps cannot resolve it, and the data keeps PendingIntents for
  * different targets distinct.
  *

@@ -1,6 +1,5 @@
 package com.arcu.attnd.unit
 
-import com.arcu.attnd.domain.EventFacts
 import com.arcu.attnd.domain.EventSearch
 import com.arcu.attnd.domain.Hearts
 import com.arcu.attnd.domain.SearchKind
@@ -65,15 +64,5 @@ class HeartsTest {
         assertTrue(EventSearch.search(bundle, "hearted", now).isEmpty())
         // The suggestions themselves don't change; the screen adds the Hearted entry once something is hearted.
         assertFalse(EventSearch.suggestions(bundle, now).any { it.label == EventSearch.HEARTED_TITLE })
-    }
-
-    @Test
-    fun facts_heartedScheduleThenLocations() {
-        val facts = EventFacts.hearted(bundle, Hearts(setOf(11, 10), setOf(5, 3)), now, Locale.US)
-        assertEquals(
-            listOf(SearchKind.SCHEDULE to 3, SearchKind.SCHEDULE to 5, SearchKind.LOCATION to 10, SearchKind.LOCATION to 11),
-            facts.map { it.kind to it.id },
-        )
-        assertTrue(EventFacts.hearted(bundle, Hearts.NONE, now).isEmpty())
     }
 }

@@ -187,9 +187,8 @@ class ApiMapperTest {
         assertNull(website(""", "website_url": 42"""))
         assertEquals("https://sites.attnd-example.com/fw-fair/", website(""", "website_url": " https://sites.attnd-example.com/fw-fair/ """"))
         assertEquals("HTTPS://sites.attnd-example.com/x/", website(""", "website_url": "HTTPS://sites.attnd-example.com/x/""""))
-        // AppFunctions' getEventInfo carries it.
-        val full = ApiMapper.parseBundle(SampleBundles.FULL)!!
-        assertEquals("https://sites.attnd-example.com/fw-fair/", com.arcu.attnd.domain.EventFacts.eventInfo(full).website)
-        assertNull(com.arcu.attnd.domain.EventFacts.eventInfo(ApiMapper.parseBundle("""{"event": {"id": 1}}""")!!).website)
+        // The full sample bundle carries it.
+        assertEquals("https://sites.attnd-example.com/fw-fair/", ApiMapper.parseBundle(SampleBundles.FULL)!!.event.websiteUrl)
+        assertNull(ApiMapper.parseBundle("""{"event": {"id": 1}}""")!!.event.websiteUrl)
     }
 }

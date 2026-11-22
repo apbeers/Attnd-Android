@@ -1,6 +1,6 @@
 # kotlinx.serialization ships its own R8 rules; keep the generated serializers of our @Serializable
 # classes explicitly as well (API DTOs, the plan JSON, attestation, routes), since they are decoded at
-# runtime and from files on the device. AppFunctions, Maps, ML Kit, Play services and Firebase ship
+# runtime and from files on the device. Maps, ML Kit, Play services and Firebase ship
 # their own consumer rules.
 -keepattributes RuntimeVisibleAnnotations,AnnotationDefault
 -keep,includedescriptorclasses class com.arcu.attnd.**$$serializer { *; }

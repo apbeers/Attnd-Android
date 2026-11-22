@@ -81,7 +81,7 @@ object LogEvent {
     const val PLAN_EDIT = "plan.edit"
     const val PLAN_UNDO = "plan.undo"
 
-    // assistant (Gemini AppFunctions, shortcuts, Ask)
+    // assistant (on-device model, router)
     const val ASSISTANT_REQUEST = "assistant.request"
     const val MODEL_STATUS = "assistant.model.status"
     const val MODEL_DOWNLOAD = "assistant.model.download"

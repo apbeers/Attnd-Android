@@ -4,7 +4,6 @@ import com.arcu.attnd.domain.AssistantPrompt
 import com.arcu.attnd.domain.DisplayConfig
 import com.arcu.attnd.domain.Event
 import com.arcu.attnd.domain.EventBundle
-import com.arcu.attnd.domain.EventFacts
 import com.arcu.attnd.domain.EventLocation
 import com.arcu.attnd.domain.EventNotification
 import com.arcu.attnd.domain.EventSearch
@@ -353,20 +352,6 @@ class EventSearchTest {
         val cited = AssistantPrompt.citations(answer, context, bundle)
         assertEquals(listOf(SearchKind.SCHEDULE to 3, SearchKind.EVENT to 77), cited.map { it.kind to it.id })
         assertEquals("Jazz Night starts at 7:00 PM on the Main Stage. See also and.", AssistantPrompt.displayText(answer))
-    }
-
-    @Test
-    fun facts_happeningNowAndUpdates() {
-        val live = EventFacts.happeningNow(bundle, now, locale = locale)
-        assertEquals(listOf(1, 8, 2), live.map { it.id })
-        assertEquals(listOf("now", "next", "next"), live.map { it.status })
-        assertEquals("2026-11-14T12:30-06:00", live.first().startTime)
-        assertEquals("General", live[1].locationName)
-        assertEquals(listOf(21, 20), EventFacts.latestUpdates(bundle).map { it.id })
-        assertEquals(OpenTarget.Location(12), EventFacts.search(bundle, "cafe", now, setOf(SearchKind.LOCATION)).single().target)
-        assertNull(EventFacts.search(bundle, "cafe", now, setOf(SearchKind.LOCATION)).single().latitude)
-        assertEquals(10, EventFacts.limit(0))
-        assertEquals(50, EventFacts.limit(500))
     }
 
     @Test

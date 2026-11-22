@@ -2,7 +2,6 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
-    alias(libs.plugins.ksp)
 }
 
 // Firebase Cloud Messaging needs app/google-services.json (not committed). Without it the app
@@ -236,16 +235,9 @@ dependencies {
     implementation libs.play.integrity
     implementation libs.installreferrer
 
-    // Assistants (Gemini): AppFunctions over the local bundle.
-    implementation libs.androidx.appfunctions
-    ksp libs.androidx.appfunctions.compiler
-
     // "Ask about this event": Gemini Nano on the device via ML Kit GenAI Prompt API (beta; runtime
     // availability check, falls back to plain search).
     implementation libs.mlkit.genai.prompt
-
-    // Home-screen widget "Now / Next in my plan" (Jetpack Glance, first-party AndroidX).
-    implementation libs.androidx.glance.appwidget
 
     // Push (FCM)
     implementation platform(libs.firebase.bom)

@@ -30,7 +30,7 @@ enum class LogLevel(val wire: String) {
     }
 }
 
-/** Log categories (spec §1): `assistant` covers Gemini AppFunctions and Ask. [wire] is the JSON `cat` and the logcat tag suffix. */
+/** Log categories (spec §1): `assistant` covers the on-device model and the router. [wire] is the JSON `cat` and the logcat tag suffix. */
 enum class LogCategory(val wire: String) {
     NET("net"), PUSH("push"), BACKGROUND("background"), LIVE("live"), LOCATION("location"), MAP("map"),
     PLANNER("planner"), ASSISTANT("assistant"), SEARCH("search"), STORAGE("storage"), UI("ui"), PERF("perf"),

@@ -2,13 +2,6 @@
     <string name="app_name">Attnd</string>
     <string name="notification_channel_name">Event updates</string>
     <string name="notification_channel_description">Announcements from the organizers of the event you joined.</string>
-    <string name="app_functions_display_description">Lets assistants answer questions about the event you joined in Attnd, from the copy on your phone.</string>
-    <string name="shortcut_search_short">Search</string>
-    <string name="shortcut_search_long">Search the event</string>
-    <string name="shortcut_now_short">Happening now</string>
-    <string name="shortcut_now_long">What\'s happening now</string>
-    <string name="shortcut_updates_short">Updates</string>
-    <string name="shortcut_updates_long">Organizer updates</string>
     <string name="live_channel_name">Live Update</string>
     <string name="live_channel_description">What\'s on now and next in your plan or likes, on your Lock Screen while you follow an event.</string>
     <string name="reminders_channel_name">Reminders</string>
@@ -20,6 +13,4 @@
     <string name="live_action_skip">Skip next</string>
     <string name="live_action_map">Show on map</string>
     <string name="live_action_dismiss_urgent">Dismiss</string>
-    <string name="plan_widget_label">Next in my plan</string>
-    <string name="plan_widget_description">What\'s on now and next in your plan, with the walk between.</string>
 </resources>

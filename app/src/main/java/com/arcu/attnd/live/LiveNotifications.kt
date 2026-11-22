@@ -9,7 +9,7 @@ import android.content.Intent
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.arcu.attnd.R
-import com.arcu.attnd.assistant.OpenIntents
+import com.arcu.attnd.OpenIntents
 import com.arcu.attnd.domain.AppLog
 import com.arcu.attnd.domain.EventBundle
 import com.arcu.attnd.domain.Hearts

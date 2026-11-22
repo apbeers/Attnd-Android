@@ -1,16 +1,15 @@
-package com.arcu.attnd.assistant
+package com.arcu.attnd
 
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import androidx.core.net.toUri
-import com.arcu.attnd.MainActivity
 import com.arcu.attnd.domain.OpenLinks
 import com.arcu.attnd.domain.OpenRequest
 
 /**
  * Explicit intents to MainActivity carrying an internal open link ([OpenLinks]) as their data.
- * Used by dynamic shortcuts and returned to assistants by the AppFunctions.
+ * Used by the Live Update and reminder notifications.
  */
 object OpenIntents {
 

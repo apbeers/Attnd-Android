@@ -14,7 +14,6 @@ import com.arcu.attnd.domain.EntityRef
 import com.arcu.attnd.domain.Hearts
 import com.arcu.attnd.domain.LiveHintRules
 import com.arcu.attnd.domain.PlanVersionKind
-import com.arcu.attnd.domain.PlanWidgetContent
 import com.arcu.attnd.domain.RefKind
 import com.arcu.attnd.domain.SharedPlans
 import com.arcu.attnd.domain.StoredTurn
@@ -36,7 +35,7 @@ import java.time.Instant
 import java.time.LocalDate
 import java.util.Locale
 
-/** The Android assistant screen's pure helpers ([AssistantFlow], [BlockData], [SharedPlans], transcript, widget). */
+/** The Android assistant screen's pure helpers ([AssistantFlow], [BlockData], [SharedPlans], transcript). */
 class AssistantFlowTest {
 
     @Test
@@ -171,28 +170,5 @@ class AssistantFlowTest {
         assertTrue(morning.changed.isEmpty())
         val late = Instant.parse("2026-11-15T05:30:00Z") // Sat 11:30 PM: every planned item ended
         assertTrue(LiveHintRules.of(plan, bundle, hearts, late, null, emptyList()).recapReady)
-    }
-
-    @Test
-    fun widget_planNowNextAndWalk() {
-        assertEquals(PlanWidgetContent.NO_EVENT, PlanWidgetContent.of(null, null, Hearts.NONE, now).title)
-        // Sat 11:15 AM: Juniper Lane (Main Stage) is on; next is the lunch break's neighbour 102 at Trinity Stage.
-        val at = now.plus(Duration.ofMinutes(75))
-        val content = PlanWidgetContent.of(bundle, plan, hearts, at, Locale.US)
-        assertEquals("My plan", content.title)
-        assertEquals("Now: Juniper Lane · until 12:00 PM · Main Stage", content.nowLine)
-        assertEquals("Next 1:00 PM: Ana Morales Trio · Trinity Stage", content.nextLine)
-        assertEquals("4 min walk", content.walkLine)
-        assertEquals(109, content.focusItemId)
-        // Without a plan: today's liked items.
-        val liked = PlanWidgetContent.of(bundle, null, hearts, now, Locale.US)
-        assertEquals("Liked today", liked.title)
-        assertEquals("Next 7:00 PM: The Prairie Lights · Main Stage", liked.nextLine)
-        // After the last item.
-        val done = PlanWidgetContent.of(bundle, plan, hearts, Instant.parse("2026-11-15T05:30:00Z"), Locale.US)
-        assertEquals(PlanWidgetContent.NOTHING_LEFT, done.nextLine)
-        assertNull(done.focusItemId)
-        // The plan fixture itself (sanity).
-        assertEquals("10:00 111", clock(plan).first())
     }
 }

@@ -9,7 +9,7 @@ import kotlinx.coroutines.flow.update
 
 /**
  * Hearted schedule items and locations, per event, on the device only (SharedPreferences, which Auto
- * Backup includes). Shared by the UI and the AppFunctions service; [version] changes on every write so
+ * Backup includes). Shared by the UI and the Live Update; [version] changes on every write so
  * the UI picks up hearts set by an assistant too.
  */
 class HeartStore(private val prefs: DevicePrefs) {
