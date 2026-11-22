@@ -202,6 +202,9 @@ object EventSearch {
                         Field(item.tags.joinToString(" "), WEIGHT_SECONDARY),
                         Field(locationName, WEIGHT_SECONDARY),
                         Field(item.description, WEIGHT_TERTIARY),
+                        // API-018 (as iOS): performer names and genres weigh like tags; their bios and the about text like descriptions.
+                        item.context?.let { c -> Field((c.performers.map { it.name } + c.genres).joinToString(" "), WEIGHT_SECONDARY) },
+                        item.context?.let { c -> Field((listOf(c.about) + c.performers.map { it.bio }).joinToString(" "), WEIGHT_TERTIARY) },
                     ),
                     item = item,
                 )
@@ -336,7 +339,8 @@ object EventSearch {
     /** A chip shown for an empty query; tapping it searches [query]. */
     data class Suggestion(val label: String, val query: String)
 
-    const val HEARTED_TITLE = "Liked"
+    /** "My Schedule" since My schedule replaced likes (iOS, Nov 21, 2026). */
+    const val HEARTED_TITLE = "My Schedule"
 
     /**
      * The search screen's "Liked" entry (shown once anything is hearted; it opens this list, it is

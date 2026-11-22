@@ -36,14 +36,61 @@ object AssistantFlow {
         AssistantIntent.RECAP, AssistantIntent.NO_PLAN, AssistantIntent.WHY_NOT,
     )
 
-    private val ASKED = setOf(AssistantIntent.QUESTION, AssistantIntent.NO_MATCH)
+    /** With the model these go to it (the router is its fallback); FACTS since the eval (iOS, Nov 22, 2026). */
+    private val ASKED = setOf(AssistantIntent.QUESTION, AssistantIntent.NO_MATCH, AssistantIntent.FACTS)
 
     fun path(intent: AssistantIntent, input: String, modelAvailable: Boolean, forced: TurnPath? = null): TurnPath {
         if (forced == TurnPath.ASK) return if (modelAvailable) TurnPath.ASK else TurnPath.SEARCH
         if (forced != null) return forced
+        // The router is English: other languages go to the model (as iOS); safety and My schedule never do.
+        if (modelAvailable && intent != AssistantIntent.SCHEDULE && intent != AssistantIntent.SAFETY && looksForeign(input)) return TurnPath.ASK
         if (intent in PLAN_INTENTS) return TurnPath.PLAN
         if (modelAvailable && (intent in ASKED || (intent == AssistantIntent.SEARCH && SearchText.words(input).size >= 4))) return TurnPath.ASK
         return TurnPath.SEARCH
+    }
+
+    private val ENGLISH_WORDS = setOf(
+        "the", "a", "an", "is", "are", "what", "where", "when", "who", "how", "my", "me", "i", "to", "of", "in", "on", "at",
+        "and", "or", "for", "with", "it", "that", "this", "show", "find", "add", "remove", "plan", "schedule", "near", "next",
+        "now", "tonight", "today", "tomorrow", "can", "do", "does", "there", "food", "music", "stage", "you", "please",
+    )
+    private val FOREIGN_WORDS = setOf(
+        "que", "donde", "cuando", "como", "hay", "esta", "comida", "baño", "banos", "où", "quand", "est", "les", "des",
+        "manger", "wo", "wann", "ist", "gibt", "essen", "bühne", "dove", "quando", "cosa", "onde", "quero", "comer", "musica",
+    )
+
+    /**
+     * Two or more words, none of them common English, and a word or letter that isn't English (accents, ¿¡,
+     * common Spanish / French / German / Italian / Portuguese words). As iOS.
+     */
+    fun looksForeign(input: String): Boolean {
+        val lower = input.lowercase()
+        val words = lower.split(Regex("""[^\p{L}]+""")).filter { it.isNotEmpty() }
+        if (words.size < 2 || words.any { it in ENGLISH_WORDS }) return false
+        if (words.any { it in FOREIGN_WORDS } || lower.contains('¿') || lower.contains('¡')) return true
+        return lower.any { it.code > 0x7F && it.isLetter() }
+    }
+
+    private val DONE_VERBS = listOf("Adding" to "Added", "Removing" to "Removed", "Moving" to "Moved", "Setting" to "Set", "Planning" to "Planned")
+
+    /**
+     * The chat's done line for a finished turn, in plain words (owner, Nov 21, 2026): "Added Taco Row",
+     * "Removed X", "Planned your day", "Found 4 results"; null for turns that only showed or read something,
+     * and for a search that found nothing. [stage] is the working line's text ("Adding Taco Row…").
+     */
+    fun doneLine(stage: String?, blocks: List<AssistantBlock>): String? {
+        stage ?: return null
+        val text = stage.removeSuffix("…")
+        DONE_VERBS.firstOrNull { text.startsWith(it.first) }?.let { (from, to) -> return to + text.removePrefix(from) }
+        if (text.startsWith("Searching")) {
+            val count = blocks.flatMap(::refs).distinct().size
+            return when (count) {
+                0 -> null
+                1 -> "Found 1 result"
+                else -> "Found $count results"
+            }
+        }
+        return null
     }
 
     /** A plain `search` turn for a forced SEARCH. */
@@ -113,7 +160,7 @@ sealed interface CompareSide {
  *   at most 20.
  * - `compare` sides: "s12" → the item, "plan:chill" / "plan:everything" → that version's preview.
  * - `summary`: walking → [DayRoutes.totalText] of today's (else the first) plan day; recap →
- *   [LiveAssist.recap] of today; liked_counts → "3 liked items and 2 liked places".
+ *   [LiveAssist.recap] of today; liked_counts → "3 items and 2 places".
  */
 object BlockData {
 
@@ -165,7 +212,7 @@ object BlockData {
     }
 
     fun likedCounts(hearts: Hearts): String {
-        fun n(count: Int, one: String) = "$count liked ${if (count == 1) one else one + "s"}"
+        fun n(count: Int, one: String) = "$count ${if (count == 1) one else one + "s"}"
         return "${n(hearts.scheduleItems.size, "item")} and ${n(hearts.locations.size, "place")}"
     }
 }
@@ -269,5 +316,52 @@ object AssistantTranscript {
             }
             if (blocks.isEmpty() && input == null) null else StoredTurn(input, AssistantTurn(blocks, actions))
         }.takeLast(MAX)
+    }
+}
+
+/**
+ * The My plan chat's history per event (as iOS `ChatTranscript`; ≤ [MAX_TURNS] turns, on the device only,
+ * kept after leaving like the conversation): each turn's typed text, its blocks as block JSON and its done
+ * line. Blocks that no longer decode are dropped; the UI re-validates them against the bundle when shown.
+ */
+data class ChatTranscript(val entries: List<Entry> = emptyList()) {
+
+    data class Entry(val id: Int, val input: String?, val blocks: List<AssistantBlock>, val fromModel: Boolean = false, val status: String? = null)
+
+    fun encode(): String = JsonArray(entries.takeLast(MAX_TURNS).map { e ->
+        JsonObject(buildMap {
+            put("id", JsonPrimitive(e.id))
+            put("blocks", JsonArray(e.blocks.map(BlockJson::encode)))
+            e.input?.let { put("input", JsonPrimitive(it)) }
+            if (e.fromModel) put("model", JsonPrimitive(true))
+            e.status?.let { put("status", JsonPrimitive(it)) }
+        })
+    }).toString()
+
+    companion object {
+        const val MAX_TURNS = 40
+        private val json = Json { ignoreUnknownKeys = true; isLenient = true }
+
+        fun decode(text: String?): ChatTranscript {
+            if (text.isNullOrBlank()) return ChatTranscript()
+            val list = runCatching { json.parseToJsonElement(text) as? JsonArray }.getOrNull() ?: return ChatTranscript()
+            val entries = list.mapNotNull { element ->
+                val o = element as? JsonObject ?: return@mapNotNull null
+                val id = (o["id"] as? JsonPrimitive)?.takeIf { !it.isString }?.content?.toIntOrNull() ?: return@mapNotNull null
+                fun str(key: String) = (o[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
+                Entry(
+                    id = id,
+                    input = str("input"),
+                    blocks = (o["blocks"] as? JsonArray).orEmpty().mapNotNull { (BlockJson.decode(it) as? BlockJson.Decoded.Ok)?.block },
+                    fromModel = (o["model"] as? JsonPrimitive)?.content == "true",
+                    status = str("status"),
+                )
+            }
+            return ChatTranscript(entries.takeLast(MAX_TURNS))
+        }
+
+        /** The follow-up chips above the composer: the last turn's chips (shown there, not in the turn). */
+        fun followUps(entries: List<Entry>): List<Chip> =
+            entries.lastOrNull()?.blocks?.lastOrNull { it is AssistantBlock.Chips }?.let { (it as AssistantBlock.Chips).chips }.orEmpty()
     }
 }

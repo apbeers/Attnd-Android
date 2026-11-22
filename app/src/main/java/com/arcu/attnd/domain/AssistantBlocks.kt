@@ -347,6 +347,8 @@ object BlockValidator {
             is AssistantBlock.Summary -> block.takeIf { it.kind in AssistantBlock.SUMMARIES && (it.kind != "walking" || hasPlan) }
             is AssistantBlock.Share -> when {
                 block.target == "plan" -> block.takeIf { hasPlan }
+                // My schedule's /p/ link (as iOS; the eval found it dropped here, Nov 22, 2026).
+                block.target == "schedule" -> block
                 block.target.startsWith("item:") -> EntityRef.parse(block.target.removePrefix("item:"))
                     ?.takeIf { it.kind == RefKind.SCHEDULE && it.exists(bundle) }?.let { AssistantBlock.Share("item:${it.code}") }
                 else -> null

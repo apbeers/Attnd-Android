@@ -111,11 +111,11 @@ class AssistantFlowTest {
 
     @Test
     fun summaries() {
-        assertEquals("2 liked items and 0 liked places", BlockData.summary("liked_counts", plan, bundle, hearts, now, DistanceUnits.IMPERIAL, Locale.US))
-        assertEquals("1 liked item and 1 liked place", BlockData.likedCounts(Hearts(locations = setOf(1), scheduleItems = setOf(101))))
+        assertEquals("2 items and 0 places", BlockData.summary("liked_counts", plan, bundle, hearts, now, DistanceUnits.IMPERIAL, Locale.US))
+        assertEquals("1 item and 1 place", BlockData.likedCounts(Hearts(locations = setOf(1), scheduleItems = setOf(101))))
         val walking = BlockData.summary("walking", plan, bundle, hearts, now, DistanceUnits.IMPERIAL, Locale.US)
         assertTrue(walking!!, walking.endsWith(" walking today"))
-        assertEquals("You saw 0 things, liked 2 and walked 10 ft.", BlockData.summary("recap", plan, bundle, hearts, now, DistanceUnits.IMPERIAL, Locale.US))
+        assertEquals("You saw 0 things, added 2 and walked 10 ft.", BlockData.summary("recap", plan, bundle, hearts, now, DistanceUnits.IMPERIAL, Locale.US))
         assertNull(BlockData.summary("walking", null, bundle, hearts, now, DistanceUnits.IMPERIAL, Locale.US))
     }
 

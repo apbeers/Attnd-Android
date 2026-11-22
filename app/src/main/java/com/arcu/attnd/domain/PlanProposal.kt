@@ -17,6 +17,9 @@ enum class ProposalKind {
 
     /** A shared plan link (API-015): Use this plan / Merge with mine. */
     SHARED,
+
+    /** "Music, food, then more music" (as iOS, Nov 21, 2026): option 0's plan is applied as it is (no action). */
+    SEQUENCE,
 }
 
 /**
@@ -219,7 +222,7 @@ sealed interface PreviewRow {
  * - ADD: each option's item as an [PreviewRow.Option], placed by start time (before the first row
  *   that starts later; after rows starting at the same time; options among themselves by start, id).
  * - REPLACE: the target row marked REPLACED, its options right under it in option order.
- * - CHANGE / SHARED (option 0's edit): rows of the day before the edit, removed items REMOVED, moved
+ * - CHANGE / SHARED / SEQUENCE (option 0's edit): rows of the day before the edit, removed items REMOVED, moved
  *   items MOVED (with [PreviewRow.Item.movedTo]), removed / moved meals REMOVED / MOVED; items the
  *   edit adds and meal breaks it adds, from the plan after the edit, inserted by start time as ADDED.
  * Options whose item doesn't start on [date] aren't shown on that day.
@@ -229,10 +232,10 @@ object PreviewRows {
     fun of(plan: Plan?, proposal: PlanProposal?, date: LocalDate, bundle: EventBundle): List<PreviewRow> {
         val zone = bundle.event.zone
         val edit = proposal?.first?.edit
-        val basePlan = if (proposal?.kind == ProposalKind.CHANGE || proposal?.kind == ProposalKind.SHARED) edit!!.before else plan
+        val changing = proposal?.kind == ProposalKind.CHANGE || proposal?.kind == ProposalKind.SHARED || proposal?.kind == ProposalKind.SEQUENCE
+        val basePlan = if (changing) edit!!.before else plan
         val day = basePlan?.days?.firstOrNull { it.date == date }
         val diff = edit?.diff
-        val changing = proposal?.kind == ProposalKind.CHANGE || proposal?.kind == ProposalKind.SHARED
         val base = day?.entries.orEmpty().map { entry ->
             when (entry) {
                 is PlannedItem -> {
@@ -279,7 +282,7 @@ object PreviewRows {
                 }
                 base.subList(0, at + 1) + options + base.subList(at + 1, base.size)
             }
-            ProposalKind.CHANGE, ProposalKind.SHARED -> {
+            ProposalKind.CHANGE, ProposalKind.SHARED, ProposalKind.SEQUENCE -> {
                 val after = edit!!.after.days.firstOrNull { it.date == date }
                 val added = after?.entries.orEmpty().mapNotNull { entry ->
                     when (entry) {
@@ -368,7 +371,7 @@ sealed interface ProposalReply {
             if (cmd.isEmpty() || optionCount <= 0) return None
             if (cmd in CANCEL) return Cancel
             if (cmd in APPLY) return Apply(0)
-            val index = Regex("""^(?:(?:yes|ok|okay)\s+)?(?:the\s+)?(first|1st|second|2nd|third|3rd|fourth|4th|last)(?:\s+(?:one|option))?(?:\s+please)?$""").find(cmd)?.let { m ->
+            val index = Regex("""^(?:(?:yes|ok|okay)\s+)?(?:(?:let s |lets )?(?:go with|take|pick|choose|use|apply|add|do)\s+)?(?:the\s+)?(first|1st|second|2nd|third|3rd|fourth|4th|last)(?:\s+(?:one|option))?(?:\s+please)?$""").find(cmd)?.let { m ->
                 val word = m.groupValues[1]
                 if (word == "last") optionCount - 1 else ORDINALS.getValue(word)
             } ?: Regex("""^(?:(?:option|number|choice|no|pick)\s+)?(\d{1,2})$""").find(cmd)?.let { it.groupValues[1].toInt() - 1 }
@@ -419,4 +422,177 @@ object PlanTabFlow {
     private val IN_PLACE = setOf(AssistantIntent.PLAN_SHOW)
 
     fun inPlace(intent: AssistantIntent): Boolean = intent in IN_PLACE
+}
+
+// ── Swap and sequences (as iOS `PlanProposal.swift`) ───────────────────────
+
+/** A swap command's result. */
+sealed interface SwapCommand {
+    data class Proposal(val proposal: PlanProposal) : SwapCommand
+    data class Message(val text: String) : SwapCommand
+}
+
+/** A step of a typed sequence. */
+enum class SequenceKind { MUSIC, FOOD, DRINKS }
+
+object PlanCommands {
+
+    /**
+     * "swap the next thing" / "swap my next one" / "replace Velvet Mesquite" (no "with" / "for"): up to 4 of
+     * the planned item's alternatives (the planner's swap list) that haven't started and aren't planned, each a
+     * replace (a REPLACE proposal). null: not a swap command (the router takes it).
+     */
+    fun swap(input: String, ctx: AssistantContext): SwapCommand? {
+        val cmd = AssistantRouter.command(input)
+        val m = Regex("""^(?:swap|replace|change)\s+(?:out\s+)?(.+)$""").find(cmd) ?: return null
+        val phrase = m.groupValues[1]
+        if (Regex("""\s(?:with|for)\s""").containsMatchIn(" $phrase ")) return null
+        val plan = ctx.plan ?: return SwapCommand.Message(AssistantRouter.NO_PLAN_TEXT)
+        val target = if (Regex("""^(?:the |my )?next(?: thing| one| item| act| show)?$""").matches(phrase)) {
+            LiveAssist.nextPlanned(plan, ctx.bundle, ctx.now) ?: return SwapCommand.Message("Nothing else is in your plan.")
+        } else {
+            val ref = (AssistantRouter.resolve(phrase, setOf(RefKind.SCHEDULE), ctx, preferPlanned = true) as? Resolution.Found)?.ref ?: return null
+            ctx.bundle.scheduleItem(ref.id) ?: return null
+        }
+        val planned = plan.items.firstOrNull { it.itemId == target.id } ?: return SwapCommand.Message("${target.name} isn't in your plan.")
+        val alternatives = planned.alternatives.mapNotNull { ctx.bundle.scheduleItem(it) }
+            .filter { it.id !in plan.itemIds && it.startTime?.toInstant()?.isAfter(ctx.now) == true }
+            .take(PlanProposals.MAX_OPTIONS)
+        if (alternatives.isEmpty()) return SwapCommand.Message("There's nothing to swap ${target.name} for.")
+        val chips = alternatives.map { Chip(it.name, AssistantAction.planEdit(listOf(PlanOp.Replace(target.id, with = it.id)), ctx.bundle)) }
+        return PlanProposals.fromTurn(AssistantTurn(listOf(AssistantBlock.Chips(chips))), ctx)?.let { SwapCommand.Proposal(it) }
+    }
+
+    private val SEQUENCE_FILLERS = setOf(
+        "lets", "let", "s", "do", "some", "more", "a", "an", "the", "and", "then", "first", "go", "get", "grab", "see", "catch", "bit", "of",
+        "to", "for", "with", "i", "we", "want", "like", "maybe", "after", "that", "later", "another", "one", "morning", "afternoon", "evening",
+        "night", "finally", "end", "start", "live", "good", "great", "something", "quick", "have",
+    )
+    private val MUSIC = setOf("music", "band", "bands", "show", "shows", "concert", "concerts", "set", "sets", "gig", "act", "acts", "stage")
+    private val FOOD = setOf("food", "lunch", "dinner", "tacos", "taco", "bbq", "snack", "snacks", "bite", "meal", "eat", "brunch")
+    private val DRINKS = setOf("drinks", "drink", "beer", "beers", "cocktail", "cocktails")
+
+    /** The steps of a sequence, or null (fewer than two, a step that isn't a kind, no "then" / comma). */
+    fun sequenceSteps(input: String): List<SequenceKind>? {
+        val lower = " " + input.lowercase() + " "
+        if (!(lower.contains(" then ") || lower.contains(",") || lower.contains("→") || lower.contains("->"))) return null
+        // Normalised text has no punctuation: split on the original's commas and on "then".
+        val parts = input.lowercase()
+            .replace("→", ",").replace("->", ",").replace(" and then ", ",").replace(" after that ", ",").replace(" then ", ",")
+            .split(',').map { SearchText.normalize(it).trim() }.filter { it.isNotEmpty() }
+        if (parts.size < 2 || parts.size > 6) return null
+        val known = SEQUENCE_FILLERS + MUSIC + FOOD + DRINKS
+        return parts.map { part ->
+            val words = part.split(' ').filter { it.isNotEmpty() }.toSet()
+            val kind = when {
+                words.any { it in MUSIC } -> SequenceKind.MUSIC
+                words.any { it in FOOD } -> SequenceKind.FOOD
+                words.any { it in DRINKS } -> SequenceKind.DRINKS
+                else -> return null
+            }
+            // Every word must be a kind word or a filler (so "music by Juniper Lane" isn't read as a kind).
+            if (!known.containsAll(words)) return null
+            kind
+        }
+    }
+
+    /**
+     * A plan-like sequence of kinds ("music, food, then more music", "tacos then a band", "morning music,
+     * lunch, …") becomes one SEQUENCE proposal (owner, Nov 21, 2026): each step filled from the schedule in
+     * order — music = a live-music item in progress or next (later steps: starting after the previous step),
+     * food / drinks = the place nearest the previous step at the next quarter hour after it (+ 5 min walk),
+     * 45 min (lunch before 4 PM, dinner after) — previewed as the plan with those entries added. null: not a
+     * sequence, or a step can't be filled (the router / model answer instead).
+     */
+    fun sequence(input: String, ctx: AssistantContext): PlanProposal? {
+        val steps = sequenceSteps(input) ?: return null
+        val bundle = ctx.bundle
+        val zone = bundle.event.zone
+        var cursor = ctx.now
+        var lastPlace: GeoPoint? = ctx.user
+        val used = mutableSetOf<Int>()
+        val usedPlaces = mutableSetOf<Int>()
+        val picked = mutableListOf<PlanEntry>()
+        val parts = mutableListOf<String>()
+        fun isMusic(item: ScheduleItem) = item.tags.any { SearchText.normalize(it).contains("music") } ||
+            bundle.location(item.locationId)?.category?.let { SearchText.normalize(it) == "stage" } == true
+        fun matches(location: EventLocation, kind: SequenceKind): Boolean {
+            val texts = (listOf(location.category.orEmpty()) + location.tags).map(SearchText::normalize)
+            return when (kind) {
+                SequenceKind.FOOD -> texts.any { it.contains("food") }
+                SequenceKind.DRINKS -> texts.any { it.contains("drink") || it.contains("beer") }
+                SequenceKind.MUSIC -> false
+            }
+        }
+        val clock = java.time.format.DateTimeFormatter.ofPattern("h:mm a", ctx.locale)
+        fun clock(at: Instant) = at.atZone(zone).format(clock)
+
+        for ((index, step) in steps.withIndex()) {
+            when (step) {
+                SequenceKind.MUSIC -> {
+                    val item = bundle.schedule.filter { item ->
+                        val start = item.startTime?.toInstant() ?: return@filter false
+                        val end = TimeMatcher.effectiveEnd(item) ?: return@filter false
+                        if (item.id in used || !isMusic(item) || !end.isAfter(cursor)) return@filter false
+                        // The first step may be on already; later ones start after the previous step.
+                        !start.isBefore(cursor) || (index == 0 && !start.isAfter(cursor))
+                    }.minWithOrNull(compareBy<ScheduleItem> { it.startTime!!.toInstant() }.thenBy { it.id }) ?: return null
+                    val start = item.startTime!!.toInstant()
+                    val end = TimeMatcher.effectiveEnd(item)!!
+                    used += item.id
+                    picked += PlannedItem(item.id, start, end, "In your sequence", null, emptyList(), emptyList())
+                    parts += "**${item.name}** (${clock(start)})"
+                    cursor = end
+                    bundle.location(item.locationId)?.coordinate?.let { lastPlace = it }
+                }
+                SequenceKind.FOOD, SequenceKind.DRINKS -> {
+                    val places = bundle.locations.filter { matches(it, step) && it.id !in usedPlaces }
+                    if (places.isEmpty()) return null
+                    val from = lastPlace
+                    fun distance(l: EventLocation) = if (from == null) Double.POSITIVE_INFINITY else l.coordinate?.let { Geo.distanceMeters(from, it) } ?: Double.POSITIVE_INFINITY
+                    val place = places.minWithOrNull(compareBy<EventLocation> { distance(it) }.thenBy { it.sortOrder }.thenBy { it.id })!!
+                    usedPlaces += place.id
+                    // The next quarter hour after the previous step and a short walk.
+                    val earliest = cursor.plusSeconds(5 * 60)
+                    val local = earliest.atZone(zone)
+                    val roundUp = (15 - local.minute % 15) % 15
+                    var start = Instant.ofEpochSecond(earliest.epochSecond + roundUp * 60L - local.second)
+                    if (start.isBefore(earliest)) start = start.plusSeconds(15 * 60)
+                    val end = start.plusSeconds(MySchedule.DEFAULT_MINUTES * 60L)
+                    picked += MealBreak(if (start.atZone(zone).hour < 16) MealKind.LUNCH else MealKind.DINNER, start, end, place.id)
+                    parts += "**${place.name}** at ${clock(start)}"
+                    cursor = end
+                    place.coordinate?.let { lastPlace = it }
+                }
+            }
+        }
+        val before = ctx.plan ?: Plan(bundle.event.id, ctx.now, "", PlanPreferences(), emptyList(), emptyMap())
+        var days = before.days
+        val fingerprints = before.fingerprints.toMutableMap()
+        for (entry in picked) {
+            if (entry is PlannedItem && entry.itemId in before.itemIds) continue
+            val date = entry.start.atZone(zone).toLocalDate()
+            val at = days.indexOfFirst { it.date == date }
+            days = if (at >= 0) {
+                val d = days[at]
+                days.toMutableList().also {
+                    it[at] = d.copy(
+                        entries = (d.entries + entry).sortedWith(compareBy<PlanEntry> { e -> e.start }.thenBy { e -> e.end }),
+                        windowStart = minOf(d.windowStart, entry.start), windowEnd = maxOf(d.windowEnd, entry.end),
+                    )
+                }
+            } else {
+                (days + PlanDay(date, entry.start, entry.end, listOf(entry))).sortedBy { it.date }
+            }
+            if (entry is PlannedItem) bundle.scheduleItem(entry.itemId)?.let { fingerprints[entry.itemId] = Planner.fingerprint(it) }
+        }
+        val after = before.copy(days = days, fingerprints = fingerprints, request = before.request.ifEmpty { input })
+        val edit = PlanEdit(before, after, PlanDiff.between(before, after, bundle), emptyList())
+        val text = if (parts.size == 2) "${parts[0]}, then ${parts[1]}." else parts.dropLast(1).joinToString(", ") + ", then " + parts.last() + "."
+        val sentence = text.replaceFirstChar { it.uppercase() }
+        return PlanProposal(
+            ProposalKind.SEQUENCE, listOf(ProposalOption("Add to My Schedule", null, edit)),
+            day = PlanProposals.affectedDay(edit, bundle), pill = ProposalText.diff(edit.diff), summary = sentence,
+        )
+    }
 }

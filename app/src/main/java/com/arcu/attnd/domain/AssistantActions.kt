@@ -125,6 +125,7 @@ enum class ActionName(
     WHY_NOT("why_not", listOf(p("item", ParamType.SCHEDULE_ID, true)), false, ConfirmKind.NONE, ActionResultType.EXPLANATION),
     ROUTE("route", listOf(p("to_location", ParamType.LOCATION_ID, true), p("from", ParamType.LOCATION_ID)), false, ConfirmKind.NONE, ActionResultType.ROUTE),
     DAY_ROUTE("day_route", listOf(p("day", ParamType.DAY)), false, ConfirmKind.NONE, ActionResultType.DAY_ROUTE),
+    MY_SCHEDULE("my_schedule", listOf(p("day", ParamType.DAY)), false, ConfirmKind.NONE, ActionResultType.LIKED),
 
     // Write
     LIKE("like", listOf(p("kind", ParamType.KIND, true, "schedule", "location"), p("id", ParamType.ENTITY, true)), true, ConfirmKind.NONE, ActionResultType.ITEM, undoable = true),
@@ -140,7 +141,19 @@ enum class ActionName(
     SHARE_PLAN("share_plan", emptyList(), true, ConfirmKind.SHEET, ActionResultType.SHEET),
     SHARE_ITEM("share_item", listOf(p("id", ParamType.SCHEDULE_ID, true)), true, ConfirmKind.SHEET, ActionResultType.SHEET),
     OPEN("open", listOf(p("screen", ParamType.ENUM, true, *OPEN_SCREENS.toTypedArray()), p("id", ParamType.ENTITY)), false, ConfirmKind.NONE, ActionResultType.NAVIGATION),
-    DIRECTIONS("directions", listOf(p("location", ParamType.LOCATION_ID, true)), false, ConfirmKind.NONE, ActionResultType.NAVIGATION);
+    DIRECTIONS("directions", listOf(p("location", ParamType.LOCATION_ID, true)), false, ConfirmKind.NONE, ActionResultType.NAVIGATION),
+
+    // My schedule (as iOS, Nov 21, 2026): `target` = "s12" / "l3"; times "HH:MM" in the event's zone.
+    SCHEDULE_ADD("schedule_add", listOf(p("target", ParamType.ENTITY, true), p("time", ParamType.TIME), p("minutes", ParamType.INT), p("replace", ParamType.ENTITY)), true, ConfirmKind.NONE, ActionResultType.ITEM, undoable = true),
+    SCHEDULE_REMOVE("schedule_remove", listOf(p("target", ParamType.ENTITY, true)), true, ConfirmKind.NONE, ActionResultType.ITEM, undoable = true),
+    SCHEDULE_MOVE("schedule_move", listOf(p("target", ParamType.ENTITY, true), p("time", ParamType.TIME, true)), true, ConfirmKind.NONE, ActionResultType.ITEM),
+    SCHEDULE_REMINDER("schedule_reminder", listOf(p("target", ParamType.ENTITY, true), p("minutes", ParamType.INT, true)), true, ConfirmKind.NONE, ActionResultType.ITEM),
+
+    // App settings from the chat (as iOS batch 7; router only, always confirmed): the location dot, leaving
+    // the event (`leave`, not the never-available `leave_event`), the test server switch.
+    LOCATION("location", listOf(p("on", ParamType.BOOL, true)), true, ConfirmKind.CHIP, ActionResultType.SETTING),
+    LEAVE("leave", emptyList(), true, ConfirmKind.CHIP, ActionResultType.SETTING),
+    SWITCH_SERVER("switch_server", listOf(p("server", ParamType.ENUM, true, "production", "dev")), true, ConfirmKind.CHIP, ActionResultType.SETTING);
 
     companion object {
         fun of(key: String?): ActionName? = entries.firstOrNull { it.key == key?.trim()?.lowercase() }
@@ -152,7 +165,7 @@ enum class ActionName(
         val NEVER_AVAILABLE = setOf("leave_event", "debug_mode", "copy_support_info", "add_to_calendar")
 
         /** The App Clip's rule-based assistant may only like / unlike among the writes. */
-        val APP_CLIP_WRITES = setOf(LIKE, UNLIKE)
+        val APP_CLIP_WRITES = setOf(LIKE, UNLIKE, SCHEDULE_ADD, SCHEDULE_REMOVE)
     }
 }
 
@@ -176,6 +189,12 @@ data class AssistantAction(val name: ActionName, val params: JsonObject = JsonOb
 
     fun ops(bundle: EventBundle, now: Instant): List<PlanOp>? = PlanOpJson.parse(params["ops"], bundle.event.zone, now)
 
+    /** The My schedule target ("s12" / "l3") under [key]; never an update. */
+    fun scheduleTarget(key: String = "target"): EntityRef? = EntityRef.of(params[key])?.takeIf { it.kind != RefKind.UPDATE }
+
+    /** `minutes` as an int (also "30"). */
+    fun int(key: String): Int? = (params[key] as? JsonPrimitive)?.let { it.intOrNull ?: it.content.trim().toIntOrNull() }
+
     companion object {
         fun like(kind: SearchKind, id: Int, liked: Boolean = true) = AssistantAction(
             if (liked) ActionName.LIKE else ActionName.UNLIKE,
@@ -197,6 +216,22 @@ data class AssistantAction(val name: ActionName, val params: JsonObject = JsonOb
         fun planVersion(kind: PlanVersionKind) = AssistantAction(ActionName.PLAN_VERSION, buildJsonObject { put("kind", kind.key) })
         fun directions(locationId: Int) = AssistantAction(ActionName.DIRECTIONS, buildJsonObject { put("location", "l$locationId") })
         fun simple(name: ActionName) = AssistantAction(name)
+
+        /** My schedule: add (a place at "HH:MM" or saved), optionally replacing a clashing entry. */
+        fun scheduleAdd(ref: EntityRef, time: String? = null, replace: EntityRef? = null) = AssistantAction(ActionName.SCHEDULE_ADD, buildJsonObject {
+            put("target", ref.code)
+            time?.let { put("time", it) }
+            replace?.let { put("replace", it.code) }
+        })
+        fun scheduleRemove(ref: EntityRef) = AssistantAction(ActionName.SCHEDULE_REMOVE, buildJsonObject { put("target", ref.code) })
+        fun scheduleMove(ref: EntityRef, time: String) = AssistantAction(ActionName.SCHEDULE_MOVE, buildJsonObject {
+            put("target", ref.code)
+            put("time", time)
+        })
+        fun scheduleReminder(ref: EntityRef, minutes: Int) = AssistantAction(ActionName.SCHEDULE_REMINDER, buildJsonObject {
+            put("target", ref.code)
+            put("minutes", minutes)
+        })
     }
 }
 
@@ -272,6 +307,8 @@ object ActionRegistry {
     fun undoFor(action: AssistantAction): AssistantAction? = when (action.name) {
         ActionName.LIKE -> action.copy(name = ActionName.UNLIKE)
         ActionName.UNLIKE -> action.copy(name = ActionName.LIKE)
+        ActionName.SCHEDULE_ADD -> action.params["target"]?.let { AssistantAction(ActionName.SCHEDULE_REMOVE, JsonObject(mapOf("target" to it))) }
+        ActionName.SCHEDULE_REMOVE -> AssistantAction(ActionName.SCHEDULE_ADD, action.params)
         ActionName.CHECKOFF -> action.bool("done")?.let { done ->
             AssistantAction(ActionName.CHECKOFF, JsonObject(action.params + ("done" to JsonPrimitive(!done))))
         }
@@ -284,8 +321,12 @@ object ActionRegistry {
         val on = action.bool("on") != false
         return when (action.name) {
             ActionName.FOLLOW_LOCK_SCREEN -> if (on) "Follow your day on the Lock Screen?" else "Stop following on the Lock Screen?"
-            ActionName.REMINDERS -> if (on) "Turn on reminders before liked and planned items?" else "Turn off reminders?"
+            ActionName.REMINDERS -> if (on) "Turn on reminders before things in your schedule?" else "Turn off reminders?"
             ActionName.NOTIFICATIONS -> if (on) "Turn on notifications from the organizer?" else "Turn off notifications from the organizer?"
+            ActionName.LOCATION -> if (on) "Show your location on the map?" else "Stop showing your location on the map?"
+            ActionName.LEAVE -> "Leave this event? Your schedule is kept if you join again."
+            ActionName.SWITCH_SERVER ->
+                if (action.string("server") == "dev") "Switch to the dev server? You'll leave this event." else "Switch to the production server? You'll leave this event."
             else -> "Are you sure?"
         }
     }

@@ -44,6 +44,9 @@ import com.arcu.attnd.domain.PlanProposal
 import com.arcu.attnd.domain.PlanProposals
 import com.arcu.attnd.domain.PlanTabFlow
 import com.arcu.attnd.domain.ProposalKind
+import com.arcu.attnd.domain.EventBundle
+import com.arcu.attnd.domain.MySchedule
+import com.arcu.attnd.domain.ScheduleTarget
 import com.arcu.attnd.domain.ProposalReply
 import com.arcu.attnd.domain.PlanShare
 import com.arcu.attnd.domain.PlanVersionKind
@@ -69,6 +72,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.time.Duration
 import java.time.Instant
+import java.time.LocalTime
 import java.time.LocalDate
 import java.util.Locale
 
@@ -241,6 +245,8 @@ class AssistantController(
             history = plans.history(eventId),
             units = host.units(),
             locale = Locale.getDefault(),
+            schedule = hearts.schedule(eventId),
+            memory = plans.conversation(eventId).memory,
         )
     }
 
@@ -395,7 +401,7 @@ class AssistantController(
         val bundle = repository.bundle.value ?: return
         var conversation = plans.conversation(eventId)
         if (input != null) conversation = conversation.with(ConversationTurn(true, input))
-        conversation = conversation.with(ConversationTurn(false, AssistantFlow.replyText(turn, bundle)))
+        conversation = conversation.with(ConversationTurn(false, AssistantFlow.replyText(turn, bundle))).remembering(turn)
         plans.setConversation(eventId, conversation)
     }
 
@@ -514,7 +520,10 @@ class AssistantController(
         val bundle = repository.bundle.value ?: return null
         val eventId = bundle.event.id
         val action = option.action
-        if (action == null) {
+        if (action == null && proposal.kind == ProposalKind.SEQUENCE) {
+            // "Music, food, then more music": the previewed plan as it is.
+            plans.applyPlan(eventId, option.edit.after)
+        } else if (action == null) {
             // Shared plan: "Use this plan" / "Merge with mine".
             val merge = index == 1
             plans.applyPlan(eventId, option.edit.after)
@@ -702,7 +711,41 @@ class AssistantController(
                 _effects.tryEmit(AssistantEffect.Directions(point))
                 ActionOutcome.Done()
             }
+            ActionName.SCHEDULE_ADD, ActionName.SCHEDULE_REMOVE, ActionName.SCHEDULE_MOVE, ActionName.SCHEDULE_REMINDER -> scheduleAction(action, bundle)
             else -> ActionOutcome.Failed("I can't do that here.")
+        }
+    }
+
+    /** My schedule's actions from the router / model (phase 6a; the chat of 6b keeps them). */
+    private fun scheduleAction(action: AssistantAction, bundle: EventBundle): ActionOutcome {
+        val ref = action.scheduleTarget() ?: return ActionOutcome.Failed("I couldn't find that.")
+        val eventId = bundle.event.id
+        val target = ScheduleTarget(ref.kind.searchKind, ref.id)
+        val name = ref.name(bundle) ?: "it"
+        val zone = bundle.event.zone
+        fun at(time: String?): Instant? = time?.let { runCatching { LocalTime.parse(it) }.getOrNull() }
+            ?.let { MySchedule.date(it, hearts.schedule(eventId).entry(target)?.at, Instant.now(), zone) }
+        return when (action.name) {
+            ActionName.SCHEDULE_ADD -> {
+                action.scheduleTarget("replace")?.let { host.setLiked(it.kind.searchKind, it.id, false) }
+                host.setLiked(ref.kind.searchKind, ref.id, true)
+                if (ref.kind == RefKind.LOCATION) at(action.string("time"))?.let { hearts.move(eventId, target, it) }
+                ActionOutcome.Done("Added $name to your schedule.", listOf(BlockValidator.card(ref)))
+            }
+            ActionName.SCHEDULE_REMOVE -> {
+                host.setLiked(ref.kind.searchKind, ref.id, false)
+                ActionOutcome.Done("Removed $name from your schedule.")
+            }
+            ActionName.SCHEDULE_MOVE -> {
+                val time = at(action.string("time")) ?: return ActionOutcome.Failed("What time?")
+                if (target !in hearts.schedule(eventId)) host.setLiked(ref.kind.searchKind, ref.id, true)
+                hearts.move(eventId, target, time)
+                ActionOutcome.Done("Moved $name.")
+            }
+            else -> {
+                hearts.setReminder(eventId, target, action.int("minutes"))
+                ActionOutcome.Done("Reminder set for $name.")
+            }
         }
     }
 

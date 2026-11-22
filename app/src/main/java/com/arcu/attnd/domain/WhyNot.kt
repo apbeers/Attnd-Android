@@ -85,7 +85,7 @@ object WhyNot {
             val limit = c.maxWalkMinutes
             val overLimit = !overlaps && walk != null && limit != null && walk > limit
             val qualifier = when {
-                liked -> " (liked)"
+                liked -> " (in your schedule)"
                 pinned -> " (you added it)"
                 else -> ""
             }

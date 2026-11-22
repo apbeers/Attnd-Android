@@ -113,7 +113,7 @@ class AssistantExtrasTest {
     @Test
     fun whyNot() {
         fun why(id: Int, p: Plan? = plan, at: Instant = now) = WhyNot.explain(id, p, bundle, hearts, at, Locale.US)?.text
-        assertEquals("Neon Armadillo clashes with The Prairie Lights (liked).", why(114))
+        assertEquals("Neon Armadillo clashes with The Prairie Lights (in your schedule).", why(114))
         assertEquals("There isn't time to walk between Brisket 101 and Juniper Lane.", why(106))
         assertEquals("Los Hermanos Flores is on Sunday, and your plan covers Saturday.", why(201))
         assertEquals("Gates open is already in your plan.", why(111))
@@ -232,7 +232,7 @@ class AssistantExtrasTest {
     @Test
     fun recapAndChanges() {
         val recap = LiveAssist.recap(plan.copy(checkedOff = setOf(109, 102, 103)), bundle, hearts, saturday, at(420), DistanceUnits.IMPERIAL, Locale.US)
-        assertEquals("You saw 3 things, liked 2 and walked 0.2 mi.", recap.text)
+        assertEquals("You saw 3 things, added 2 and walked 0.2 mi.", recap.text)
         assertEquals(listOf(109, 102, 103), recap.checkedOff)
         assertEquals(listOf("Plan tomorrow"), recap.chips.map { it.label })
         assertEquals(AssistantAction.planMake("Plan my Sunday"), recap.chips.single().action)

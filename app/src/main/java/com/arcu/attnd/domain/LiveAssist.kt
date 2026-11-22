@@ -73,7 +73,7 @@ object ChipText {
  * - **Like clash**: a liked item not in the plan whose time overlaps planned items → chip
  *   "Add to plan instead of X?" for the first of them by (start, end, id) (`plan_edit replace X with it`).
  * - **Recap**: the day's checked-off items, the liked count (items + places), the walk through the
- *   checked-off stops ([DayRoutes]): "You saw 3 things, liked 2 and walked 0.4 mi." Chips: "Tomorrow's
+ *   checked-off stops ([DayRoutes]): "You saw 3 things, added 2 and walked 0.4 mi." Chips: "Tomorrow's
  *   plan is ready" (open plan) when the plan has a later day, else "Plan tomorrow" (plan_make "Plan my
  *   <weekday>") when there is a later event day.
  */
@@ -229,7 +229,7 @@ object LiveAssist {
         val liked = hearts.scheduleItems.size + hearts.locations.size
         val walked = DayRoutes.of(plan, bundle, date, only = checked.toSet())?.totalMeters ?: 0.0
         val things = if (checked.size == 1) "1 thing" else "${checked.size} things"
-        val text = "You saw $things, liked $liked and walked ${DistanceFormat.format(walked, units, locale)}."
+        val text = "You saw $things, added $liked and walked ${DistanceFormat.format(walked, units, locale)}."
         val chips = buildList {
             val laterPlanned = plan.days.any { it.date.isAfter(date) && it.items.isNotEmpty() }
             val laterDay = TimeMatcher.eventDays(bundle, now).firstOrNull { it.isAfter(date) }
