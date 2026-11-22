@@ -494,16 +494,16 @@ class EventRepository(
             }
             response.code in 200..299 -> {
                 val json = response.json
-                val parsed = json?.let { ApiMapper.parseBundle(it) }
+                val parsed = json?.let { AppLog.section("bundle_decode") { ApiMapper.parseBundle(it) } }
                 when {
                     json == null || parsed == null -> fail("The server sent content this version can't read.", failuresBeforeError)
                     prefs.eventId != eventId -> RefreshResult.NotModified // left or switched meanwhile
                     else -> {
-                        writeCache(json, parsed.contentVersion)
+                        AppLog.section("bundle_save") { writeCache(json, parsed.contentVersion) }
                         prefs.bundleEtag = response.etag
                         prefs.bundleSections = SectionCatalogue.VERSION
                         val previousVersion = _bundle.value?.contentVersion
-                        _bundle.value = parsed
+                        AppLog.section("bundle_apply") { _bundle.value = parsed }
                         AppLog.info(
                             LogCategory.NET, LogEvent.BUNDLE_APPLIED, "Bundle ${parsed.contentVersion} applied",
                             mapOf(

@@ -15,6 +15,7 @@ import android.view.Display
 import android.view.Surface
 import androidx.core.content.ContextCompat
 import com.arcu.attnd.domain.AppLog
+import com.arcu.attnd.domain.Redact
 import com.arcu.attnd.domain.Geo
 import com.arcu.attnd.domain.GeoPoint
 import com.arcu.attnd.domain.LogCategory
@@ -56,10 +57,29 @@ class UserLocationSource(context: Context) {
                 GeoPoint.of(fix.latitude, fix.longitude)?.let { point ->
                     _location.value = point
                     _accuracy.value = if (fix.hasAccuracy()) fix.accuracy.toDouble() else null
+                    logFix(fix, point)
                 }
             }
         }
     }
+
+    /** `location.fix` (trace), at most one per [FIX_LOG_INTERVAL_MS]; coordinates rounded by `Redact` (0.01°). */
+    private var lastFixLoggedAt = 0L
+
+    private fun logFix(fix: android.location.Location, point: GeoPoint) {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now - lastFixLoggedAt < FIX_LOG_INTERVAL_MS) return
+        lastFixLoggedAt = now
+        val ageS = (android.os.SystemClock.elapsedRealtimeNanos() - fix.elapsedRealtimeNanos) / 1_000_000_000
+        AppLog.trace(
+            LogCategory.LOCATION, LogEvent.LOCATION_FIX, "Location fix",
+            mapOf(
+                "accuracy_m" to if (fix.hasAccuracy()) fix.accuracy.toInt() else null,
+                "age_s" to ageS, "lat" to Redact.coordinate(point.latitude), "lng" to Redact.coordinate(point.longitude),
+            ),
+        )
+    }
+
 
     fun hasPermission(): Boolean = hasLocationPermission(appContext)
 
@@ -129,6 +149,7 @@ class UserLocationSource(context: Context) {
         private const val UPDATE_INTERVAL_MS = 5_000L
         private const val MIN_UPDATE_INTERVAL_MS = 2_000L
         private const val MIN_UPDATE_DISTANCE_M = 5f
+        private const val FIX_LOG_INTERVAL_MS = 30_000L
     }
 }
 

@@ -25,6 +25,8 @@ import com.arcu.attnd.data.log.DiagnosticsController
 import com.arcu.attnd.data.log.ExitReporter
 import com.arcu.attnd.data.log.LaunchTiming
 import com.arcu.attnd.data.log.LogStore
+import com.arcu.attnd.data.log.MainThreadWatchdog
+import com.arcu.attnd.data.net.ServerHost
 import com.arcu.attnd.data.log.PerfRecorder
 import com.arcu.attnd.data.prefs.DevicePrefs
 import com.arcu.attnd.domain.AppLog
@@ -34,6 +36,7 @@ import com.arcu.attnd.domain.DiagnosticsSource
 import com.arcu.attnd.domain.LogCategory
 import com.arcu.attnd.domain.LogEvent
 import com.arcu.attnd.domain.LogLevel
+import com.arcu.attnd.domain.ServerSwitch
 import com.arcu.attnd.live.LiveNotifications
 import com.arcu.attnd.live.LiveUpdateController
 import com.arcu.attnd.push.PushNotifications
@@ -62,6 +65,8 @@ class AttndApplication : Application() {
         super.onCreate()
         LaunchTiming.onProcessStart(Process.getStartUptimeMillis())
         val prefs = DevicePrefs(this)
+        // Before anything builds a URL: the test server picked in Options (dev and debug builds), else the build's.
+        ServerHost.install(ServerSwitch.resolve(BuildConfig.ATTND_SERVER, prefs.serverChoice, BuildConfig.DEV))
         // Logging first (spec §2), so everything after it can log: logcat + the ring buffer.
         val logStore = LogStore(File(filesDir, "logs"))
         val logSink = AndroidLogSink(this, logStore, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE.toString()) { prefs.eventId }
@@ -83,6 +88,8 @@ class AttndApplication : Application() {
             Trace.endSection()
         }
         graph.exits.installCrashHandler(logSink)
+        // perf.hang (iOS MainThreadWatchdog): debug and dev builds only.
+        if (BuildConfig.DEV) MainThreadWatchdog { logSink.isForeground }.start()
         graph.exits.reportPendingLater()
         // Usual launch: give Block Store the id when it lacks it (an install from before Block Store).
         graph.appScope.launch { syncDeviceIdToBlockStore(prefs, blockStore) }

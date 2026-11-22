@@ -101,6 +101,10 @@ class LiveUpdateController(
         }
     }
 
+    /** The reminders waiting for their time at the last update (`live.reminder.scheduled` on change). */
+    @Volatile
+    private var lastPendingReminders: Set<Int>? = null
+
     private suspend fun update(now: Instant) {
         val bundle = repository.restore()
         if (bundle == null || suspended) {
@@ -176,6 +180,12 @@ class LiveUpdateController(
         if (state != null && !dismissedToday) post(bundle, state) else cancelLive(if (dismissedToday) "user" else "day_over")
 
         val reminderWakes = later.map { it.fireAt.minus(REMINDER_EARLY) }
+        // live.reminder.scheduled: only when the set of pending reminders changes (not every recompute).
+        val pendingKeys = later.map { it.shownKey }.toSet()
+        if (pendingKeys != lastPendingReminders) {
+            lastPendingReminders = pendingKeys
+            AppLog.debug(LogCategory.LIVE, LogEvent.LIVE_REMINDER_SCHEDULED, "${later.size} reminders scheduled", mapOf("count" to later.size))
+        }
         val wake = if (!follows) reminderWakes.minOrNull()
         else LiveFollow.nextWake(day ?: summaryDay, now, showing = state != null && !dismissedToday, urgent = urgent, extra = reminderWakes)
         // Assistant spec §6: also wake at My schedule's next item's departure time (running late).

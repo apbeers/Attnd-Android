@@ -1,5 +1,8 @@
 package com.arcu.attnd.data.log
 
+import com.arcu.attnd.domain.AppLog
+import com.arcu.attnd.domain.LogCategory
+import com.arcu.attnd.domain.LogEvent
 import com.arcu.attnd.domain.LogJson
 import com.arcu.attnd.domain.LogRecord
 import java.io.File
@@ -28,8 +31,11 @@ class LogStore(private val dir: File, private val maxBytes: Long = DEFAULT_MAX_B
             dir.mkdirs()
             current.appendText(lines.joinToString("\n", postfix = "\n"), Charsets.UTF_8)
             if (current.length() > maxBytes / 2) {
+                val dropped = previous.length()
                 previous.delete()
                 if (!current.renameTo(previous)) current.delete()
+                // Queued by the sink for the next write (never re-enters this call).
+                AppLog.trace(LogCategory.LOGGING, LogEvent.RING_TRIMMED, "Log ring buffer trimmed", mapOf("bytes" to dropped))
             }
         } catch (_: IOException) {
             // The ring buffer is best effort (disk full).

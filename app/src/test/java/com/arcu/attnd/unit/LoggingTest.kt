@@ -121,6 +121,39 @@ class LoggingTest {
         LogEvent.ALL.filter { it != LogEvent.ERROR_CAUGHT }.forEach { assertTrue(it, it.substringBefore('.') in categories) }
     }
 
+    @Test
+    fun eventNames_includeTheIosParityNames() {
+        // Phase 11: names iOS emits, all rows of attnd-web LOG_EVENTS.md (category, level, fields there).
+        val expected = listOf(
+            "perf.hang", "perf.frame_drops", "lifecycle.server_switch", "live.reminder.scheduled", "net.app_status",
+            "search.open", "ui.banner", "map.fit", "map.pin.selected", "map.route.shown", "map.tiles.error", "location.fix",
+            "storage.prefs.migrated", "storage.images.pruned", "planner.changed", "logging.ring.trimmed",
+        )
+        expected.forEach { assertTrue(it, it in LogEvent.ALL) }
+        // Every constant declared in LogEvent is listed in ALL (reflection over the object's String constants).
+        val declared = LogEvent::class.java.declaredFields
+            .filter { java.lang.reflect.Modifier.isStatic(it.modifiers) && it.type == String::class.java }
+            .map { it.isAccessible = true; it.get(null) as String }
+        assertEquals(declared.toSet(), LogEvent.ALL.toSet())
+    }
+
+    @Test
+    fun signposts_areLogEventsNames_andTheRunningOneIsReported() {
+        assertEquals(
+            listOf("launch", "bundle_fetch", "bundle_decode", "bundle_apply", "bundle_save", "planner", "map_first_render", "search_index"),
+            LogEvent.SIGNPOSTS,
+        )
+        assertNull(AppLog.runningSignpost())
+        val inner = AppLog.section("bundle_apply") { AppLog.runningSignpost() }
+        assertEquals("bundle_apply", inner)
+        val cookie = AppLog.beginAsync("bundle_fetch")
+        assertEquals("bundle_fetch", AppLog.runningSignpost())
+        AppLog.section("bundle_decode") { assertEquals("bundle_decode", AppLog.runningSignpost()) }
+        assertEquals("bundle_fetch", AppLog.runningSignpost())
+        AppLog.endAsync("bundle_fetch", cookie)
+        assertNull(AppLog.runningSignpost())
+    }
+
     // ── Facade ───────────────────────────────────────────────────────────────
 
     private class MemorySink : LogSink {

@@ -29,6 +29,9 @@ import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.LocationSearching
+import androidx.compose.material.icons.filled.Navigation
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AssistChip
@@ -81,6 +84,9 @@ import com.arcu.attnd.domain.MySchedule
 import com.arcu.attnd.domain.LogCategory
 import com.arcu.attnd.domain.LogEvent
 import com.arcu.attnd.domain.LogLevel
+import com.arcu.attnd.domain.MapCamera
+import com.arcu.attnd.domain.MapFit
+import com.arcu.attnd.domain.MapFollowMode
 import com.arcu.attnd.domain.NowPlaying
 import com.arcu.attnd.domain.LayoutScreen
 import com.arcu.attnd.domain.ScreenFacts
@@ -100,6 +106,7 @@ import com.arcu.attnd.ui.components.LocalScreenshotMode
 import com.arcu.attnd.ui.components.rememberDistanceUnits
 import com.arcu.attnd.ui.components.rememberNow
 import com.arcu.attnd.ui.components.rememberUserLocation
+import com.arcu.attnd.ui.components.rememberHeading
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.maps.CameraUpdate
 import com.google.android.gms.maps.CameraUpdateFactory
@@ -112,6 +119,7 @@ import com.google.android.gms.maps.model.LatLngBounds
 import com.google.android.gms.maps.model.MapStyleOptions
 import com.google.android.gms.maps.model.RoundCap
 import com.google.maps.android.clustering.ClusterItem
+import com.google.maps.android.compose.CameraMoveStartedReason
 import com.google.maps.android.compose.CameraPositionState
 import com.google.maps.android.compose.GoogleMap
 import com.google.maps.android.compose.MapProperties
@@ -193,6 +201,7 @@ fun EventMap(
     var selectedCategory by ui::selectedCategory
     var heartedOnly by ui::heartedOnly
     var selectedId by ui::selectedLocationId
+    var follow by rememberSaveable { mutableStateOf(MapFollowMode.OFF) }
     val categories = remember(bundle.locations, bundle.categories) {
         LocationGrouping.availableCategories(bundle.locations, bundle.categories)
     }
@@ -233,22 +242,24 @@ fun EventMap(
     var initialFitDone by rememberSaveable { mutableStateOf(false) }
     val paddingPx = with(density) { 48.dp.roundToPx() }
 
-    fun homeUpdate(): CameraUpdate? {
-        val points = pins.map { it.position }
-        return when {
-            display.mapFitAll && points.size >= 2 -> {
-                val builder = LatLngBounds.builder()
-                points.forEach { builder.include(it) }
-                CameraUpdateFactory.newLatLngBounds(builder.build(), paddingPx)
-            }
-            display.mapFitAll && points.size == 1 -> CameraUpdateFactory.newLatLngZoom(points.first(), STREET_ZOOM)
-            eventCenter != null -> CameraUpdateFactory.newLatLngZoom(eventCenter.toLatLng(), STREET_ZOOM)
-            else -> null
-        }
+    /** The camera move that frames the pins shown now (one pin at street level, several fitted with padding). */
+    fun fitUpdate(): CameraUpdate? = when (val fit = MapCamera.fit(pins.map { it.point })) {
+        MapFit.Nothing -> null
+        is MapFit.Single -> CameraUpdateFactory.newLatLngZoom(fit.point.toLatLng(), STREET_ZOOM)
+        is MapFit.Bounds -> CameraUpdateFactory.newLatLngBounds(LatLngBounds(fit.southwest.toLatLng(), fit.northeast.toLatLng()), paddingPx)
     }
 
-    fun goHome(animate: Boolean) {
-        val update = homeUpdate() ?: return
+    fun homeUpdate(): CameraUpdate? = when {
+        display.mapFitAll && pins.isNotEmpty() -> fitUpdate()
+        eventCenter != null -> CameraUpdateFactory.newLatLngZoom(eventCenter.toLatLng(), STREET_ZOOM)
+        else -> null
+    }
+
+    /** `map.fit` reason: `open` (first framing), `reselect` (the whole-event button, the tab reselected), `filter`. */
+    fun goHome(animate: Boolean, reason: String = "reselect", update: CameraUpdate? = homeUpdate()) {
+        update ?: return
+        follow = MapFollowMode.OFF
+        AppLog.trace(LogCategory.MAP, LogEvent.MAP_FIT, "Map fit ${pins.size} pins", mapOf("pins" to pins.size, "reason" to reason))
         scope.launch {
             try {
                 if (animate) cameraPositionState.animate(update) else cameraPositionState.move(update)
@@ -261,6 +272,9 @@ fun EventMap(
 
     /** Selects a location (pin, "Now playing" chip, "Show on map") and, if asked, moves the camera to it. */
     fun select(location: EventLocation, center: Boolean) {
+        if (selectedId != location.id) {
+            AppLog.debug(LogCategory.MAP, LogEvent.MAP_PIN_SELECTED, "Pin selected", mapOf("location_id" to location.id))
+        }
         selectedId = location.id
         val point = location.coordinate ?: return
         if (!center) return
@@ -275,8 +289,16 @@ fun EventMap(
     LaunchedEffect(mapLoaded) {
         if (mapLoaded && !initialFitDone) {
             initialFitDone = true
-            if (display.mapFitAll) goHome(animate = false)
+            if (display.mapFitAll) goHome(animate = false, reason = "open")
         }
+    }
+    // A category / My Schedule chip refits the camera to the pins left; clearing it fits every pin (iOS batch 7).
+    var lastFilter by remember { mutableStateOf<Pair<String?, Boolean>?>(null) }
+    LaunchedEffect(selectedCategory, heartedOnly, mapLoaded) {
+        if (!mapLoaded) return@LaunchedEffect
+        val current = selectedCategory to heartedOnly
+        if (MapCamera.refitsOnFilter(lastFilter, current)) goHome(animate = true, reason = "filter", update = fitUpdate())
+        lastFilter = current
     }
     LaunchedEffect(recenterRequest) {
         if (recenterRequest > 0 && mapLoaded) goHome(animate = true)
@@ -294,7 +316,29 @@ fun EventMap(
     }
 
     // Walking route to the selected location, from where the user is (re-routed after 50 m).
-    val user = if (selected != null) rememberUserLocation() else null
+    val user = if (selected != null || follow != MapFollowMode.OFF) rememberUserLocation() else null
+    val heading = if (follow == MapFollowMode.FOLLOW_HEADING) rememberHeading() else null
+    // Following: the camera stays on the user (and turns with the phone in heading mode).
+    LaunchedEffect(follow, user, heading?.degrees?.let { (it / FOLLOW_BEARING_STEP).toInt() }) {
+        val point = user ?: return@LaunchedEffect
+        if (follow == MapFollowMode.OFF || !mapLoaded) return@LaunchedEffect
+        val current = cameraPositionState.position
+        val target = CameraPosition.Builder(current)
+            .target(point.toLatLng())
+            .zoom(maxOf(current.zoom, STREET_ZOOM))
+            .bearing(if (follow == MapFollowMode.FOLLOW_HEADING) heading?.degrees ?: current.bearing else current.bearing)
+            .build()
+        try {
+            cameraPositionState.animate(CameraUpdateFactory.newCameraPosition(target), FOLLOW_ANIMATION_MS)
+        } catch (_: Exception) {
+        }
+    }
+    // A pan, pinch or rotate by the user ends following.
+    LaunchedEffect(cameraPositionState.isMoving) {
+        if (cameraPositionState.isMoving && cameraPositionState.cameraMoveStartedReason == CameraMoveStartedReason.GESTURE) {
+            follow = follow.afterGesture()
+        }
+    }
     val units = rememberDistanceUnits()
     val router = remember { (context.applicationContext as? AttndApplication)?.graph?.walkRouter }
     var routeOrigin by remember { mutableStateOf<GeoPoint?>(null) }
@@ -315,6 +359,13 @@ fun EventMap(
         value = target.id to router.route(target.id, origin, destination)
     }
     val shownRoute = route?.takeIf { it.first == selected?.id }?.second
+    LaunchedEffect(selected?.id, shownRoute) {
+        val walk = shownRoute ?: return@LaunchedEffect
+        AppLog.debug(
+            LogCategory.MAP, LogEvent.MAP_ROUTE_SHOWN, "Walking ${if (walk.isEstimate) "estimate" else "route"} shown",
+            mapOf("location_id" to selected?.id, "kind" to if (walk.isEstimate) "estimate" else "route", "min" to Walking.minutes(walk.durationSeconds)),
+        )
+    }
 
     val hasLocationPermission = hasLocationPermission(context)
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -323,6 +374,7 @@ fun EventMap(
         PermissionLog.location("map", result)
         if (result.values.any { it }) {
             onShowUserLocationChange(true)
+            follow = MapFollowMode.FOLLOW
             scope.launch { zoomToUser(context, cameraPositionState) }
         }
     }
@@ -395,6 +447,8 @@ fun EventMap(
                         clusterItemContent = { pin ->
                             PinMarker(pin, if (pin.selected) selectedPinColor else pinColor, labelColor, onLabelColor)
                         },
+                        // Merge only pins that would overlap (iOS batch 7), not everything within maps-utils' 100 dp.
+                        onClusterManager = { manager -> manager.algorithm.maxDistanceBetweenClusteredItems = MapCamera.CLUSTER_DISTANCE_DP },
                     )
                 } else {
                     pins.forEach { pin ->
@@ -452,7 +506,14 @@ fun EventMap(
                 onClick = {
                     if (hasLocationPermission) {
                         onShowUserLocationChange(true)
-                        scope.launch { zoomToUser(context, cameraPositionState) }
+                        // off → follow → follow with heading → off (iOS batch 7).
+                        val next = follow.next()
+                        follow = next
+                        when (next) {
+                            MapFollowMode.FOLLOW -> scope.launch { zoomToUser(context, cameraPositionState) }
+                            MapFollowMode.OFF -> scope.launch { resetBearing(cameraPositionState) }
+                            MapFollowMode.FOLLOW_HEADING -> Unit
+                        }
                     } else {
                         permissionLauncher.launch(
                             arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
@@ -460,7 +521,15 @@ fun EventMap(
                     }
                 },
             ) {
-                Icon(Icons.Filled.MyLocation, contentDescription = "My location")
+                Icon(
+                    when (follow) {
+                        MapFollowMode.OFF -> Icons.Filled.LocationSearching
+                        MapFollowMode.FOLLOW -> Icons.Filled.MyLocation
+                        MapFollowMode.FOLLOW_HEADING -> Icons.Filled.Navigation
+                    },
+                    contentDescription = follow.contentDescription,
+                    tint = if (follow == MapFollowMode.OFF) LocalContentColor.current else MaterialTheme.colorScheme.primary,
+                )
             }
         }
         if (onSearch != null) {
@@ -608,6 +677,19 @@ private fun SelectedLocationCard(
 fun hasLocationPermission(context: Context): Boolean =
     ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
         ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+/** Back to north up (leaving heading mode). */
+private suspend fun resetBearing(camera: CameraPositionState) {
+    if (camera.position.bearing == 0f) return
+    try {
+        camera.animate(CameraUpdateFactory.newCameraPosition(CameraPosition.Builder(camera.position).bearing(0f).build()))
+    } catch (_: Exception) {
+    }
+}
+
+private const val FOLLOW_ANIMATION_MS = 400
+/** Heading changes smaller than this don't move the camera (the compass jitters). */
+private const val FOLLOW_BEARING_STEP = 5f
 
 @SuppressLint("MissingPermission")
 private suspend fun zoomToUser(context: Context, camera: CameraPositionState) {

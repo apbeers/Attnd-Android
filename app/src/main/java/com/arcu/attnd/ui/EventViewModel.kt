@@ -10,6 +10,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.arcu.attnd.AttndApplication
 import com.arcu.attnd.BuildConfig
+import com.arcu.attnd.data.net.ServerHost
 import com.arcu.attnd.data.AssistantAvailability
 import com.arcu.attnd.data.EventRepository
 import com.arcu.attnd.data.HeartStore
@@ -35,6 +36,10 @@ import com.arcu.attnd.domain.ScheduleTarget
 import com.arcu.attnd.domain.ActionName
 import com.arcu.attnd.domain.ActionSource
 import com.arcu.attnd.domain.AppLog
+import com.arcu.attnd.domain.EventSearch
+import com.arcu.attnd.domain.ServerSwitch
+import com.arcu.attnd.domain.TestServer
+import com.arcu.attnd.util.integrity.AttestationManager
 import com.arcu.attnd.domain.AppUpdate
 import com.arcu.attnd.domain.Chip
 import com.arcu.attnd.domain.DistanceUnits
@@ -80,6 +85,7 @@ import com.arcu.attnd.ui.assistant.AssistantHost
 import com.arcu.attnd.ui.screens.SearchEntry
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -90,6 +96,9 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.File
@@ -279,7 +288,7 @@ class EventViewModel(
         appVersion = BuildConfig.VERSION_NAME,
         versionCode = BuildConfig.VERSION_CODE,
         buildType = BuildConfig.BUILD_TYPE,
-        serverHost = BuildConfig.ATTND_SERVER,
+        serverHost = ServerHost.host,
         apiVersion = AttndApi.API_VERSION,
         osVersion = "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
         device = "${Build.MANUFACTURER} ${Build.MODEL}",
@@ -429,11 +438,51 @@ class EventViewModel(
                 dismissedUrgentIds = eventId?.let { state.dismissedUrgent[it] ?: prefs.homeUrgentDismissed(it) }.orEmpty(),
                 undoToast = state.undoToast.takeIf { screenshot == null },
             )
-        }.stateIn(viewModelScope, SharingStarted.Eagerly, AppUiState())
+        }
+            // The derivation is pure (prefs reads are in memory): off the main thread, assigned in one go (iOS "Main thread").
+            .flowOn(Dispatchers.Default)
+            .stateIn(viewModelScope, SharingStarted.Eagerly, AppUiState())
+
+    /**
+     * The test server switch (dev and debug builds only, [ServerSwitch]): null in store builds. Options → About &
+     * support shows it; a new choice applies at the next launch.
+     */
+    private val _serverChoice = MutableStateFlow(
+        if (ServerSwitch.isSwitchable(BuildConfig.DEV)) ServerSwitch.choice(ServerHost.host, prefs.serverChoice) else null
+    )
+    val serverChoice: StateFlow<ServerSwitch.Choice?> = _serverChoice
+
+    /**
+     * Picks the server for the next launch (iOS `AppState.switchServer`): leaves the current event first (its
+     * `leave/` goes to the server in use now), drops this server's JWT and logs `lifecycle.server_switch`.
+     */
+    fun switchServer(target: TestServer) {
+        if (!ServerSwitch.isSwitchable(BuildConfig.DEV)) return
+        if (!ServerSwitch.isChange(ServerHost.host, prefs.serverChoice, target)) return
+        viewModelScope.launch {
+            if (repository.bundle.value != null) {
+                repository.leave()
+                planner.clearError()
+                nav.resetForLeave()
+            }
+            // Leaves queued for this server mean nothing to the other one.
+            prefs.pendingLeaves = emptySet()
+            AttestationManager.invalidateToken()
+            prefs.serverChoice = target.name
+            _serverChoice.value = ServerSwitch.choice(ServerHost.host, target.name)
+            AppLog.notice(LogCategory.LIFECYCLE, LogEvent.SERVER_SWITCH, "Test server: ${target.label} at the next launch", mapOf("to" to target.logName))
+        }
+    }
 
     private val startJob: Job = viewModelScope.launch { start() }
 
     init {
+        // The search index of every applied bundle, built off the main thread (iOS `search_index`).
+        viewModelScope.launch(Dispatchers.Default) {
+            repository.bundle.filterNotNull().distinctUntilChanged { a, b -> a === b }.collectLatest { bundle ->
+                AppLog.section("search_index") { EventSearch.index(bundle) }
+            }
+        }
         // API-005 `tab_view`: whatever the user is looking at in the event (the initial/default
         // tab, every tab change, a jump from a pin or a push, and Options), counted on change.
         viewModelScope.launch {

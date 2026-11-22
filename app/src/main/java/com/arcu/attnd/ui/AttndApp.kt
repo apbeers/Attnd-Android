@@ -125,6 +125,7 @@ import kotlinx.coroutines.delay
 @Composable
 fun AttndApp(viewModel: EventViewModel = viewModel(factory = EventViewModel.Factory)) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val serverChoice by viewModel.serverChoice.collectAsStateWithLifecycle()
     AttndTheme(eventTheme = state.bundle?.event?.theme, accentColor = state.bundle?.display?.accentColor, screenshot = state.isScreenshot) {
         // API-024 screens: the bundle's layouts (never in screenshot mode) and what their conditions read.
         val screenEnv = ScreenEnv(
@@ -191,6 +192,8 @@ fun AttndApp(viewModel: EventViewModel = viewModel(factory = EventViewModel.Fact
                                 },
                                 permissionAsked = viewModel::permissionAsked,
                                 onPermissionAsked = viewModel::markPermissionAsked,
+                                serverChoice = serverChoice,
+                                onSwitchServer = viewModel::switchServer,
                             )
                         } else {
                             // Hearts and "Show on map" for every row, detail, card and the search sheet.

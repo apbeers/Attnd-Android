@@ -113,19 +113,35 @@ object AppLog {
 
     /**
      * A synchronous `Trace` section (the planner), also logged as `perf.signpost` with its `ms`. [name] is one
-     * of LOG_EVENTS.md's signpost names: `launch`, `bundle_fetch`, `bundle_decode`, `planner`, `map_first_render`.
+     * of [LogEvent.SIGNPOSTS] (LOG_EVENTS.md). The newest open one is [runningSignpost].
      */
     inline fun <T> section(name: String, block: () -> T): T {
         val target = sink
         val started = System.nanoTime()
+        val cookie = opened(name)
         target?.beginSection(name)
         try {
             return block()
         } finally {
             target?.endSection()
+            closed(cookie)
             signpost(name, (System.nanoTime() - started) / 1_000_000)
         }
     }
+
+    /** Sections still open, by cookie (newest = highest): `perf.hang`'s `signpost` field. */
+    private val running = java.util.concurrent.ConcurrentHashMap<Int, String>()
+
+    @PublishedApi
+    internal fun opened(name: String): Int = cookies.incrementAndGet().also { running[it] = name }
+
+    @PublishedApi
+    internal fun closed(cookie: Int) {
+        running.remove(cookie)
+    }
+
+    /** The newest Trace section still running on any thread, or null (`perf.hang`). */
+    fun runningSignpost(): String? = running.maxByOrNull { it.key }?.value
 
     /** An async `Trace` section that may cross threads (bundle fetch), also logged as `perf.signpost`. */
     suspend fun <T> asyncSection(name: String, block: suspend () -> T): T {
@@ -139,7 +155,7 @@ object AppLog {
 
     private val asyncStarts = java.util.concurrent.ConcurrentHashMap<Int, Long>()
 
-    fun beginAsync(name: String): Int = cookies.incrementAndGet().also {
+    fun beginAsync(name: String): Int = opened(name).also {
         asyncStarts[it] = System.nanoTime()
         sink?.beginAsyncSection(name, it)
     }
@@ -147,6 +163,7 @@ object AppLog {
     /** Ends the section; returns its length in ms. */
     fun endAsync(name: String, cookie: Int): Long {
         sink?.endAsyncSection(name, cookie)
+        closed(cookie)
         val ms = asyncStarts.remove(cookie)?.let { (System.nanoTime() - it) / 1_000_000 } ?: 0L
         signpost(name, ms)
         return ms
