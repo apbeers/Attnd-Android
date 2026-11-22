@@ -84,15 +84,6 @@ class LiveFollowTest {
     }
 
     @Test
-    fun arrivingAtTheVenueStartsTheDayEarly() {
-        assertNull(LiveFollow.state(bundle, null, hearts, at("14:00"), locale = Locale.US))
-        val arrived = LiveFollow.state(bundle, null, hearts, at("14:00"), arrived = true, locale = Locale.US)!!
-        assertEquals(LiveMode.BEFORE, arrived.mode)
-        assertEquals(101, arrived.next?.id)
-        assertEquals(at("14:15"), LiveFollow.nextWake(bundle, null, hearts, at("14:00"), arrived = true))
-    }
-
-    @Test
     fun gatesOpenBeforeTheEvent() {
         val state = LiveFollow.state(bundle, null, Hearts.NONE, at("09:00"), locale = Locale.US)!!
         assertEquals(LiveMode.BEFORE, state.mode)
@@ -127,16 +118,6 @@ class LiveFollowTest {
         assertEquals(PlannerFixture.sun("07:00").toInstant(), LiveFollow.nextWake(bundle, null, hearts, at("22:00")))
     }
 
-    @Test
-    fun venueFenceCoversEveryLocation() {
-        val (centre, radius) = LiveFollow.venueFence(bundle)!!
-        assertEquals(GeoPoint(32.7495, -97.3316), centre)
-        assertEquals(394.0, radius, 1.0) // Panther Island Pavilion is ~244 m from the centre, + 150 m
-        val tiny = bundle.copy(locations = bundle.locations.filter { it.coordinate == null })
-        assertEquals(LiveFollow.MIN_FENCE_METERS, LiveFollow.venueFence(tiny)!!.second, 0.0)
-        val nowhere = bundle.copy(event = bundle.event.copy(coordinate = null), locations = bundle.locations.map { it.copy(coordinate = null) })
-        assertNull(LiveFollow.venueFence(nowhere))
-    }
 
     @Test
     fun remindersUseTheWalk() {

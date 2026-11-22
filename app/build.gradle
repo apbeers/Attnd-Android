@@ -52,10 +52,14 @@ android {
 
         manifestPlaceholders = [MAPS_API_KEY: mapsKey]
 
-        // Logging spec §2–4: dev builds (and local debug builds) log at debug level, show the log viewer
-        // and upload their logs continuously; release builds keep warnings on the device unless the user
-        // turns on debug mode.
+        // Logging spec §2–4: dev builds (and local debug builds) log at debug level and show the log
+        // viewer; dev builds also upload their logs continuously; release builds keep errors on the device
+        // unless the user turns on debug mode.
         buildConfigField "boolean", "DEV", "false"
+        // Whether this build may upload logs (dev builds always, release builds in a debug session).
+        // Local debug builds never upload (iOS: Xcode builds never upload); they keep logcat, the ring
+        // buffer and the log viewer.
+        buildConfigField "boolean", "UPLOAD_LOGS", "true"
     }
 
     signingConfigs {
@@ -91,6 +95,7 @@ android {
             }
             versionNameSuffix "-debug"
             buildConfigField "boolean", "DEV", "true"
+            buildConfigField "boolean", "UPLOAD_LOGS", "false"
         }
         release {
             signingConfig = signingConfigs.getByName("release")

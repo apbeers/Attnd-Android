@@ -429,7 +429,8 @@ private fun DiagnosticsSection(
             }
             else -> {
                 Text(
-                    if (state.dev) "Dev build: debug logging and uploads are always on." else "On · ends in ${session.remainingText(now)}",
+                    if (state.dev && state.uploadsSuspended) "Debug build: debug logging is always on (kept on this phone, never uploaded)."
+                    else if (state.dev) "Dev build: debug logging and uploads are always on." else "On · ends in ${session.remainingText(now)}",
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Text("Debug code", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)

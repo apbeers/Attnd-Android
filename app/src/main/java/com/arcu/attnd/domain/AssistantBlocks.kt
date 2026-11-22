@@ -53,7 +53,6 @@ sealed interface AssistantBlock {
 
     /** `plan` or `item:s12`. */
     data class Share(val target: String) : AssistantBlock { override val type get() = "share" }
-    data class Calendar(val ids: List<Int> = emptyList(), val plan: Boolean = false) : AssistantBlock { override val type get() = "calendar" }
     data class Chips(val chips: List<Chip>) : AssistantBlock { override val type get() = "chips" }
     data class Confirm(val action: AssistantAction, val prompt: String) : AssistantBlock { override val type get() = "confirm" }
 
@@ -66,7 +65,7 @@ sealed interface AssistantBlock {
         val SUMMARIES = setOf("walking", "recap", "liked_counts")
         val TYPES = setOf(
             "text", "item_card", "place_card", "update_card", "list", "carousel", "timeline", "map", "gallery", "now_next",
-            "countdown", "compare", "plan_diff", "plan", "setting", "summary", "share", "calendar", "chips", "confirm",
+            "countdown", "compare", "plan_diff", "plan", "setting", "summary", "share", "chips", "confirm",
         )
     }
 }
@@ -131,7 +130,6 @@ object BlockJson {
             is AssistantBlock.Setting -> put("setting", block.setting)
             is AssistantBlock.Summary -> put("kind", block.kind)
             is AssistantBlock.Share -> put("target", block.target)
-            is AssistantBlock.Calendar -> { put("ids", strings(block.ids.map { "s$it" })); if (block.plan) put("plan", true) }
             is AssistantBlock.Chips -> put("chips", JsonArray(block.chips.map { chip ->
                 buildJsonObject { put("label", chip.label); put("action", chip.action.name.key); put("params", chip.action.params) }
             }))
@@ -154,7 +152,7 @@ object BlockJson {
      * Reads one block. Required props: `text` (text); `id` (item_card, place_card, update_card,
      * countdown); `ids` array (list, carousel); `ids` array or `source` (timeline); `pins` array (map);
      * `ids` array or `flyer` (gallery); `a` + `b` (compare); `diff` object (plan_diff); `setting`
-     * (setting); `kind` (summary); `target` (share); `ids` array or `plan` (calendar); `chips` array of
+     * (setting); `kind` (summary); `target` (share); `chips` array of
      * {label, action, params?} (chips; a chip whose action isn't in the registry is dropped); a
      * registry `action` (confirm). An id that has the wrong form (not a number
      * or "s12") is malformed; a well-formed id that isn't in the bundle is dropped later by
@@ -201,12 +199,6 @@ object BlockJson {
             "setting" -> AssistantBlock.Setting(str("setting")?.lowercase() ?: return malformed)
             "summary" -> AssistantBlock.Summary(str("kind")?.lowercase() ?: return malformed)
             "share" -> AssistantBlock.Share(str("target")?.trim()?.lowercase() ?: return malformed)
-            "calendar" -> {
-                val plan = (obj["plan"] as? JsonPrimitive)?.booleanOrNull == true || str("plan") == "true"
-                val list = if (obj.containsKey("ids")) ids("ids", 's') ?: return malformed else emptyList()
-                if (list.isEmpty() && !plan) return malformed
-                AssistantBlock.Calendar(list, plan)
-            }
             "chips" -> AssistantBlock.Chips((arr("chips") ?: return malformed).mapNotNull { e ->
                 val chip = e as? JsonObject ?: return malformed
                 val label = (chip["label"] as? JsonPrimitive)?.content ?: return malformed
@@ -348,11 +340,6 @@ object BlockValidator {
                 block.target.startsWith("item:") -> EntityRef.parse(block.target.removePrefix("item:"))
                     ?.takeIf { it.kind == RefKind.SCHEDULE && it.exists(bundle) }?.let { AssistantBlock.Share("item:${it.code}") }
                 else -> null
-            }
-            is AssistantBlock.Calendar -> {
-                val ids = block.ids.filter(::item).distinct()
-                val plan = block.plan && hasPlan
-                if (ids.isEmpty() && !plan) null else AssistantBlock.Calendar(ids, plan)
             }
             is AssistantBlock.Chips -> {
                 val seen = HashSet<String>()

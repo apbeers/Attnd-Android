@@ -129,13 +129,6 @@ class PlanStore(private val prefs: DevicePrefs) {
         changed()
     }
 
-    fun arrived(eventId: Int, day: LocalDate): Boolean = prefs.liveArrivedDay(eventId) == day.toString()
-
-    fun setArrived(eventId: Int, day: LocalDate) {
-        prefs.setLiveArrivedDay(eventId, day.toString())
-        changed()
-    }
-
     fun urgent(eventId: Int): UrgentBlock? {
         val parts = prefs.urgent(eventId)?.split('|', limit = 4) ?: return null
         if (parts.size < 4) return null

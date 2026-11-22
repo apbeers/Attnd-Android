@@ -79,7 +79,7 @@ enum class ConfirmKind {
     /** A `confirm` block (Yes / No) first. */
     CHIP,
 
-    /** The OS sheet (share, calendar) is the confirmation. */
+    /** The OS sheet (share) is the confirmation. */
     SHEET,
 }
 
@@ -137,7 +137,6 @@ enum class ActionName(
     FOLLOW_LOCK_SCREEN("follow_lock_screen", listOf(p("on", ParamType.BOOL, true)), true, ConfirmKind.CHIP, ActionResultType.SETTING),
     REMINDERS("reminders", listOf(p("on", ParamType.BOOL, true)), true, ConfirmKind.CHIP, ActionResultType.SETTING),
     NOTIFICATIONS("notifications", listOf(p("on", ParamType.BOOL, true)), true, ConfirmKind.CHIP, ActionResultType.SETTING),
-    ADD_TO_CALENDAR("add_to_calendar", listOf(p("ids", ParamType.ENTITIES), p("plan", ParamType.BOOL)), true, ConfirmKind.SHEET, ActionResultType.SHEET),
     SHARE_PLAN("share_plan", emptyList(), true, ConfirmKind.SHEET, ActionResultType.SHEET),
     SHARE_ITEM("share_item", listOf(p("id", ParamType.SCHEDULE_ID, true)), true, ConfirmKind.SHEET, ActionResultType.SHEET),
     OPEN("open", listOf(p("screen", ParamType.ENUM, true, *OPEN_SCREENS.toTypedArray()), p("id", ParamType.ENTITY)), false, ConfirmKind.NONE, ActionResultType.NAVIGATION),
@@ -146,8 +145,11 @@ enum class ActionName(
     companion object {
         fun of(key: String?): ActionName? = entries.firstOrNull { it.key == key?.trim()?.lowercase() }
 
-        /** Manual-only actions: never offered to or accepted from the assistant. */
-        val NEVER_AVAILABLE = setOf("leave_event", "debug_mode", "copy_support_info")
+        /**
+         * Manual-only actions: never offered to or accepted from the assistant. `add_to_calendar` as on
+         * iOS (no Add to Calendar since Nov 19, 2026).
+         */
+        val NEVER_AVAILABLE = setOf("leave_event", "debug_mode", "copy_support_info", "add_to_calendar")
 
         /** The App Clip's rule-based assistant may only like / unlike among the writes. */
         val APP_CLIP_WRITES = setOf(LIKE, UNLIKE)
@@ -195,7 +197,6 @@ data class AssistantAction(val name: ActionName, val params: JsonObject = JsonOb
         fun planVersion(kind: PlanVersionKind) = AssistantAction(ActionName.PLAN_VERSION, buildJsonObject { put("kind", kind.key) })
         fun directions(locationId: Int) = AssistantAction(ActionName.DIRECTIONS, buildJsonObject { put("location", "l$locationId") })
         fun simple(name: ActionName) = AssistantAction(name)
-        fun calendarPlan() = AssistantAction(ActionName.ADD_TO_CALENDAR, buildJsonObject { put("plan", true) })
     }
 }
 
@@ -223,8 +224,7 @@ object ActionRegistry {
      * Validates [name] + [params] (from the model, the router or a chip): the name must be in the
      * registry and not [ActionName.NEVER_AVAILABLE]; every required param present; ids must exist in
      * the bundle (like/unlike: `id` of the given `kind`); times "HH:MM"; days event days; enums in
-     * their values; `ops` readable plan ops; `ids` (calendar) at least one existing schedule ref or
-     * `plan` true.
+     * their values; `ops` readable plan ops.
      */
     fun check(name: String?, params: JsonObject?, bundle: EventBundle, now: Instant): ActionCheck {
         if (name?.trim()?.lowercase() in ActionName.NEVER_AVAILABLE) return ActionCheck.Invalid("not available to the assistant")
@@ -238,11 +238,7 @@ object ActionRegistry {
             }
             if (!valid(param, element, values, bundle, now)) return ActionCheck.Invalid("bad ${param.name}")
         }
-        val assistantAction = AssistantAction(action, values)
-        if (action == ActionName.ADD_TO_CALENDAR && assistantAction.bool("plan") != true &&
-            assistantAction.refs("ids").none { it.kind == RefKind.SCHEDULE && it.exists(bundle) }
-        ) return ActionCheck.Invalid("nothing to add")
-        return ActionCheck.Valid(assistantAction)
+        return ActionCheck.Valid(AssistantAction(action, values))
     }
 
     private fun valid(param: ActionParam, element: JsonElement, all: JsonObject, bundle: EventBundle, now: Instant): Boolean {

@@ -48,7 +48,7 @@ object LogEvent {
     const val REFRESH_FINISHED = "background.refresh.finished"
     const val REFRESH_FAILED = "background.refresh.failed"
 
-    // live (Live Update, reminders, venue arrival)
+    // live (Live Update, reminders; live.arrival stays in LOG_EVENTS.md, no longer emitted)
     const val LIVE_START = "live.start"
     const val LIVE_START_FAILED = "live.start.failed"
     const val LIVE_UPDATE = "live.update"

@@ -106,7 +106,7 @@ object AssistantModel {
             appendLine("Choose how to answer the attendee. Reply with only one JSON object and no other text:")
             appendLine("""{"blocks":[{"type":"text","text":"…"}],"actions":[]}""")
             appendLine("BLOCKS (use ids from ITEMS only, like \"s12\", \"l3\", \"u9\"):")
-            appendLine("text{text} item_card{id} place_card{id} update_card{id} list{ids,title} carousel{ids,title} timeline{ids} map{pins,route} gallery{ids} now_next{location} countdown{id} compare{a,b} plan{} setting{setting} summary{kind} share{target} calendar{ids|plan} chips{chips:[{label,action,params}]} confirm{action,params,prompt}")
+            appendLine("text{text} item_card{id} place_card{id} update_card{id} list{ids,title} carousel{ids,title} timeline{ids} map{pins,route} gallery{ids} now_next{location} countdown{id} compare{a,b} plan{} setting{setting} summary{kind} share{target} chips{chips:[{label,action,params}]} confirm{action,params,prompt}")
             appendLine("READ ACTIONS: $reads")
             appendLine("WRITE ACTIONS (the app asks or offers Undo): $writes")
             appendLine("Rules: at most 8 blocks; text at most 400 characters; end with at most 5 chips; one card for one result, a carousel for 2–8; never invent ids, times or facts.")

@@ -30,7 +30,6 @@ import androidx.compose.material.icons.filled.Map
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.ButtonGroup
-import com.arcu.attnd.ui.components.AskAboutButton
 import androidx.compose.material3.ButtonGroupDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -435,7 +434,6 @@ fun LocationDetail(
                         }
                     }
                 }
-                actions.onAskAbout?.let { ask -> AskAboutButton { ask(SearchKind.LOCATION, location.id) } }
                 if (location.description.isNotBlank()) {
                     Text(location.description, style = MaterialTheme.typography.bodyLarge)
                 }

@@ -39,10 +39,8 @@ import androidx.compose.ui.unit.dp
 import com.arcu.attnd.domain.EventBundle
 import com.arcu.attnd.domain.EventTime
 import com.arcu.attnd.domain.SearchKind
-import com.arcu.attnd.ui.components.AskAboutButton
 import com.arcu.attnd.ui.components.EmptyState
 import com.arcu.attnd.ui.components.EventInfoCard
-import com.arcu.attnd.ui.components.LocalEventActions
 import com.arcu.attnd.ui.components.RemoteImage
 
 /** What the assistant screen's own back stack holds above the conversation: an item's detail. */
@@ -147,7 +145,6 @@ fun SearchDetail(
                 if (notification == null) {
                     EmptyState("This update is no longer available.")
                 } else {
-                    val ask = LocalEventActions.current.onAskAbout
                     Column(
                         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -162,7 +159,6 @@ fun SearchDetail(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         if (notification.body.isNotBlank()) Text(notification.body, style = MaterialTheme.typography.bodyLarge)
-                        if (ask != null) AskAboutButton { ask(SearchKind.NOTIFICATION, notification.id) }
                     }
                 }
             }

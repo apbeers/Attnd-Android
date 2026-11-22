@@ -134,20 +134,8 @@ object LiveFollow {
     }
 
     /**
-     * [nextWindow], started early when the attendee [arrived] at the venue (geofence) on that window's
-     * day: from [now] instead of 2 h before the first item.
-     */
-    fun currentWindow(bundle: EventBundle, plan: Plan?, hearts: Hearts, now: Instant, skipped: Set<Int>, arrived: Boolean): Pair<Instant, Instant>? {
-        val window = nextWindow(bundle, plan, hearts, now, skipped) ?: return null
-        val zone = bundle.event.zone
-        val sameDay = window.first.plus(LEAD).atZone(zone).toLocalDate() == now.atZone(zone).toLocalDate()
-        return if (arrived && sameDay && window.first.isAfter(now)) now to window.second else window
-    }
-
-    /**
      * The Live Update at [now], or null when there should be none (outside every window and no active
-     * urgent block). [user] gives the walk to the next item when nothing is in progress; [arrived]
-     * (the venue geofence fired today) starts the day's window early.
+     * urgent block). [user] gives the walk to the next item when nothing is in progress.
      */
     fun state(
         bundle: EventBundle,
@@ -158,13 +146,12 @@ object LiveFollow {
         urgent: UrgentBlock? = null,
         dismissedUrgentId: Int? = null,
         user: GeoPoint? = null,
-        arrived: Boolean = false,
         locale: Locale = Locale.getDefault(),
     ): LiveState? {
         val zone = bundle.event.zone
         val activeUrgent = urgent?.takeIf { it.isActive(now, dismissedUrgentId) }
         // The window that contains now (it may have started the evening before for a late item).
-        val window = currentWindow(bundle, plan, hearts, now, skipped, arrived)?.takeIf { !it.first.isAfter(now) }
+        val window = nextWindow(bundle, plan, hearts, now, skipped)?.takeIf { !it.first.isAfter(now) }
         if (window == null && activeUrgent == null) return null
         // The day whose items make the window: the one its first item starts on (else today).
         val day = (window?.first?.plus(LEAD) ?: now).atZone(zone).toLocalDate()
@@ -307,9 +294,8 @@ object LiveFollow {
         urgent: UrgentBlock? = null,
         dismissedUrgentId: Int? = null,
         reminders: List<Pair<Int, Instant>> = emptyList(),
-        arrived: Boolean = false,
     ): Instant? {
-        val window = currentWindow(bundle, plan, hearts, now, skipped, arrived)
+        val window = nextWindow(bundle, plan, hearts, now, skipped)
         val candidates = mutableListOf<Instant>()
         val showing = (window != null && !window.first.isAfter(now)) || urgent?.isActive(now, dismissedUrgentId) == true
         if (window != null) {
@@ -325,26 +311,6 @@ object LiveFollow {
         reminders.forEach { candidates += it.second }
         if (showing) candidates += now.plus(REFRESH_EVERY)
         return candidates.filter { it.isAfter(now) }.minOrNull()
-    }
-
-    // ── Venue geofence ──────────────────────────────────────────────────────
-
-    const val MIN_FENCE_METERS = 200.0
-    const val MAX_FENCE_METERS = 2_000.0
-    const val FENCE_MARGIN_METERS = 150.0
-
-    /**
-     * The venue circle for the arrival geofence: centred on the event's coordinate (else the mean of
-     * the locations' coordinates), radius = the farthest location + 150 m, clamped to 200–2,000 m.
-     * Null without any coordinate.
-     */
-    fun venueFence(bundle: EventBundle): Pair<GeoPoint, Double>? {
-        val points = bundle.locations.mapNotNull { it.coordinate }
-        val centre = bundle.event.coordinate
-            ?: points.takeIf { it.isNotEmpty() }?.let { p -> GeoPoint(p.sumOf { it.latitude } / p.size, p.sumOf { it.longitude } / p.size) }
-            ?: return null
-        val farthest = points.maxOfOrNull { Geo.distanceMeters(centre, it) } ?: 0.0
-        return centre to (farthest + FENCE_MARGIN_METERS).coerceIn(MIN_FENCE_METERS, MAX_FENCE_METERS)
     }
 
     // ── Reminders ───────────────────────────────────────────────────────────

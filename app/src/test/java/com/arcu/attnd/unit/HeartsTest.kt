@@ -12,7 +12,6 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.util.Locale
 
 /** Hearts (stored per event on the device), their API-009 usage names, and the "Hearted" search filter. */
 class HeartsTest {

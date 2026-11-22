@@ -106,11 +106,6 @@ class DevicePrefs(context: Context) {
         if (day == null) remove("$KEY_LIVE_DISMISSED$eventId") else putString("$KEY_LIVE_DISMISSED$eventId", day)
     }
 
-    /** The day (ISO date) the venue geofence last reported an arrival. */
-    fun liveArrivedDay(eventId: Int): String? = prefs.getString("$KEY_ARRIVED$eventId", null)
-
-    fun setLiveArrivedDay(eventId: Int, day: String) = prefs.edit { putString("$KEY_ARRIVED$eventId", day) }
-
     /** API-011: the latest urgent announcement, as `id|sentAtEpochMs|title|body` (body may contain `|`). */
     fun urgent(eventId: Int): String? = prefs.getString("$KEY_URGENT$eventId", null)
 
@@ -195,7 +190,6 @@ class DevicePrefs(context: Context) {
         private const val KEY_FOLLOW = "follow_live_"
         private const val KEY_SKIPPED = "live_skipped_"
         private const val KEY_LIVE_DISMISSED = "live_dismissed_"
-        private const val KEY_ARRIVED = "live_arrived_"
         private const val KEY_URGENT = "urgent_"
         private const val KEY_URGENT_DISMISSED = "urgent_dismissed_"
         private const val KEY_REMINDERS = "reminders_shown_"

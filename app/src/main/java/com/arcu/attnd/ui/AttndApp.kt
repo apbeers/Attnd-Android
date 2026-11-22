@@ -108,10 +108,6 @@ import kotlinx.coroutines.delay
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 
 /** Root composable: theme (with the event's accent colour) and launch vs. event UI. */
 @Composable
@@ -173,12 +169,11 @@ fun AttndApp(viewModel: EventViewModel = viewModel(factory = EventViewModel.Fact
                         } else {
                             // Hearts and "Show on map" for every row, detail, card and the search screen.
                             val hasMap = Tab.MAP in bundle.display.tabs
-                            val actions = remember(state.hearts, hasMap, viewModel, state.isScreenshot) {
+                            val actions = remember(state.hearts, hasMap, viewModel) {
                                 EventActions(
                                     hearts = state.hearts,
                                     onToggleHeart = viewModel::toggleHeart,
                                     onShowOnMap = if (hasMap) { id -> viewModel.closeAssistant(); viewModel.showOnMap(id) } else null,
-                                    onAskAbout = if (state.isScreenshot) null else viewModel::askAbout,
                                 )
                             }
                             CompositionLocalProvider(LocalEventActions provides actions) {
@@ -389,7 +384,7 @@ private fun EventShell(state: AppUiState, bundle: EventBundle, viewModel: EventV
                     tabStates.SaveableStateProvider(state.selectedItem.key + ":" + (state.selectedTab?.key ?: "")) {
                         TabContent(state, bundle, viewModel, blockActions, onMapSearch = if (fabInMapToolbar) openSearch else null)
                     }
-                    // Floats over the content (no layout space) so demo / ended events stay obvious.
+                    // Floats over the content (no layout space) so ended events stay obvious.
                     EventStatusPills(bundle.event, Modifier.align(Alignment.TopCenter))
                     // The input bar over this tab (the search FAB's target; never in screenshot mode).
                     if (state.assistantOpen) {
@@ -534,11 +529,6 @@ private fun rememberBlockActions(state: AppUiState, bundle: EventBundle, viewMod
             onDirections = { id -> controller.run(AssistantAction.directions(id), null, ActionSource.MANUAL) },
             onShare = { target, via -> controller.shareFromBlock(target, via) },
             shareLink = controller::shareLink,
-            onCalendar = { ids, plan ->
-                val action = if (plan) AssistantAction.calendarPlan()
-                else AssistantAction(ActionName.ADD_TO_CALENDAR, buildJsonObject { put("ids", JsonArray(ids.map { JsonPrimitive("s$it") })) })
-                controller.run(action, null, ActionSource.MANUAL)
-            },
             onSetting = { name, on -> controller.run(AssistantAction.toggle(name, on), null, ActionSource.MANUAL) },
             settingOn = { name ->
                 when (name) {
@@ -569,7 +559,7 @@ private fun LiveLocationSampler(onSample: (GeoPoint) -> Unit) {
     LaunchedEffect(user) { user?.let(onSample) }
 }
 
-/** Carries out the assistant's OS hand-offs: share sheet, calendar insert, Maps, the notification permission. */
+/** Carries out the assistant's OS hand-offs: share sheet, Maps, the notification permission. */
 @Composable
 private fun AssistantEffects(controller: AssistantController) {
     val context = LocalContext.current
@@ -582,7 +572,6 @@ private fun AssistantEffects(controller: AssistantController) {
         controller.effects.collect { effect ->
             when (effect) {
                 is AssistantEffect.Share -> AssistantIntents.share(context, effect.text, effect.title)
-                is AssistantEffect.Calendar -> AssistantIntents.addToCalendar(context, effect.entry)
                 is AssistantEffect.Directions -> AssistantIntents.directions(context, effect.point)
                 is AssistantEffect.RequestNotifications -> {
                     pending = effect.action

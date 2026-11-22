@@ -106,7 +106,7 @@ class AppGraph(context: Context, val prefs: DevicePrefs, logStore: LogStore, val
 
     /** API-013: debug mode, levels, log uploads (dev builds / debug sessions only) and the log viewer's data. */
     val diagnostics = DiagnosticsController(
-        appContext, BuildConfig.DEV, logStore, logSink, appScope, diagnosticsSource,
+        appContext, BuildConfig.DEV, BuildConfig.UPLOAD_LOGS, logStore, logSink, appScope, diagnosticsSource,
         send = { api.uploadDiagnostics("diagnostics/logs/", it) },
     )
 
@@ -151,8 +151,8 @@ class AppGraph(context: Context, val prefs: DevicePrefs, logStore: LogStore, val
     /** Plans, "Follow on Lock Screen", skipped items, urgent block and reminders, per event (on the device). */
     val plans = PlanStore(prefs)
 
-    /** The device-driven Live Update, reminders and venue geofence (shared spec §8). */
-    val liveUpdates = LiveUpdateController(appContext, repository, hearts, plans, usage, appScope, perf)
+    /** The device-driven Live Update and reminders (shared spec §8). */
+    val liveUpdates = LiveUpdateController(appContext, repository, hearts, plans, appScope, perf)
 
     init {
         api.diagSession = { diagnostics.diagCode }

@@ -48,12 +48,12 @@ class AssistantBlocksTest {
             listOf(
                 "search", "get_item", "get_location", "get_update", "event_info", "now_next", "whats_on", "liked", "plan", "near_me", "why_not", "route", "day_route",
                 "like", "unlike", "plan_make", "plan_edit", "plan_undo", "plan_version", "checkoff", "follow_lock_screen", "reminders", "notifications",
-                "add_to_calendar", "share_plan", "share_item", "open", "directions",
+                "share_plan", "share_item", "open", "directions",
             ),
             ActionName.entries.map { it.key },
         )
         assertEquals(setOf(ActionName.FOLLOW_LOCK_SCREEN, ActionName.REMINDERS, ActionName.NOTIFICATIONS), ActionName.entries.filter { it.confirm == ConfirmKind.CHIP }.toSet())
-        assertEquals(setOf(ActionName.ADD_TO_CALENDAR, ActionName.SHARE_PLAN, ActionName.SHARE_ITEM), ActionName.entries.filter { it.confirm == ConfirmKind.SHEET }.toSet())
+        assertEquals(setOf(ActionName.SHARE_PLAN, ActionName.SHARE_ITEM), ActionName.entries.filter { it.confirm == ConfirmKind.SHEET }.toSet())
         assertEquals(
             setOf(ActionName.LIKE, ActionName.UNLIKE, ActionName.PLAN_MAKE, ActionName.PLAN_EDIT, ActionName.PLAN_VERSION, ActionName.CHECKOFF),
             ActionName.entries.filter { it.undoable }.toSet(),
@@ -77,8 +77,8 @@ class AssistantBlocksTest {
         assertEquals(ActionCheck.Invalid("bad from"), check("whats_on", """{"from":"6pm"}"""))
         assertEquals(ActionCheck.Invalid("bad screen"), check("open", """{"screen":"debug"}"""))
         assertEquals(ActionCheck.Invalid("bad ops"), check("plan_edit", """{"ops":[{"op":"teleport"}]}"""))
-        assertEquals(ActionCheck.Invalid("nothing to add"), check("add_to_calendar", """{"ids":["s999"]}"""))
-        assertTrue(check("add_to_calendar", """{"ids":["s101"]}""") is ActionCheck.Valid)
+        // No Add to Calendar (as on iOS): the action is never available.
+        assertEquals(ActionCheck.Invalid("not available to the assistant"), check("add_to_calendar", """{"ids":["s101"]}"""))
     }
 
     @Test
@@ -113,7 +113,7 @@ class AssistantBlocksTest {
             AssistantBlock.MapBlock(listOf(1, 2), route = listOf(1, 2)), AssistantBlock.Gallery(flyer = true), AssistantBlock.NowNext(1), AssistantBlock.Countdown(101),
             AssistantBlock.Compare("plan:chill", "plan:everything"), AssistantBlock.PlanDiffBlock(PlanDiff(removed = listOf(103), added = listOf(107), moved = listOf(109 to 115))),
             AssistantBlock.PlanBlock(java.time.LocalDate.of(2026, 11, 14)), AssistantBlock.Setting("reminders"), AssistantBlock.Summary("walking"),
-            AssistantBlock.Share("item:s101"), AssistantBlock.Calendar(plan = true), AssistantBlock.Chips(listOf(Chip("Liked", AssistantAction(ActionName.LIKED)))),
+            AssistantBlock.Share("item:s101"), AssistantBlock.Chips(listOf(Chip("Liked", AssistantAction(ActionName.LIKED)))),
             AssistantBlock.Confirm(AssistantAction.toggle(ActionName.REMINDERS, true), "Sure?"),
         )
         for (block in blocks) {
@@ -121,6 +121,8 @@ class AssistantBlocksTest {
         }
         assertEquals("""{"type":"place_card","id":"l6","show":["image"]}""", BlockJson.encode(AssistantBlock.PlaceCard(6, listOf("image"))).toString())
         assertEquals(BlockJson.Decoded.Unknown, BlockJson.decode(Json.parseToJsonElement("""{"type":"hologram"}""")))
+        // The calendar block is gone (as on iOS): dropped like any unknown one.
+        assertEquals(BlockJson.Decoded.Unknown, BlockJson.decode(Json.parseToJsonElement("""{"type":"calendar","ids":[],"plan":true}""")))
         assertEquals(BlockJson.Decoded.Malformed("item_card"), BlockJson.decode(Json.parseToJsonElement("""{"type":"item_card"}""")))
         assertEquals(BlockJson.Decoded.Malformed("list"), BlockJson.decode(Json.parseToJsonElement("""{"type":"list","ids":["x12"]}""")))
         // Ids as numbers or upper case are read.

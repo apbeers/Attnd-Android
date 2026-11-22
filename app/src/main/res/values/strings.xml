@@ -8,8 +8,6 @@
     <string name="reminders_channel_description">A reminder before the items you liked or planned start, with the walk time.</string>
     <string name="urgent_channel_name">Urgent announcements</string>
     <string name="urgent_channel_description">Cancellations and safety notices from the organizers. Sent to everyone in the event.</string>
-    <string name="live_action_heart">Like</string>
-    <string name="live_action_unheart">Unlike</string>
     <string name="live_action_skip">Skip next</string>
     <string name="live_action_map">Show on map</string>
     <string name="live_action_dismiss_urgent">Dismiss</string>

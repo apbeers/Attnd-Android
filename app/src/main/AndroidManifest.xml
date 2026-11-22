@@ -10,7 +10,7 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Android 16 Live Updates (promoted ongoing notifications): a normal (install-time) permission. -->
     <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
-    <!-- Re-schedule the Live Update's inexact alarms (and the venue geofence) after a reboot. -->
+    <!-- Re-schedule the Live Update's inexact alarms after a reboot. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <uses-feature android:name="android.hardware.camera" android:required="false" />
@@ -64,8 +64,8 @@
         </activity>
 
         <!--
-            Live Update wake-ups (shared spec §8): inexact alarms, notification actions, the venue
-            geofence, and re-scheduling after boot / an app update / a time zone change.
+            Live Update wake-ups (shared spec §8): inexact alarms, notification actions and
+            re-scheduling after boot / an app update / a time zone change.
         -->
         <receiver
             android:name=".live.LiveUpdateReceiver"

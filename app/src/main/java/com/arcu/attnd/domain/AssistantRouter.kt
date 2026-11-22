@@ -1,6 +1,5 @@
 package com.arcu.attnd.domain
 
-import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import java.time.Duration
@@ -53,7 +52,8 @@ sealed interface Resolution {
  * dropped, everything but letters, digits and ':' as spaces):
  *  1. empty → EMPTY (suggestion chips).
  *  2. "undo" → `plan_undo`.
- *  3. "add <x | my plan> to (my) calendar" → `calendar` block.
+ *  3. "add <x | my plan> to (my) calendar" → a "not available" text (+ Share my plan), as on iOS
+ *     (no Add to Calendar since Nov 19, 2026).
  *  4. "replace | swap <a> with | for <b>": b = "something | anything | one like | similar to <item>"
  *     (like), "something | some | more <tag>" or a bare tag (tag), else an item (with); a is resolved
  *     preferring planned items → `plan_edit replace`.
@@ -104,6 +104,7 @@ object AssistantRouter {
     const val ASK_UNAVAILABLE = "Ask needs on-device AI, which isn't available on this phone. Here's what matches."
     const val NO_MATCH_TEXT = "Nothing matches that. Try one of these:"
     const val NO_PLAN_TEXT = "You don't have a plan yet."
+    const val CALENDAR_TEXT = "Attnd doesn't add things to your calendar."
     private val FILLER = setOf("the", "a", "an", "thing", "one", "that", "this")
     private const val MIN_BASE_PER_TOKEN = 3.0
 
@@ -121,15 +122,12 @@ object AssistantRouter {
             else done(AssistantIntent.PLAN_UNDO, listOf(AssistantBlock.Text("There's nothing to undo.")))
         }
 
-        Regex("""^(?:add|put|save)\s+(.+?)\s+(?:to|in|on)\s+(?:my\s+)?calendar$""").find(cmd)?.let { m ->
-            val what = m.groupValues[1]
-            if (what == "plan" || what == "my plan") {
-                if (plan == null) return noPlan(ctx)
-                return done(AssistantIntent.CALENDAR, listOf(AssistantBlock.Calendar(plan = true)))
+        if (Regex("""^(?:add|put|save)\s+(.+?)\s+(?:to|in|on)\s+(?:my\s+)?calendar$""").matches(cmd)) {
+            val blocks = buildList<AssistantBlock> {
+                add(AssistantBlock.Text(CALENDAR_TEXT))
+                if (plan != null) add(chips(listOf(Chip("Share my plan", AssistantAction(ActionName.SHARE_PLAN)))))
             }
-            return withEntity(what, setOf(RefKind.SCHEDULE), ctx, AssistantIntent.CALENDAR, { ref -> Chip(name(ref, ctx), calendarAction(ref)) }) { ref ->
-                done(AssistantIntent.CALENDAR, listOf(AssistantBlock.Calendar(ids = listOf(ref.id))))
-            }
+            return done(AssistantIntent.CALENDAR, blocks)
         }
 
         planCommand(cmd, ctx)?.let { return it }
@@ -143,7 +141,7 @@ object AssistantRouter {
 
         if (Regex("""^share\s+(?:my\s+)?plan$""").matches(cmd)) {
             if (plan == null) return noPlan(ctx)
-            return done(AssistantIntent.SHARE, listOf(AssistantBlock.Share("plan"), chips(listOf(Chip("Add my plan to calendar", AssistantAction.calendarPlan())))))
+            return done(AssistantIntent.SHARE, listOf(AssistantBlock.Share("plan")))
         }
         Regex("""^share\s+(.+)$""").find(cmd)?.let { m ->
             return withEntity(m.groupValues[1], setOf(RefKind.SCHEDULE), ctx, AssistantIntent.SHARE, { ref -> Chip(name(ref, ctx), AssistantAction(ActionName.SHARE_ITEM, JsonObject(mapOf("id" to JsonPrimitive(ref.code))))) }) { ref ->
@@ -506,11 +504,6 @@ object AssistantRouter {
         RefKind.UPDATE -> ""
     }
 
-    private fun calendarAction(ref: EntityRef) = AssistantAction(
-        ActionName.ADD_TO_CALENDAR,
-        JsonObject(mapOf("ids" to JsonArray(listOf(JsonPrimitive(ref.code))))),
-    )
-
     // ── Likes ───────────────────────────────────────────────────────────────
 
     private fun like(phrase: String, liked: Boolean, ctx: AssistantContext): RoutedTurn {
@@ -701,7 +694,6 @@ object AssistantRouter {
         val plan = ctx.plan!!
         val chips = buildList {
             add(Chip("Share my plan", AssistantAction(ActionName.SHARE_PLAN)))
-            add(Chip("Add my plan to calendar", AssistantAction.calendarPlan()))
             add(Chip(PlanVersionKind.CHILL.label + " version", AssistantAction.planVersion(PlanVersionKind.CHILL)))
             if (ctx.history.canUndo) add(Chip("Undo", AssistantAction(ActionName.PLAN_UNDO)))
         }

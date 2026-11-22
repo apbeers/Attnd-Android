@@ -136,7 +136,6 @@ class BlockActions(
     val onDirections: (Int) -> Unit = {},
     val onShare: (String, String) -> Unit = { _, _ -> },
     val shareLink: (String) -> String? = { null },
-    val onCalendar: (List<Int>, Boolean) -> Unit = { _, _ -> },
     val onSetting: (ActionName, Boolean) -> Unit = { _, _ -> },
     val settingOn: (ActionName) -> Boolean = { false },
     val onCheck: (Int) -> Unit = {},
@@ -186,7 +185,6 @@ fun AssistantBlockView(block: AssistantBlock, index: Int, controls: TurnControls
         is AssistantBlock.Setting -> SettingCard(block.setting, modifier)
         is AssistantBlock.Summary -> SummaryCard(block.kind, modifier)
         is AssistantBlock.Share -> ShareCard(block.target, modifier)
-        is AssistantBlock.Calendar -> CalendarCard(block, modifier)
         is AssistantBlock.Chips -> ChipRow(block.chips.filter { !(controls.canUndo && it.action.name == ActionName.PLAN_UNDO) }, modifier)
         is AssistantBlock.Confirm -> ConfirmCard(block, answered = index in controls.answered, onAnswer = { controls.onConfirm(index, it) }, modifier = modifier)
     }
@@ -797,7 +795,7 @@ fun CompareBlock(block: AssistantBlock.Compare, modifier: Modifier = Modifier) {
     }
 }
 
-// ── Settings, summaries, sharing, calendar ──────────────────────────────────
+// ── Settings, summaries, sharing ───────────────────────────────────────────
 
 @Composable
 fun SettingCard(setting: String, modifier: Modifier = Modifier) {
@@ -873,23 +871,6 @@ fun ShareCard(target: String, modifier: Modifier = Modifier) {
     }
 }
 
-@Composable
-fun CalendarCard(block: AssistantBlock.Calendar, modifier: Modifier = Modifier) {
-    val actions = LocalBlockActions.current ?: return
-    val count = if (block.plan) actions.plan?.items?.size ?: 0 else block.ids.size
-    val names = block.ids.mapNotNull { actions.bundle.scheduleItem(it)?.name }
-    Card(modifier.fillMaxWidth()) {
-        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Icon(Icons.Filled.CalendarMonth, contentDescription = null)
-            Column(Modifier.weight(1f)) {
-                Text(if (block.plan) "Your plan" else names.joinToString(", ").ifEmpty { "These items" }, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text(if (count == 1) "1 item, in the event's time zone" else "$count items, in the event's time zone", style = MaterialTheme.typography.bodySmall)
-            }
-            FilledTonalButton(onClick = { actions.onCalendar(block.ids, block.plan) }) { Text("Add to Calendar") }
-        }
-    }
-}
-
 // ── Chips and confirmations ─────────────────────────────────────────────────
 
 @Composable
@@ -912,7 +893,6 @@ private fun chipIcon(name: ActionName): ImageVector? = when (name) {
     ActionName.OPEN -> Icons.Filled.Map
     ActionName.DIRECTIONS -> Icons.AutoMirrored.Filled.DirectionsWalk
     ActionName.SHARE_PLAN, ActionName.SHARE_ITEM -> Icons.Filled.Share
-    ActionName.ADD_TO_CALENDAR -> Icons.Filled.CalendarMonth
     ActionName.PLAN_EDIT, ActionName.PLAN_VERSION -> Icons.Filled.SwapHoriz
     ActionName.PLAN, ActionName.PLAN_MAKE -> Icons.Filled.Event
     else -> null

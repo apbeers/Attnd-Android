@@ -18,7 +18,6 @@ import com.arcu.attnd.domain.RefKind
 import com.arcu.attnd.domain.SharedPlans
 import com.arcu.attnd.domain.StoredTurn
 import com.arcu.attnd.domain.TurnPath
-import com.arcu.attnd.unit.AssistantFixture.clock
 import com.arcu.attnd.unit.AssistantFixture.ctx
 import com.arcu.attnd.unit.AssistantFixture.plan
 import com.arcu.attnd.unit.PlannerFixture.bundle
@@ -30,7 +29,6 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
 import java.util.Locale

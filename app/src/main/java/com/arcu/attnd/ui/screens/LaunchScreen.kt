@@ -242,9 +242,6 @@ private fun NearbyEventCard(item: NearbyEvent, enabled: Boolean, onClick: () -> 
             if (event.address.isNotEmpty()) {
                 Text(event.address, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
             }
-            if (event.isDemo) {
-                Text("Demo event", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
-            }
         }
     }
 }

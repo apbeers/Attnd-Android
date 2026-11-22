@@ -2,8 +2,6 @@ package com.arcu.attnd.unit
 
 import com.arcu.attnd.domain.ActionName
 import com.arcu.attnd.domain.AssistantAction
-import com.arcu.attnd.domain.CalendarEntries
-import com.arcu.attnd.domain.CalendarEntry
 import com.arcu.attnd.domain.DayRoutes
 import com.arcu.attnd.domain.DistanceUnits
 import com.arcu.attnd.domain.GeoPoint
@@ -43,7 +41,7 @@ import java.time.LocalTime
 import java.util.Base64
 import java.util.Locale
 
-/** Assistant spec §5–7: day routes, live rules, share links (API-015), group plans, why-not, calendar. */
+/** Assistant spec §5–7: day routes, live rules, share links (API-015), group plans, why-not. */
 class AssistantExtrasTest {
 
     private val saturday = LocalDate.of(2026, 11, 14)
@@ -139,20 +137,6 @@ class AssistantExtrasTest {
         assertTrue(114 in swapped.itemIds)
         assertFalse(101 in swapped.itemIds)
         assertEquals(listOf(101), swapped.items.single { it.itemId == 114 }.orInstead)
-    }
-
-    @Test
-    fun calendar() {
-        assertEquals(
-            CalendarEntry(
-                101, "The Prairie Lights", Instant.parse("2026-11-15T01:00:00Z"), Instant.parse("2026-11-15T02:30:00Z"), "America/Chicago",
-                "Main Stage · Panther Island, Fort Worth, TX", "Texas country headliners.\n\nFort Worth Food & Music Festival",
-            ),
-            CalendarEntries.forItem(101, bundle),
-        )
-        assertEquals("Panther Island, Fort Worth, TX", CalendarEntries.forItem(111, bundle)!!.location)
-        assertEquals(plan.itemIds, CalendarEntries.forPlan(plan, bundle).map { it.itemId })
-        assertNull(CalendarEntries.forItem(999, bundle))
     }
 
     // ── Day route ───────────────────────────────────────────────────────────

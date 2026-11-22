@@ -62,7 +62,6 @@ import androidx.compose.material3.LinearWavyProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -107,7 +106,6 @@ import com.arcu.attnd.data.AssistantAvailability
 import com.arcu.attnd.domain.ActionName
 import com.arcu.attnd.domain.ActionSource
 import com.arcu.attnd.domain.AssistantAction
-import com.arcu.attnd.domain.CalendarEntry
 import com.arcu.attnd.domain.Chip
 import com.arcu.attnd.domain.DayRoutes
 import com.arcu.attnd.domain.EntityRef
@@ -165,7 +163,7 @@ private fun BlockActions.opening(onOpen: (EntityRef) -> Unit) = BlockActions(
     bundle = bundle, plan = plan, hearts = hearts, onOpen = onOpen,
     onChip = onChip, onOpenTab = onOpenTab, onShowOnMap = onShowOnMap,
     onDirections = onDirections, onShare = onShare, shareLink = shareLink,
-    onCalendar = onCalendar, onSetting = onSetting, settingOn = settingOn,
+    onSetting = onSetting, settingOn = settingOn,
     onCheck = onCheck, onUseVersion = onUseVersion, onOpenFlyer = onOpenFlyer, onOpenPlan = onOpenPlan,
 )
 
@@ -206,7 +204,7 @@ fun MyPlanTab(
     }
     LaunchedEffect(request) {
         val pending = request ?: return@LaunchedEffect
-        // An item opens on the stack; a query or "Ask about this" goes to the dock (shown over no detail).
+        // An item opens on the stack; a query goes to the dock (shown over no detail).
         if (pending.detail != null) {
             stack.push(pending.detail)
             onRequestConsumed()
@@ -235,7 +233,6 @@ fun MyPlanTab(
                 onRequestConsumed = onRequestConsumed,
             )
         }
-        state.calendar?.let { entries -> CalendarSheet(entries, controller) }
     }
 }
 
@@ -264,7 +261,7 @@ fun AssistantBarOverlay(
     BackHandler { if (stack.top != null) stack.pop() else onClose() }
     LaunchedEffect(request) {
         val pending = request ?: return@LaunchedEffect
-        // Queries and "Ask about this" are run by the dock below (over no detail).
+        // Queries are run by the dock below (over no detail).
         if (pending.detail != null) {
             stack.push(pending.detail)
             onRequestConsumed()
@@ -293,7 +290,6 @@ fun AssistantBarOverlay(
                 onRequestConsumed = onRequestConsumed,
             )
         }
-        state.calendar?.let { entries -> CalendarSheet(entries, controller) }
     }
 }
 
@@ -652,13 +648,12 @@ private fun AssistantDock(
         text = ""
     }
 
-    // Shortcut / assistant / "Ask about this" requests (details are opened by the host).
+    // Search / assistant requests (details are opened by the host).
     var focusAsked by remember { mutableIntStateOf(0) }
     LaunchedEffect(request) {
         val pending = request ?: return@LaunchedEffect
         if (pending.detail != null) return@LaunchedEffect
         when {
-            pending.about != null -> controller.askAbout(pending.about)
             pending.ask && pending.query.isNotBlank() -> controller.submit(pending.query, if (modelOn) TurnPath.ASK else null)
             pending.query.isNotBlank() -> send(pending.query, null)
             else -> focusAsked++
@@ -915,27 +910,3 @@ private fun InputBar(
     }
 }
 
-/** `add_to_calendar` for the plan: one "Add" per item (each opens the calendar app's insert screen). */
-@Composable
-private fun CalendarSheet(entries: List<CalendarEntry>, controller: AssistantController) {
-    val actions = LocalBlockActions.current ?: return
-    val zone = actions.bundle.event.zone
-    ModalBottomSheet(onDismissRequest = controller::dismissCalendar) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("Add to Calendar", style = MaterialTheme.typography.titleLarge)
-            Text("Each item opens your calendar app, ready to save.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            entries.forEach { entry ->
-                ListItem(
-                    supportingContent = {
-                        Text(
-                            EventTime.formatDayTime(entry.start.atZone(zone).toOffsetDateTime(), zone) + if (entry.location.isNotBlank()) " · ${entry.location}" else "",
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    },
-                    trailingContent = { TextButton(onClick = { controller.addToCalendar(entry) }) { Text("Add") } },
-                ) { Text(entry.title) }
-            }
-        }
-    }
-}

@@ -21,7 +21,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
-import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Favorite
@@ -96,8 +95,6 @@ class EventActions(
     val hearts: Hearts = Hearts.NONE,
     val onToggleHeart: (SearchKind, Int) -> Unit = { _, _ -> },
     val onShowOnMap: ((Int) -> Unit)? = null,
-    /** "Ask about this" (assistant spec §8): opens the assistant about an item, place or update; null in screenshot mode. */
-    val onAskAbout: ((SearchKind, Int) -> Unit)? = null,
 )
 
 val LocalEventActions = compositionLocalOf { EventActions() }
@@ -222,16 +219,6 @@ fun WalkTime(target: GeoPoint?, modifier: Modifier = Modifier, color: Color = Ma
 }
 
 // ── Hearts ──────────────────────────────────────────────────────────────────
-
-/** "Ask about this" on a detail screen (opens the event assistant with the item as context). */
-@Composable
-fun AskAboutButton(modifier: Modifier = Modifier, onClick: () -> Unit) {
-    OutlinedButton(onClick = onClick, modifier = modifier) {
-        Icon(Icons.Filled.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
-        Spacer(Modifier.width(8.dp))
-        Text("Ask about this")
-    }
-}
 
 /** Like (heart) toggle for a schedule item or location (stored on the device per event). */
 @Composable

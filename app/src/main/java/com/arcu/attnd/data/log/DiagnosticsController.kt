@@ -34,7 +34,7 @@ data class DiagnosticsState(
     val dev: Boolean,
     /** The running debug session (dev builds: the install's permanent one). */
     val session: DebugSession? = null,
-    /** Uploads are paused (store-screenshot mode). */
+    /** Uploads are paused (store-screenshot mode) or off for this build (local debug builds). */
     val uploadsSuspended: Boolean = false,
 ) {
     val debugMode: Boolean get() = dev || session != null
@@ -44,12 +44,15 @@ data class DiagnosticsState(
  * Debug mode, levels and uploads (logging spec §2–3). Production keeps only errors (`error` and above) on
  * the device, until the user turns on debug logging for 10 minutes (a new random `D-XXXXX` code; uploads
  * start when it is turned on, nothing from before); the session's expiry is stored, so it ends on time
- * across restarts. Dev builds keep one code per install and always log `debug` and upload.
+ * across restarts. Dev builds keep one code per install and always log `debug` and upload; local
+ * `debug` builds ([uploads] false) log `debug` too but never upload, like iOS's Xcode builds.
  * Diagnostics preferences are local only (excluded from backup; never linked to the device id).
  */
 class DiagnosticsController(
     context: Context,
     private val dev: Boolean,
+    /** False for local `debug` builds (`BuildConfig.UPLOAD_LOGS`): logcat, the ring buffer and the viewer only. */
+    private val uploads: Boolean,
     private val store: LogStore,
     private val sink: AndroidLogSink,
     private val scope: CoroutineScope,
@@ -58,7 +61,7 @@ class DiagnosticsController(
 ) {
     private val appContext = context.applicationContext
     private val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-    private val _state = MutableStateFlow(DiagnosticsState(dev = dev))
+    private val _state = MutableStateFlow(DiagnosticsState(dev = dev, uploadsSuspended = !uploads))
     val state: StateFlow<DiagnosticsState> = _state.asStateFlow()
     private var expiryJob: Job? = null
 
@@ -88,7 +91,7 @@ class DiagnosticsController(
         if (session != null && !dev) {
             AppLog.notice(LogCategory.LOGGING, LogEvent.DEBUG_MODE, "Debug logging continues after a restart", mapOf("on" to true, "reason" to "restart"))
         }
-        if (dev) {
+        if (dev && uploads) {
             // Dev builds: upload once 200 records are waiting, not only every 30 s.
             var waiting = 0
             sink.onWritten = { count ->

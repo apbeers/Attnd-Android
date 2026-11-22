@@ -8,7 +8,6 @@ import android.content.Intent
 import com.arcu.attnd.data.EventRepository
 import com.arcu.attnd.data.HeartStore
 import com.arcu.attnd.data.PlanStore
-import com.arcu.attnd.data.UsageReporter
 import com.arcu.attnd.data.hasLocationPermission
 import com.arcu.attnd.data.log.PerfRecorder
 import com.arcu.attnd.domain.AppLog
@@ -16,7 +15,6 @@ import com.arcu.attnd.domain.EventBundle
 import com.arcu.attnd.domain.EventTime
 import com.arcu.attnd.domain.Geo
 import com.arcu.attnd.domain.GeoPoint
-import com.arcu.attnd.domain.Hearts
 import com.arcu.attnd.domain.LateState
 import com.arcu.attnd.domain.LiveAssist
 import com.arcu.attnd.domain.LiveFollow
@@ -31,7 +29,6 @@ import com.arcu.attnd.domain.LogEvent
 import com.arcu.attnd.domain.LogJson
 import com.arcu.attnd.domain.LogLevel
 import com.arcu.attnd.domain.PerfMetric
-import com.arcu.attnd.domain.SearchKind
 import com.arcu.attnd.domain.UrgentBlock
 import com.google.android.gms.location.LocationServices
 import kotlinx.coroutines.CancellationException
@@ -45,12 +42,12 @@ import java.time.Duration
 import java.time.Instant
 
 /**
- * Drives the Live Update, reminders and the venue geofence from the device, with no server
+ * Drives the Live Update and reminders from the device, with no server
  * (shared spec §8): [refresh] recomputes [LiveFollow.state] from the saved bundle, plan and hearts,
  * posts or cancels the notification, shows due reminders and schedules the next wake-up as an inexact
  * [AlarmManager.setWindow] alarm (no exact-alarm permission). It runs after every bundle / hearts / plan
  * change (AppGraph), on each alarm, on a `content_updated` push (the bundle changes), on boot, on the
- * notification actions and when the geofence reports an arrival.
+ * notification actions.
  *
  * The Live Update only while "Follow on Lock Screen" is on for the joined event ([PlanStore.follows]),
  * reminders while they are on ([PlanStore.reminders], default: the same); never in screenshot mode
@@ -62,7 +59,6 @@ class LiveUpdateController(
     private val repository: EventRepository,
     private val hearts: HeartStore,
     private val plans: PlanStore,
-    private val usage: UsageReporter,
     private val scope: CoroutineScope,
     private val perf: PerfRecorder? = null,
 ) {
@@ -77,7 +73,6 @@ class LiveUpdateController(
     private var failCounted = false
 
     private val mutex = Mutex()
-    private val geofence = VenueGeofence(appContext)
 
     /** Store-screenshot mode: nothing is posted or scheduled. */
     @Volatile
@@ -100,7 +95,7 @@ class LiveUpdateController(
     private suspend fun update(now: Instant) {
         val bundle = repository.restore()
         if (bundle == null || suspended) {
-            stop(clearGeofence = bundle == null, reason = if (bundle == null) "left_event" else "system")
+            stop(reason = if (bundle == null) "left_event" else "system")
             return
         }
         val eventId = bundle.event.id
@@ -109,7 +104,7 @@ class LiveUpdateController(
         val follows = plans.follows(eventId, heartsNow)
         val remindersOn = plans.reminders(eventId, heartsNow)
         if (!follows && !remindersOn) {
-            stop(clearGeofence = true, reason = "unfollowed")
+            stop(reason = "unfollowed")
             return
         }
         val zone = bundle.event.zone
@@ -117,7 +112,6 @@ class LiveUpdateController(
         val skipped = plans.skipped(eventId, today)
         val urgent = urgentBlock(bundle, eventId)
         val dismissedUrgent = plans.dismissedUrgent(eventId)
-        val arrived = plans.arrived(eventId, today)
         val user = lastLocation()
 
         // Reminders for hearted / planned items (shown once each).
@@ -134,12 +128,12 @@ class LiveUpdateController(
         // The Live Update itself; not reposted on a day the user swiped it away (unless urgent changed).
         val dismissedToday = plans.liveDismissedOn(eventId) == today.toString()
         val late = if (follows && plan != null) LiveAssist.runningLate(plan, bundle, now, user, skipped) else null
-        val state = if (!follows) null else LiveFollow.state(bundle, plan, heartsNow, now, skipped, urgent, dismissedUrgent, user, arrived)
+        val state = if (!follows) null else LiveFollow.state(bundle, plan, heartsNow, now, skipped, urgent, dismissedUrgent, user)
             ?.let { withRunningLate(it, late, bundle) }
         if (state != null && !dismissedToday) {
             var failure: Pair<String, Throwable?>? = null
             val posted = try {
-                LiveNotifications.showLive(appContext, bundle, state, heartsNow).also { if (!it) failure = PerfMetric.LIVE_DENIED to null }
+                LiveNotifications.showLive(appContext, bundle, state).also { if (!it) failure = PerfMetric.LIVE_DENIED to null }
             } catch (e: RuntimeException) {
                 failure = PerfMetric.LIVE_ERROR to e
                 false
@@ -171,11 +165,10 @@ class LiveUpdateController(
         }
 
         val wake = if (!follows) later.minOfOrNull { it.second.minus(REMINDER_EARLY) }
-        else LiveFollow.nextWake(bundle, plan, heartsNow, now, skipped, urgent, dismissedUrgent, later, arrived)
+        else LiveFollow.nextWake(bundle, plan, heartsNow, now, skipped, urgent, dismissedUrgent, later)
         // Assistant spec §6: also wake at the next planned item's departure time (running late).
         val leaveBy = if (follows && plan != null && late == null) nextLeaveBy(plan, bundle, now, user, skipped) else null
         schedule(listOfNotNull(wake, leaveBy).minOrNull())
-        if (follows) geofence.ensure(bundle) else geofence.clear()
     }
 
     /**
@@ -231,23 +224,12 @@ class LiveUpdateController(
         LiveNotifications.cancelLive(appContext)
     }
 
-    private fun stop(clearGeofence: Boolean, reason: String) {
+    private fun stop(reason: String) {
         cancelLive(reason)
         schedule(null)
-        if (clearGeofence) geofence.clear()
     }
 
-    // ── Actions (notification buttons, geofence, pushes) ────────────────────
-
-    suspend fun toggleHeart(eventId: Int, itemId: Int) {
-        if (repository.restore()?.event?.id != eventId) return
-        val hearted = !hearts.hearts(eventId).has(SearchKind.SCHEDULE, itemId)
-        AppLog.info(LogCategory.LIVE, LogEvent.LIVE_ACTION, "Live Update action: ${if (hearted) "heart" else "unheart"}", mapOf("action" to if (hearted) "heart" else "unheart"))
-        if (hearts.set(eventId, SearchKind.SCHEDULE, itemId, hearted)) {
-            Hearts.metric(SearchKind.SCHEDULE, hearted)?.let { usage.track(eventId, it, itemId.toString()) }
-        }
-        refresh()
-    }
+    // ── Actions (notification buttons, pushes) ─────────────────────────────
 
     suspend fun skip(eventId: Int, itemId: Int) {
         AppLog.info(LogCategory.LIVE, LogEvent.LIVE_ACTION, "Live Update action: skip", mapOf("action" to "skip"))
@@ -266,13 +248,6 @@ class LiveUpdateController(
     suspend fun onDismissed(eventId: Int) {
         val bundle = repository.restore()?.takeIf { it.event.id == eventId } ?: return
         plans.setLiveDismissed(eventId, Instant.now().atZone(bundle.event.zone).toLocalDate())
-        refresh()
-    }
-
-    suspend fun onArrived() {
-        AppLog.notice(LogCategory.LIVE, LogEvent.LIVE_ARRIVAL, "Arrived at the venue", mapOf("action" to "entered"))
-        val bundle = repository.restore() ?: return
-        plans.setArrived(bundle.event.id, Instant.now().atZone(bundle.event.zone).toLocalDate())
         refresh()
     }
 

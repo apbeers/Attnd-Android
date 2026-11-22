@@ -12,14 +12,12 @@ import com.arcu.attnd.R
 import com.arcu.attnd.OpenIntents
 import com.arcu.attnd.domain.AppLog
 import com.arcu.attnd.domain.EventBundle
-import com.arcu.attnd.domain.Hearts
 import com.arcu.attnd.domain.LiveMode
 import com.arcu.attnd.domain.LiveState
 import com.arcu.attnd.domain.LogCategory
 import com.arcu.attnd.domain.LogEvent
 import com.arcu.attnd.domain.OpenRequest
 import com.arcu.attnd.domain.OpenTarget
-import com.arcu.attnd.domain.SearchKind
 import com.arcu.attnd.domain.Tab
 import com.arcu.attnd.push.PushNotifications
 
@@ -78,7 +76,7 @@ object LiveNotifications {
 
     /** Posts the Live Update; false when it can't be shown (no POST_NOTIFICATIONS). */
     @SuppressLint("MissingPermission") // checked by PushNotifications.hasPermission()
-    fun showLive(context: Context, bundle: EventBundle, state: LiveState, hearts: Hearts): Boolean {
+    fun showLive(context: Context, bundle: EventBundle, state: LiveState): Boolean {
         if (!PushNotifications.hasPermission(context)) return false
         val eventId = bundle.event.id
         val focus = state.focus
@@ -118,14 +116,6 @@ object LiveNotifications {
             builder.setStyle(progressStyle(context, state))
         }
 
-        if (focus != null && state.mode != LiveMode.URGENT) {
-            val hearted = hearts.has(SearchKind.SCHEDULE, focus.id)
-            builder.addAction(
-                0,
-                context.getString(if (hearted) R.string.live_action_unheart else R.string.live_action_heart),
-                action(context, LiveUpdateReceiver.ACTION_HEART, eventId, focus.id),
-            )
-        }
         state.next?.takeIf { state.mode != LiveMode.URGENT }?.let { next ->
             builder.addAction(0, context.getString(R.string.live_action_skip), action(context, LiveUpdateReceiver.ACTION_SKIP, eventId, next.id))
         }

@@ -23,8 +23,6 @@ import com.arcu.attnd.domain.AssistantModel
 import com.arcu.attnd.domain.AssistantRouter
 import com.arcu.attnd.domain.AssistantTurn
 import com.arcu.attnd.domain.BlockValidator
-import com.arcu.attnd.domain.CalendarEntries
-import com.arcu.attnd.domain.CalendarEntry
 import com.arcu.attnd.domain.Chip
 import com.arcu.attnd.domain.ConfirmKind
 import com.arcu.attnd.domain.ConversationTurn
@@ -105,10 +103,9 @@ interface AssistantHost {
     fun units(): DistanceUnits
 }
 
-/** A one-shot request the screen carries out with an Activity (share sheet, calendar, maps, permission). */
+/** A one-shot request the screen carries out with an Activity (share sheet, maps, permission). */
 sealed interface AssistantEffect {
     data class Share(val text: String, val title: String) : AssistantEffect
-    data class Calendar(val entry: CalendarEntry) : AssistantEffect
     data class Directions(val point: GeoPoint) : AssistantEffect
     data class RequestNotifications(val action: AssistantAction) : AssistantEffect
 }
@@ -142,8 +139,6 @@ data class AssistantState(
     val live: LiveHints = LiveHints(),
     /** The plan has a change to undo. */
     val canUndo: Boolean = false,
-    /** The plan's calendar chooser (one Add per item). */
-    val calendar: List<CalendarEntry>? = null,
     /** A plan item is on now or soon today: sample the position while the app is visible. */
     val wantsLocation: Boolean = false,
     /** Incremented when a turn is added (the screen scrolls to it). */
@@ -688,16 +683,6 @@ class AssistantController(
                 }
                 ActionOutcome.Done(settingText(action.name, on), listOf(AssistantBlock.Setting(action.name.key)))
             }
-            ActionName.ADD_TO_CALENDAR -> {
-                val entries = if (action.bool("plan") == true) plan()?.let { CalendarEntries.forPlan(it, bundle) }.orEmpty()
-                else CalendarEntries.forItems(action.refs("ids").filter { it.kind == RefKind.SCHEDULE }.map { it.id }, bundle)
-                when (entries.size) {
-                    0 -> return ActionOutcome.Failed("There's nothing with a time to add.")
-                    1 -> _effects.tryEmit(AssistantEffect.Calendar(entries.single()))
-                    else -> _state.update { it.copy(calendar = entries) }
-                }
-                ActionOutcome.Done()
-            }
             ActionName.SHARE_PLAN -> {
                 val plan = plan() ?: return ActionOutcome.Failed(AssistantRouter.NO_PLAN_TEXT)
                 share(PlanShare.planLink(plan, bundle), "plan", plan.itemIds.size, "My plan for ${bundle.event.name}", "share_sheet")
@@ -795,12 +780,6 @@ class AssistantController(
         share(link, if (isPlan) "plan" else "item", items, title, via)
     }
 
-    fun dismissCalendar() = _state.update { it.copy(calendar = null) }
-
-    fun addToCalendar(entry: CalendarEntry) {
-        _effects.tryEmit(AssistantEffect.Calendar(entry))
-    }
-
     // ── Plans ───────────────────────────────────────────────────────────────
 
     private fun makePlan(request: String) {
@@ -854,17 +833,6 @@ class AssistantController(
         }
         val merge = SharedPlans.merge(plans.sharedPlans(eventId), own, bundle, current, ctx.now)
         propose(PlanProposals.shared(current, use, merge, bundle))
-    }
-
-    /** "Ask about this" from a detail screen. */
-    fun askAbout(ref: EntityRef) {
-        val ctx = context() ?: return
-        val text = AssistantFlow.askAbout(ref, ctx.bundle) ?: return
-        if (ctx.modelAvailable) {
-            submit(text, forced = TurnPath.ASK)
-        } else {
-            finish(text, AssistantFlow.aboutTurn(ref, ctx), TurnSource.RULES, AssistantIntent.SEARCH, System.nanoTime(), ctx)
-        }
     }
 
     // ── Live (spec §6) ──────────────────────────────────────────────────────

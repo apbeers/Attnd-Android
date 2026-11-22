@@ -35,15 +35,12 @@ import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.ui.platform.LocalContext
 import com.arcu.attnd.domain.AppLog
-import com.arcu.attnd.domain.CalendarEntries
 import com.arcu.attnd.domain.LogCategory
 import com.arcu.attnd.domain.LogEvent
 import com.arcu.attnd.domain.PlanShare
 import com.arcu.attnd.ui.assistant.AssistantIntents
-import com.arcu.attnd.ui.components.AskAboutButton
 import com.arcu.attnd.ui.components.LocalScreenshotMode
 import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Text
@@ -379,25 +376,14 @@ fun ScheduleItemDetail(
 }
 
 /**
- * The schedule detail's extras (assistant spec §7–8): "Ask about this" (the assistant with the item as
- * context), "Add to calendar" (the calendar app's insert screen, no permission) and "Share" (an
- * API-015 item link). Not in screenshot mode.
+ * The schedule detail's extra: "Share" (an API-015 item link). Not in screenshot mode. No "Ask about
+ * this" and no "Add to calendar" (removed as on iOS).
  */
 @Composable
 private fun ItemExtras(bundle: EventBundle, item: ScheduleItem) {
     if (LocalScreenshotMode.current) return
     val context = LocalContext.current
-    val ask = LocalEventActions.current.onAskAbout
-    val entry = remember(item, bundle) { CalendarEntries.forItem(item.id, bundle) }
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        if (ask != null) AskAboutButton { ask(SearchKind.SCHEDULE, item.id) }
-        if (entry != null) {
-            OutlinedButton(onClick = { AssistantIntents.addToCalendar(context, entry) }) {
-                Icon(Icons.Filled.CalendarMonth, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Add to calendar")
-            }
-        }
         OutlinedButton(onClick = {
             val link = PlanShare.itemLink(item.id, bundle)
             AppLog.info(

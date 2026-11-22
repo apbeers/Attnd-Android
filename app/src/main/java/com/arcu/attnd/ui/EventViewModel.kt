@@ -125,7 +125,7 @@ data class PlanUiState(
  * A one-shot request to open the search screen with [query] and, optionally, an item's [detail] on its
  * back stack (shortcuts and assistants; items whose tab is hidden open this way).
  */
-data class SearchRequest(val query: String, val serial: Int, val detail: SearchEntry? = null, val ask: Boolean = false, val about: EntityRef? = null)
+data class SearchRequest(val query: String, val serial: Int, val detail: SearchEntry? = null, val ask: Boolean = false)
 
 /** On-device Gemini Nano for the event assistant and the planner: availability and the model download. */
 data class AssistantUiState(
@@ -160,7 +160,7 @@ data class AppUiState(
     val focusScheduleItemId: Int? = null,
     /** Scroll the Notifications tab to this notification and highlight it (from search / an assistant). */
     val focusNotificationId: Int? = null,
-    /** Open the assistant with a query, an item or "Ask about this" (shortcut / assistant / detail). */
+    /** Open the assistant with a query or an item (notification / Live Update link). */
     val searchRequest: SearchRequest? = null,
     /** The event assistant (the search FAB's target) is open. */
     val assistantOpen: Boolean = false,
@@ -909,17 +909,6 @@ class EventViewModel(
 
     fun closeAssistant() {
         local.update { it.copy(assistantOpen = false, searchRequest = null) }
-    }
-
-    /** "Ask about this" on a detail screen: the assistant with that item as context. */
-    fun askAbout(kind: SearchKind, id: Int) {
-        val ref = when (kind) {
-            SearchKind.SCHEDULE -> EntityRef(RefKind.SCHEDULE, id)
-            SearchKind.LOCATION -> EntityRef(RefKind.LOCATION, id)
-            SearchKind.NOTIFICATION -> EntityRef(RefKind.UPDATE, id)
-            SearchKind.EVENT -> return
-        }
-        local.update { it.copy(assistantOpen = true, showOptions = false, searchRequest = SearchRequest("", (it.searchRequest?.serial ?: 0) + 1, about = ref)) }
     }
 
     /** `reminders(on)`: reminders before liked and planned items (the caller holds POST_NOTIFICATIONS to turn on). */

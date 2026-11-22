@@ -28,7 +28,6 @@ import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.EventBusy
 import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -85,35 +84,25 @@ fun rememberNow(intervalMs: Long = 30_000L): Instant {
 }
 
 /**
- * Event status pills: "Demo event" (`is_demo`) and "Event ended" (`status == archived`). Small and
+ * Event status pill: "Event ended" (`status == archived`; no "Demo event" pill, as on iOS). Small and
  * always visible; the caller overlays them (e.g. top-centre of the tab content) so they take no
- * layout space. They keep clear of the status bar and display cutouts. Emits nothing when neither applies.
+ * layout space. It keeps clear of the status bar and display cutouts. Emits nothing for an event that hasn't ended.
  */
 @Composable
 fun EventStatusPills(event: Event, modifier: Modifier = Modifier) {
-    if (!event.isDemo && !event.isArchived) return
+    if (!event.isArchived) return
     Row(
         modifier = modifier
             .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
             .padding(top = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        if (event.isDemo) {
-            StatusPill(
-                icon = Icons.Filled.Science,
-                text = "Demo event",
-                container = MaterialTheme.colorScheme.tertiaryContainer,
-                content = MaterialTheme.colorScheme.onTertiaryContainer,
-            )
-        }
-        if (event.isArchived) {
-            StatusPill(
-                icon = Icons.Filled.EventBusy,
-                text = "Event ended",
-                container = MaterialTheme.colorScheme.secondaryContainer,
-                content = MaterialTheme.colorScheme.onSecondaryContainer,
-            )
-        }
+        StatusPill(
+            icon = Icons.Filled.EventBusy,
+            text = "Event ended",
+            container = MaterialTheme.colorScheme.secondaryContainer,
+            content = MaterialTheme.colorScheme.onSecondaryContainer,
+        )
     }
 }
 

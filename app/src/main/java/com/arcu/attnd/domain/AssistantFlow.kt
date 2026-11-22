@@ -82,7 +82,6 @@ object AssistantFlow {
         is AssistantBlock.MapBlock -> block.pins.map { EntityRef(RefKind.LOCATION, it) }
         is AssistantBlock.Gallery -> block.ids.map { EntityRef(RefKind.LOCATION, it) }
         is AssistantBlock.Countdown -> listOf(EntityRef(RefKind.SCHEDULE, block.id))
-        is AssistantBlock.Calendar -> block.ids.map { EntityRef(RefKind.SCHEDULE, it) }
         is AssistantBlock.PlanDiffBlock -> (block.diff.removed + block.diff.added).map { EntityRef(RefKind.SCHEDULE, it) }
         else -> emptyList()
     }
