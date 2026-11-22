@@ -280,7 +280,10 @@ class AttndApi(
         /** The layout catalogue header (API-024), its value [SectionCatalogue.VERSION]. */
         const val SECTIONS_HEADER = "X-Attnd-Sections"
 
-        /** Host comes from the ATTND_SERVER build setting: develop builds use the dev server. */
-        val BASE_URL = "https://${com.arcu.attnd.BuildConfig.ATTND_SERVER}/api/v$API_VERSION/"
+        /**
+         * Host from the ATTND_SERVER build setting (develop builds use the dev server), or the test server chosen in a
+         * dev / debug build ([com.arcu.attnd.data.net.ServerHost], fixed per process).
+         */
+        val BASE_URL: String get() = "${com.arcu.attnd.data.net.ServerHost.origin}/api/v$API_VERSION/"
     }
 }

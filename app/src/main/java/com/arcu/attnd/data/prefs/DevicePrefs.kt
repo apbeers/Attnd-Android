@@ -262,8 +262,20 @@ class DevicePrefs(context: Context) {
         get() = identity.getInt(KEY_PREVIEW_EVENT, -1).takeIf { it != -1 }
         set(value) = identity.edit { if (value == null) remove(KEY_PREVIEW_EVENT) else putInt(KEY_PREVIEW_EVENT, value) }
 
+    // ── Test server switch (dev and debug builds) ──────────────────────────
+
+    /**
+     * The test server chosen in Options (a [com.arcu.attnd.domain.TestServer] name), read once at launch
+     * ([com.arcu.attnd.domain.ServerSwitch.resolve]). In the device file: never restored onto another phone.
+     * Written with `commit` so a restart right after picking it sees it.
+     */
+    var serverChoice: String?
+        get() = identity.getString(KEY_SERVER_CHOICE, null)
+        set(value) = identity.edit(commit = true) { if (value == null) remove(KEY_SERVER_CHOICE) else putString(KEY_SERVER_CHOICE, value) }
+
     companion object {
         const val PREFS_NAME = "attnd_prefs"
+        private const val KEY_SERVER_CHOICE = "server_choice"
 
         /** Excluded from backup and device transfer (`data_extraction_rules.xml`). */
         const val DEVICE_PREFS_NAME = "attnd_device"

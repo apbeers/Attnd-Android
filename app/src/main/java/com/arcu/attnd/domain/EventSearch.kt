@@ -53,11 +53,31 @@ object EventSearch {
 
     private enum class Quality(val value: Double) { EXACT(4.0), PREFIX(3.0), SUBSTRING(2.0), TYPO(1.0) }
 
-    private class Field(val text: String, val weight: Double, val isTitle: Boolean = false) {
+    internal class Field(val text: String, val weight: Double, val isTitle: Boolean = false) {
         val normalized: NormalizedText = SearchText.mapped(text)
     }
 
-    private class Candidate(val kind: SearchKind, val id: Int, val title: String, val fields: List<Field>, val item: ScheduleItem? = null)
+    internal class Candidate(val kind: SearchKind, val id: Int, val title: String, val fields: List<Field>, val item: ScheduleItem? = null)
+
+    /**
+     * The normalised fields and vocabulary of one bundle, built once per bundle (iOS `EventSearchIndex`): the view
+     * model warms it on `Dispatchers.Default` when a bundle is applied (`search_index` Trace section), so typing in
+     * the search fields only scores. One slot, keyed by the bundle's identity.
+     */
+    class Index internal constructor(internal val bundle: EventBundle, internal val candidates: List<Candidate>, internal val vocabulary: Set<String>) {
+        val size: Int get() = candidates.size
+    }
+
+    @Volatile
+    private var cached: Index? = null
+
+    /** The [Index] of [bundle] (cached; safe from any thread). */
+    fun index(bundle: EventBundle): Index {
+        cached?.takeIf { it.bundle === bundle }?.let { return it }
+        val candidates = candidates(bundle)
+        val vocabulary = candidates.flatMapTo(HashSet()) { c -> c.fields.flatMap { f -> f.normalized.words.map { it.second } } }
+        return Index(bundle, candidates, vocabulary).also { cached = it }
+    }
 
     fun search(
         bundle: EventBundle,
@@ -66,8 +86,9 @@ object EventSearch {
         mode: SearchMode = SearchMode.ALL_TOKENS,
         limit: Int = Int.MAX_VALUE,
     ): List<SearchResult> {
-        val candidates = candidates(bundle)
-        val vocabulary = candidates.flatMapTo(HashSet()) { c -> c.fields.flatMap { f -> f.normalized.words.map { it.second } } }
+        val index = index(bundle)
+        val candidates = index.candidates
+        val vocabulary = index.vocabulary
         val parsed = SearchQuery.parse(query, vocabulary)
         if (parsed.isEmpty) return emptyList()
         val tokens = parsed.tokens

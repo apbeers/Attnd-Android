@@ -48,6 +48,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import com.arcu.attnd.domain.ServerSwitch
+import com.arcu.attnd.domain.TestServer
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -111,6 +116,9 @@ fun OptionsScreen(
     /** Whether Attnd asked for a permission before, and recording that it asks now (Permissions section). */
     permissionAsked: (String) -> Boolean = { false },
     onPermissionAsked: (String) -> Unit = {},
+    /** Dev and debug builds: the test server switch (null hides it). */
+    serverChoice: ServerSwitch.Choice? = null,
+    onSwitchServer: (TestServer) -> Unit = {},
 ) {
     val context = LocalContext.current
     val eventName = event.name
@@ -232,6 +240,7 @@ fun OptionsScreen(
                 }
                 HorizontalDivider(Modifier.padding(vertical = 8.dp))
                 AboutSection(supportInfo)
+                if (serverChoice != null) TestServerSection(serverChoice, eventName, onSwitchServer)
                 Spacer(Modifier.size(8.dp))
                 DiagnosticsSection(
                     state = diagnostics,
@@ -349,6 +358,48 @@ private fun AboutSection(info: SupportInfo) {
             Spacer(Modifier.width(8.dp))
             Text(if (copied) "Copied" else "Copy support info")
         }
+    }
+}
+
+/**
+ * Dev and debug builds (iOS "Test server: Production / Dev"): picks the server for the next launch. Switching
+ * leaves the current event, after a confirmation.
+ */
+@Composable
+private fun TestServerSection(choice: ServerSwitch.Choice, eventName: String, onSwitch: (TestServer) -> Unit) {
+    var confirm by remember { mutableStateOf<TestServer?>(null) }
+    Column(Modifier.padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("Test server", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+            TestServer.entries.forEachIndexed { index, server ->
+                SegmentedButton(
+                    selected = choice.selected == server,
+                    onClick = { if (choice.selected != server) confirm = server },
+                    shape = SegmentedButtonDefaults.itemShape(index, TestServer.entries.size),
+                ) { Text(server.label) }
+            }
+        }
+        val next = choice.next
+        Text(
+            if (next != null && choice.pendingRestart) ServerSwitch.restartNote(next)
+            else "Test builds only. A new choice applies the next time Attnd starts and leaves the current event.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    confirm?.let { target ->
+        AlertDialog(
+            onDismissRequest = { confirm = null },
+            title = { Text("Use the ${target.label.lowercase()} server?") },
+            text = { Text("You'll leave $eventName now. Attnd uses ${target.host} the next time it starts.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirm = null
+                    onSwitch(target)
+                }) { Text("Switch") }
+            },
+            dismissButton = { TextButton(onClick = { confirm = null }) { Text("Cancel") } },
+        )
     }
 }
 

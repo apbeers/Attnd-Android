@@ -172,7 +172,12 @@ class ImageDiskCache(
         }
         // Every referenced image has been attempted: now drop what the bundle no longer uses.
         val names = dir.list()?.toList().orEmpty()
-        ImageCachePlan.stale(names, urls).forEach { File(dir, it).delete() }
+        val stale = ImageCachePlan.stale(names, urls)
+        if (stale.isNotEmpty()) {
+            var bytes = 0L
+            val deleted = stale.count { name -> File(dir, name).let { file -> val size = file.length(); file.delete().also { if (it) bytes += size } } }
+            AppLog.debug(LogCategory.STORAGE, LogEvent.IMAGES_PRUNED, "Deleted $deleted unreferenced images", mapOf("files" to deleted, "bytes" to bytes))
+        }
         if (missing.isNotEmpty()) {
             AppLog.debug(
                 LogCategory.STORAGE, LogEvent.IMAGES_PREFETCH, "Images prefetched: ${fetched.get()} of ${missing.size}",
