@@ -56,6 +56,12 @@ sealed interface AssistantBlock {
     data class Chips(val chips: List<Chip>) : AssistantBlock { override val type get() = "chips" }
     data class Confirm(val action: AssistantAction, val prompt: String) : AssistantBlock { override val type get() = "confirm" }
 
+    /**
+     * A screen component in a chat answer (one catalogue, `Component.kt`): a place's menu, an item's performers, the
+     * FAQ, getting there, My schedule… Its JSON type is the component's (not one of [TYPES]).
+     */
+    data class ComponentBlock(val component: Component) : AssistantBlock { override val type get() = component.type }
+
     companion object {
         val ITEM_SHOW = listOf("time", "place", "distance", "like", "actions")
         val PLACE_SHOW = listOf("image", "distance", "now_next", "like", "actions")
@@ -99,7 +105,7 @@ object BlockJson {
         put("params", action.params)
     }
 
-    fun encode(block: AssistantBlock): JsonObject = buildJsonObject {
+    fun encode(block: AssistantBlock): JsonObject = if (block is AssistantBlock.ComponentBlock) ComponentCatalogue.encode(block.component) else buildJsonObject {
         put("type", block.type)
         when (block) {
             is AssistantBlock.Text -> put("text", block.text)
@@ -134,6 +140,7 @@ object BlockJson {
                 buildJsonObject { put("label", chip.label); put("action", chip.action.name.key); put("params", chip.action.params) }
             }))
             is AssistantBlock.Confirm -> { put("action", block.action.name.key); put("params", block.action.params); put("prompt", block.prompt) }
+            is AssistantBlock.ComponentBlock -> Unit
         }
     }
 
@@ -161,7 +168,8 @@ object BlockJson {
     fun decode(element: JsonElement?): Decoded {
         val obj = element as? JsonObject ?: return Decoded.Malformed("?")
         val type = (obj["type"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim()?.lowercase() ?: return Decoded.Malformed("?")
-        if (type !in AssistantBlock.TYPES) return Decoded.Unknown
+        // A screen component a chat may show (`menu`, `faq`, `my_schedule`…), else unknown.
+        if (type !in AssistantBlock.TYPES) return ComponentCatalogue.decode(obj)?.let { Decoded.Ok(AssistantBlock.ComponentBlock(it)) } ?: Decoded.Unknown
         fun str(key: String) = (obj[key] as? JsonPrimitive)?.takeIf { it !is JsonNull && it.isString }?.content
         fun arr(key: String) = obj[key] as? JsonArray
         fun id(key: String, prefix: Char) = EntityRef.idOf(obj[key], prefix)
@@ -229,7 +237,7 @@ object BlockJson {
 }
 
 /** What [BlockValidator] checks blocks against. */
-data class BlockContext(val bundle: EventBundle, val plan: Plan?, val now: Instant)
+data class BlockContext(val bundle: EventBundle, val plan: Plan?, val now: Instant, val context: ContextFacts = ContextFacts.NONE)
 
 /**
  * Validation of blocks against the bundle (assistant spec §2), for the model's and the router's
@@ -251,6 +259,8 @@ data class BlockContext(val bundle: EventBundle, val plan: Plan?, val now: Insta
  *   with a plan.
  * - `chips`: label trimmed, 1–60 characters, action valid ([ActionRegistry.check]), distinct labels,
  *   at most 5. `confirm`: a valid mutating action; an empty prompt gets [ActionRegistry.confirmPrompt].
+ * - a screen component (`menu`, `faq`, `my_schedule`…): kept only while [ComponentCatalogue.valid] (its subject
+ *   exists and has the data; context parts through [BlockContext.context]).
  * Then: only the last `chips` block is kept and moved to the end, and the response is cut to 8 blocks
  * (7 + chips when there are chips).
  */
@@ -353,6 +363,7 @@ object BlockValidator {
                 }.take(MAX_CHIPS)
                 if (chips.isEmpty()) null else AssistantBlock.Chips(chips)
             }
+            is AssistantBlock.ComponentBlock -> block.takeIf { ComponentCatalogue.valid(it.component, bundle, ctx.context) }
             is AssistantBlock.Confirm -> {
                 val check = ActionRegistry.check(block.action.name.key, block.action.params, bundle, ctx.now)
                 if (check !is ActionCheck.Valid || !block.action.name.mutates) null
