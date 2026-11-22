@@ -77,7 +77,7 @@ data class LayoutOverride(val match: String, val sections: List<LayoutSection>)
 
 data class ScreenSpec(val sections: List<LayoutSection>, val overrides: List<LayoutOverride> = emptyList())
 
-/** `bundle.layout` (API-024). Decode the raw bundle value with [ScreenLayouts.decode]. */
+/** `bundle.layout` (API-024). Decode the raw bundle value (phase 1's `BundleDto.layout`) with [ScreenLayouts.decode]. */
 data class ScreenLayouts(
     /** The catalogue version the server built it for. */
     val catalogue: Int = 0,
@@ -307,33 +307,6 @@ object ScreenLayout {
     private fun isDate(s: String): Boolean = DATE.matches(s)
 }
 
-/**
- * The API-018 context parts each subject has, for the facts (the bundle's context models arrive with phase 1;
- * 5b wires an implementation over them). Each set lists the non-empty parts by their JSON names (`about`, `menu`,
- * `hours`, `performers`, `price`, `age_limit`, `accessibility`, `links`, `faq`, `amenities`, `getting_there`,
- * `policies`, `weather_plan`); a non-empty set means the subject has a context (iOS `!context.isEmpty`), so a
- * context with only other parts can list any other name.
- */
-interface ContextFacts {
-    fun event(): Set<String> = emptySet()
-    fun place(id: Int): Set<String> = emptySet()
-    fun item(id: Int): Set<String> = emptySet()
-
-    companion object {
-        val NONE: ContextFacts = object : ContextFacts {}
-
-        fun of(
-            event: Set<String> = emptySet(),
-            places: Map<Int, Set<String>> = emptyMap(),
-            items: Map<Int, Set<String>> = emptyMap(),
-        ): ContextFacts = object : ContextFacts {
-            override fun event() = event
-            override fun place(id: Int) = places[id].orEmpty()
-            override fun item(id: Int) = items[id].orEmpty()
-        }
-    }
-}
-
 /** The facts the visibility rules read, from the bundle (rule 5). */
 object ScreenFacts {
     /** What the app knows beyond the bundle. */
@@ -344,17 +317,12 @@ object ScreenFacts {
         val hasLikes: Boolean = false,
         /** Within walking range of the subject (8 km, with a position). */
         val withinWalk: Boolean = false,
-        val context: ContextFacts = ContextFacts.NONE,
     )
 
-    private val ITEM_PARTS = listOf("about", "performers", "price", "age_limit", "accessibility", "links")
-    private val PLACE_PARTS = listOf("about", "menu", "hours", "age_limit", "accessibility", "links")
-    private val EVENT_PARTS = listOf("about", "faq", "amenities", "getting_there", "accessibility", "policies", "weather_plan", "links")
-
-    private fun MutableSet<String>.addContext(parts: Set<String>, allowed: List<String>) {
-        if (parts.isEmpty()) return
+    /** "context" plus `context.<part>` for each non-empty part. */
+    private fun MutableSet<String>.addContext(vararg parts: Pair<String, Boolean>) {
         add("context")
-        allowed.filter { it in parts }.forEach { add("context.$it") }
+        parts.filter { it.second }.forEach { add("context.${it.first}") }
     }
 
     /** The event-wide facts every screen shares: the event phase, today, the model, plan, likes, now playing. */
@@ -387,7 +355,12 @@ object ScreenFacts {
             if (location.coordinate != null) facts += "coordinate"
             if (location.category != null) facts += "category"
         }
-        facts.addContext(state.context.item(item.id), ITEM_PARTS)
+        item.context?.takeIf { !it.isEmpty }?.let { c ->
+            facts.addContext(
+                "about" to c.about.isNotEmpty(), "performers" to c.performers.isNotEmpty(), "price" to c.price.isNotEmpty(),
+                "age_limit" to c.ageLimit.isNotEmpty(), "accessibility" to c.accessibility.isNotEmpty(), "links" to c.links.isNotEmpty(),
+            )
+        }
         return facts
     }
 
@@ -400,7 +373,12 @@ object ScreenFacts {
         if (location.coordinate != null) facts += "coordinate"
         if (location.website != null) facts += "website"
         if (bundle.schedule.any { it.locationId == location.id }) facts += "items_here"
-        facts.addContext(state.context.place(location.id), PLACE_PARTS)
+        location.context?.takeIf { !it.isEmpty }?.let { c ->
+            facts.addContext(
+                "about" to c.about.isNotEmpty(), "menu" to c.menu.isNotEmpty(), "hours" to c.hours.isNotEmpty(),
+                "age_limit" to c.ageLimit.isNotEmpty(), "accessibility" to c.accessibility.isNotEmpty(), "links" to c.links.isNotEmpty(),
+            )
+        }
         return facts
     }
 
@@ -419,7 +397,13 @@ object ScreenFacts {
         if (bundle.notifications.any { n -> n.isUrgent && n.sendTime?.let { sentWithin(it.toInstant(), state.now, UpdatesLayout.URGENT_WINDOW) } == true }) {
             facts += "urgent"
         }
-        facts.addContext(state.context.event(), EVENT_PARTS)
+        event.context?.takeIf { !it.isEmpty }?.let { c ->
+            facts.addContext(
+                "about" to c.about.isNotEmpty(), "faq" to c.faq.isNotEmpty(), "amenities" to c.amenities.isNotEmpty(),
+                "getting_there" to c.gettingThere.isNotEmpty(), "accessibility" to c.accessibility.isNotEmpty(),
+                "policies" to c.policies.isNotEmpty(), "weather_plan" to c.weatherPlan.isNotEmpty(), "links" to c.links.isNotEmpty(),
+            )
+        }
         return facts
     }
 
@@ -678,59 +662,6 @@ data class OnboardingLayout(
             // A welcome card with nothing to say is skipped.
             val usable = cards.filter { it != Card.WELCOME || welcome?.title != null || welcome?.text != null }
             return OnboardingLayout(usable, welcome?.title, welcome?.text, welcome?.image)
-        }
-    }
-}
-
-// MARK: Live Update settings (API-027 `live_activity`)
-
-/**
- * `bundle.live_activity`: what the Live Update follows, its buttons and stale text. Lenient: missing or unknown
- * values keep today's behaviour. Decode the raw bundle value with [LiveActivitySettings.decode].
- */
-data class LiveActivitySettings(
-    val follows: Follows = Follows.MY_SCHEDULE,
-    val locationId: Int? = null,
-    /** In order, from `add`, `skip`, `map`; null = the defaults. */
-    val buttons: List<String>? = null,
-    val staleText: String? = null,
-) {
-    enum class Follows(val key: String) {
-        MY_SCHEDULE("my_schedule"), EVERYTHING("everything"), LOCATION("location");
-
-        companion object {
-            fun of(key: String?): Follows? = entries.firstOrNull { it.key == key?.lowercase() }
-        }
-    }
-
-    /** The location to follow, when it exists in the bundle (else My schedule's rule). */
-    fun followedLocation(bundle: EventBundle): Int? {
-        if (follows != Follows.LOCATION) return null
-        val id = locationId ?: return null
-        return id.takeIf { bundle.location(it) != null }
-    }
-
-    /** The buttons this app draws: Skip and Map (`add` is accepted and not drawn, like iOS since Nov 21, 2026). */
-    val activityButtons: List<String> get() = (buttons ?: listOf("skip", "map")).filter { it == "skip" || it == "map" }
-
-    companion object {
-        val DEFAULTS = LiveActivitySettings()
-        private val KNOWN_BUTTONS = listOf("add", "skip", "map")
-
-        /** Null / `null` / not an object → null (the defaults apply). */
-        fun decode(element: JsonElement?): LiveActivitySettings? {
-            val obj = element as? JsonObject ?: return null
-            val buttons = if (obj.containsKey("buttons")) {
-                obj.strings("buttons").map { it.lowercase() }.filter { it in KNOWN_BUTTONS }.distinct()
-            } else {
-                null
-            }
-            return LiveActivitySettings(
-                follows = Follows.of(obj.string("follows")) ?: Follows.MY_SCHEDULE,
-                locationId = obj.int("location_id"),
-                buttons = buttons,
-                staleText = obj.nonEmptyString("stale_text")?.take(60),
-            )
         }
     }
 }

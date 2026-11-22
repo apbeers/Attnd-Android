@@ -6,10 +6,11 @@ import com.arcu.attnd.domain.BlockJson
 import com.arcu.attnd.domain.BlockValidator
 import com.arcu.attnd.domain.Component
 import com.arcu.attnd.domain.ComponentCatalogue
-import com.arcu.attnd.domain.ContextFacts
 import com.arcu.attnd.domain.EntityRef
 import com.arcu.attnd.domain.LayoutScreen
 import com.arcu.attnd.domain.LayoutSection
+import com.arcu.attnd.domain.LocationContext
+import com.arcu.attnd.domain.MenuEntry
 import com.arcu.attnd.domain.RefKind
 import com.arcu.attnd.domain.SectionCatalogue
 import com.arcu.attnd.unit.PlannerFixture.bundle
@@ -59,7 +60,8 @@ class ComponentTest {
         assertTrue(BlockValidator.validate(listOf(menu), ctx).isEmpty())
         assertEquals(1, BlockValidator.validate(listOf(AssistantBlock.ComponentBlock(Component("my_schedule"))), ctx).size)
         // Android: with the place's menu in its context the menu stays.
-        assertEquals(1, BlockValidator.validate(listOf(menu), ctx.copy(context = ContextFacts.of(places = mapOf(6 to setOf("menu"))))).size)
+        val withMenu = bundle.copy(locations = bundle.locations.map { if (it.id == 6) it.copy(context = LocationContext(menu = listOf(MenuEntry("Al pastor")))) else it })
+        assertEquals(1, BlockValidator.validate(listOf(menu), ctx.copy(bundle = withMenu)).size)
         // The renderer's input from a block keeps its ids.
         assertEquals(listOf("l6"), ComponentCatalogue.component(AssistantBlock.Carousel(listOf(EntityRef(RefKind.LOCATION, 6)))).ids.map { it.code })
     }

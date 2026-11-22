@@ -94,7 +94,7 @@ app/
       PlanShare.kt                #   API-015 share payload/links, group plans
       PlanTab.kt                  #   Plan tab spec: tab model (My plan + Explore), proposals (in-place previews: rows, diff pill), "do it"/"the second one" replies, no-AI rules
       AssistantFlow.kt            #   Assistant screen rules: turn path (router / model / plan), block data (timeline sources, compare, summaries), live hints, shared plans (use / merge), transcript codec
-      ScreenLayout.kt             #   API-024/027 server-driven screens: LayoutScreen/Section/Override, ScreenLayouts.decode (lenient), SectionCatalogue (VERSION 2), defaults, validate, overrides, `when` conditions, resolve, ScreenFacts (+ ContextFacts hook), DetailColumns, HomeColumns(+Widths), TabletopSplit, AboutText, TabListLayout, UpdatesLayout, OnboardingLayout, LiveActivitySettings
+      ScreenLayout.kt             #   API-024/027 server-driven screens: LayoutScreen/Section/Override, ScreenLayouts.decode (lenient), SectionCatalogue (VERSION 2), defaults, validate, overrides, `when` conditions, resolve, ScreenFacts (incl. the API-018 context parts), DetailColumns, HomeColumns(+Widths), TabletopSplit, AboutText, TabListLayout, UpdatesLayout, OnboardingLayout
       Component.kt                #   One component catalogue (chat blocks + layout sections; aliases plan_today/liked → my_schedule; chat decode/encode/valid)
       FoldRules.kt                #   What each screen keeps across fold ↔ unfold (primary pane, folded state)
       QrCode.kt                   #   In-house QR encoder (byte mode, versions 1–40, Reed–Solomon, masks) for the share block
@@ -377,9 +377,9 @@ On a 401 the stored JWT is invalidated and the request is retried once after re-
 ## Server-driven screens (API-024, API-027; phase 5a: domain only)
 
 A 1:1 port of iOS `ScreenLayout.swift` + `Component.swift` (tests `ScreenLayoutTest` = iOS `ScreenLayoutTests`' in-scope cases + `HomeColumnWidths`, `ComponentTest` = iOS cases 1–3; attnd-web `events/tests_layout.py` where they overlap). Nothing draws it yet and `X-Attnd-Sections` is **not sent** (phase 5b turns on `SectionCatalogue.VERSION` = 2 and the renderer).
-- **Decoding**: `ScreenLayouts.decode(JsonElement?)` for the raw `bundle.layout` (phase 1 keeps it as a `JsonElement`), `LiveActivitySettings.decode` for `bundle.live_activity`; lenient like the rest (bad sections / overrides / screens dropped one by one, type mismatches = missing).
+- **Decoding**: `ScreenLayouts.decode(JsonElement?)` for the raw `bundle.layout` (phase 1 keeps it as `BundleDto.layout`; 5b maps it onto `EventBundle`); lenient like the rest (bad sections / overrides / screens dropped one by one, type mismatches = missing). `LiveActivitySettings` is phase 1's (`EventContext.kt`).
 - **Rules**: validate (known types per screen, once, parts / title 60 / limit 1–20 / ids ≤ 20 / text 300 / https image, ≤ 24), fallback to `ScreenLayout.DEFAULTS` (today's screens; the catalogue 2 tab and onboarding screens have none), overrides `category:` / `tag:` (first match, ≤ 8), Home always ends with `website`, visibility = a needed fact + every `when` condition (closed set; unknown = false, negated too). `LayoutSection.conditions` is the JSON's `when`.
-- **Context facts**: the bundle has no API-018 context models yet, so `ScreenFacts.State.context` / `BlockContext.context` take a `ContextFacts` (non-empty part names per event / place / item); 5b implements it over phase 1's models.
+- **Facts**: `ScreenFacts` reads the bundle, the API-018 `context` of the event / place / item (`context`, `context.menu`…) and `State` (now, model, plan, likes, within walk).
 - **Chat**: `AssistantBlock.ComponentBlock` carries a screen component (`{"type":"menu","ids":["l6"]}`); `BlockJson.decode` reads screen types a chat may show, `BlockValidator` keeps one only while `ComponentCatalogue.valid`. The block UI draws nothing for it until 5b.
 
 ## Server-driven Display

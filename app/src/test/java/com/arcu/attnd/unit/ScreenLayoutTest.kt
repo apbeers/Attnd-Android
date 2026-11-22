@@ -1,7 +1,6 @@
 package com.arcu.attnd.unit
 
 import com.arcu.attnd.domain.AboutText
-import com.arcu.attnd.domain.ContextFacts
 import com.arcu.attnd.domain.DetailColumns
 import com.arcu.attnd.domain.EventNotification
 import com.arcu.attnd.domain.FoldRules
@@ -9,9 +8,10 @@ import com.arcu.attnd.domain.HomeColumnWidths
 import com.arcu.attnd.domain.HomeColumns
 import com.arcu.attnd.domain.LayoutScreen
 import com.arcu.attnd.domain.LayoutSection
-import com.arcu.attnd.domain.LiveActivitySettings
 import com.arcu.attnd.domain.NotificationPriority
 import com.arcu.attnd.domain.OnboardingLayout
+import com.arcu.attnd.domain.Performer
+import com.arcu.attnd.domain.ScheduleItemContext
 import com.arcu.attnd.domain.ScreenFacts
 import com.arcu.attnd.domain.ScreenLayout
 import com.arcu.attnd.domain.ScreenLayouts
@@ -35,8 +35,9 @@ import java.time.ZoneOffset
  * API-024 / API-027 server-driven screens (`ScreenLayout.kt`): validation, fallbacks, overrides, conditions, facts
  * and decoding, on the planner fixture (now Sat Nov 14 2026 10:00 AM America/Chicago). The iOS `ScreenLayoutTests`
  * cases one for one (and attnd-web `events/tests_layout.py` where they overlap), plus `HomeColumnWidths` from iOS
- * `DuoFeaturesTests`. Not here (other phases): the Home tab / display decoding (3a, 1), preview phones (9), push
- * jitter and the saved copy's ETag (1, 5b), the App Clip handover and assistant files (iOS only), setting commands (6a).
+ * `DuoFeaturesTests`. Not here (other phases): `live_activity` decoding (phase 1, `ApiMapperTest`), the Home tab /
+ * display decoding (3a, 1), preview phones and push jitter (9, 1), the saved copy's ETag (5b), the App Clip handover
+ * and assistant files (iOS only), setting commands (6a).
  */
 class ScreenLayoutTest {
 
@@ -84,11 +85,10 @@ class ScreenLayoutTest {
         val withModel = state.copy(modelAvailable = true)
         assertEquals(listOf("header", "about", "place_link"), types(ScreenLayout.resolve(LayoutScreen.ITEM_DETAIL, null, ScreenFacts.item(gates, bundle, withModel))))
         // Context parts.
-        val item = bundle.scheduleItem(109)!!
-        val withContext = state.copy(context = ContextFacts.of(items = mapOf(109 to setOf("performers", "price"))))
+        val item = bundle.scheduleItem(109)!!.copy(context = ScheduleItemContext(performers = listOf(Performer("Juniper Lane")), price = "$5"))
         assertEquals(
             listOf("header", "performers", "good_to_know", "place_link"),
-            types(ScreenLayout.resolve(LayoutScreen.ITEM_DETAIL, null, ScreenFacts.item(item, bundle, withContext))),
+            types(ScreenLayout.resolve(LayoutScreen.ITEM_DETAIL, null, ScreenFacts.item(item, bundle, state))),
         )
     }
 
@@ -412,25 +412,6 @@ class ScreenLayoutTest {
         val welcome = OnboardingLayout.of(listOf(LayoutSection("welcome", text = "Hello"), LayoutSection("notifications")))
         assertEquals(listOf(OnboardingLayout.Card.WELCOME, OnboardingLayout.Card.NOTIFICATIONS), welcome?.cards)
         assertEquals("Hello", welcome?.welcomeText)
-    }
-
-    @Test
-    fun liveActivitySettingsLenient() {
-        fun decode(json: String) = LiveActivitySettings.decode(Json.parseToJsonElement(json))!!
-        assertEquals(LiveActivitySettings.DEFAULTS, decode("{}"))
-        assertEquals(listOf("skip", "map"), decode("{}").activityButtons)
-        val set = decode("""{"follows": "LOCATION", "location_id": 3, "buttons": ["map", "add", "dance", "map"], "stale_text": "Open the app", "urgent": true}""")
-        assertEquals(LiveActivitySettings.Follows.LOCATION, set.follows)
-        assertEquals(listOf("map", "add"), set.buttons)
-        assertEquals(listOf("map"), set.activityButtons)
-        assertEquals("Open the app", set.staleText)
-        assertEquals(LiveActivitySettings.Follows.MY_SCHEDULE, decode("""{"follows": "nonsense", "buttons": []}""").follows)
-        assertEquals(emptyList<String>(), decode("""{"buttons": []}""").activityButtons)
-        assertEquals(LiveActivitySettings.Follows.EVERYTHING, decode("""{"follows": "everything"}""").follows)
-        assertNull(LiveActivitySettings.decode(JsonNull))
-        // The fixture has location 3 (Panther Island Pavilion), not 99.
-        assertEquals(3, LiveActivitySettings(LiveActivitySettings.Follows.LOCATION, locationId = 3).followedLocation(bundle))
-        assertNull(LiveActivitySettings(LiveActivitySettings.Follows.LOCATION, locationId = 99).followedLocation(bundle))
     }
 
     @Test

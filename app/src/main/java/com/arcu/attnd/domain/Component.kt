@@ -232,17 +232,23 @@ object ComponentCatalogue {
     }
 
     /** A chat component still drawable with this bundle (its subject exists and has the data). */
-    fun valid(component: Component, bundle: EventBundle, context: ContextFacts = ContextFacts.NONE): Boolean {
+    fun valid(component: Component, bundle: EventBundle): Boolean {
         val spec = SPECS[component.type] ?: return false
         if (!spec.chat) return false
         val subject = component.subject
         if (spec.subject != null && (subject == null || !subject.exists(bundle))) return false
-        val event = context.event()
+        val event = bundle.event.context
         return when (component.type) {
-            "menu" -> subject != null && "menu" in context.place(subject.id)
-            "hours" -> subject != null && "hours" in context.place(subject.id)
-            "performers" -> subject != null && "performers" in context.item(subject.id)
-            "faq", "amenities", "getting_there", "accessibility", "policies", "weather_plan", "links" -> component.type in event
+            "menu" -> bundle.location(subject?.id)?.context?.menu?.isNotEmpty() == true
+            "hours" -> bundle.location(subject?.id)?.context?.hours?.isNotEmpty() == true
+            "performers" -> bundle.scheduleItem(subject?.id)?.context?.performers?.isNotEmpty() == true
+            "faq" -> event?.faq?.isNotEmpty() == true
+            "amenities" -> event?.amenities?.isNotEmpty() == true
+            "getting_there" -> event?.gettingThere?.isNotEmpty() == true
+            "accessibility" -> event?.accessibility?.isNotEmpty() == true
+            "policies" -> event?.policies?.isNotEmpty() == true
+            "weather_plan" -> event?.weatherPlan?.isNotEmpty() == true
+            "links" -> event?.links?.isNotEmpty() == true
             "website" -> bundle.event.websiteUrl != null
             "flyer" -> bundle.event.flyerUrl != null
             "updates" -> bundle.notifications.isNotEmpty()

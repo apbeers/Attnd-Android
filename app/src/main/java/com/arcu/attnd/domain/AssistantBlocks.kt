@@ -237,7 +237,7 @@ object BlockJson {
 }
 
 /** What [BlockValidator] checks blocks against. */
-data class BlockContext(val bundle: EventBundle, val plan: Plan?, val now: Instant, val context: ContextFacts = ContextFacts.NONE)
+data class BlockContext(val bundle: EventBundle, val plan: Plan?, val now: Instant)
 
 /**
  * Validation of blocks against the bundle (assistant spec §2), for the model's and the router's
@@ -260,7 +260,7 @@ data class BlockContext(val bundle: EventBundle, val plan: Plan?, val now: Insta
  * - `chips`: label trimmed, 1–60 characters, action valid ([ActionRegistry.check]), distinct labels,
  *   at most 5. `confirm`: a valid mutating action; an empty prompt gets [ActionRegistry.confirmPrompt].
  * - a screen component (`menu`, `faq`, `my_schedule`…): kept only while [ComponentCatalogue.valid] (its subject
- *   exists and has the data; context parts through [BlockContext.context]).
+ *   exists and has the data).
  * Then: only the last `chips` block is kept and moved to the end, and the response is cut to 8 blocks
  * (7 + chips when there are chips).
  */
@@ -363,7 +363,7 @@ object BlockValidator {
                 }.take(MAX_CHIPS)
                 if (chips.isEmpty()) null else AssistantBlock.Chips(chips)
             }
-            is AssistantBlock.ComponentBlock -> block.takeIf { ComponentCatalogue.valid(it.component, bundle, ctx.context) }
+            is AssistantBlock.ComponentBlock -> block.takeIf { ComponentCatalogue.valid(it.component, bundle) }
             is AssistantBlock.Confirm -> {
                 val check = ActionRegistry.check(block.action.name.key, block.action.params, bundle, ctx.now)
                 if (check !is ActionCheck.Valid || !block.action.name.mutates) null
