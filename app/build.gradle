@@ -240,6 +240,9 @@ dependencies {
     implementation libs.play.integrity
     implementation libs.installreferrer
 
+    // Block Store: the device id survives a reinstall on this phone (not backed up to the cloud).
+    implementation libs.play.services.auth.blockstore
+
     // "Ask about this event": Gemini Nano on the device via ML Kit GenAI Prompt API (beta; runtime
     // availability check, falls back to plain search).
     implementation libs.mlkit.genai.prompt

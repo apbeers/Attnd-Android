@@ -22,6 +22,7 @@ kotlinx-coroutines = "1.11.0"
 maps-compose = "9.0.1"
 play-services-maps = "20.1.0"
 play-services-location = "21.4.0"
+play-services-auth-blockstore = "16.4.0"
 play-integrity = "1.6.0"
 installreferrer = "2.2"
 firebase-bom = "35.2.0"
@@ -60,6 +61,7 @@ maps-compose = { module = "com.google.maps.android:maps-compose", version.ref = 
 maps-compose-utils = { module = "com.google.maps.android:maps-compose-utils", version.ref = "maps-compose" }
 play-services-maps = { module = "com.google.android.gms:play-services-maps", version.ref = "play-services-maps" }
 play-services-location = { module = "com.google.android.gms:play-services-location", version.ref = "play-services-location" }
+play-services-auth-blockstore = { module = "com.google.android.gms:play-services-auth-blockstore", version.ref = "play-services-auth-blockstore" }
 play-integrity = { module = "com.google.android.play:integrity", version.ref = "play-integrity" }
 installreferrer = { module = "com.android.installreferrer:installreferrer", version.ref = "installreferrer" }
 

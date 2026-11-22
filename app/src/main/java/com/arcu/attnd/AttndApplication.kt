@@ -6,6 +6,7 @@ import android.os.Build
 import android.os.Process
 import android.os.Trace
 import com.arcu.attnd.data.AttestedTokenProvider
+import com.arcu.attnd.data.BlockStoreDeviceId
 import com.arcu.attnd.data.EventRepository
 import com.arcu.attnd.data.HeadingSource
 import com.arcu.attnd.data.HeartStore
@@ -27,6 +28,7 @@ import com.arcu.attnd.data.log.PerfRecorder
 import com.arcu.attnd.data.prefs.DevicePrefs
 import com.arcu.attnd.domain.AppLog
 import com.arcu.attnd.domain.DebugMode
+import com.arcu.attnd.domain.DeviceIdentity
 import com.arcu.attnd.domain.DiagnosticsSource
 import com.arcu.attnd.domain.LogCategory
 import com.arcu.attnd.domain.LogEvent
@@ -43,7 +45,10 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
+import java.util.UUID
 
 class AttndApplication : Application() {
 
@@ -60,7 +65,10 @@ class AttndApplication : Application() {
         AppLog.minLevel = if (BuildConfig.DEV) LogLevel.DEBUG else DebugMode.RELEASE_LEVEL
         AppLog.sink = logSink
         Trace.beginSection("app.onCreate")
+        val blockStore = BlockStoreDeviceId(this)
         try {
+            // Before anything reads the device id (attestation, the first API call).
+            resolveDeviceId(prefs, blockStore)
             // Attestation must be ready before the first API call; warmup() fetches the JWT in the
             // background so it is usually cached by the time the UI needs data.
             AttestationManager.init(this) { prefs.deviceId }
@@ -73,6 +81,31 @@ class AttndApplication : Application() {
         }
         graph.exits.installCrashHandler(logSink)
         graph.exits.reportPendingLater()
+        // Usual launch: give Block Store the id when it lacks it (an install from before Block Store).
+        graph.appScope.launch { syncDeviceIdToBlockStore(prefs, blockStore) }
+    }
+
+    /**
+     * The first launch of an install (no id in the app's preferences): a reinstall on the same phone
+     * takes its old id back from Block Store, waiting at most [BLOCK_STORE_TIMEOUT_MS] (only this
+     * once; Play services' callbacks don't need the main thread), else a new UUID
+     * ([DeviceIdentity.resolve]). Later launches read the app's own copy straight away.
+     */
+    private fun resolveDeviceId(prefs: DevicePrefs, blockStore: BlockStoreDeviceId) {
+        if (prefs.storedDeviceId != null) return
+        val kept = runBlocking(Dispatchers.IO) { withTimeoutOrNull(BLOCK_STORE_TIMEOUT_MS) { blockStore.read() } }
+        val resolution = DeviceIdentity.resolve(prefs = null, blockStore = kept) { UUID.randomUUID().toString() }
+        prefs.setDeviceId(resolution.id)
+    }
+
+    private suspend fun syncDeviceIdToBlockStore(prefs: DevicePrefs, blockStore: BlockStoreDeviceId) {
+        val id = prefs.storedDeviceId ?: return
+        val resolution = DeviceIdentity.resolve(prefs = id, blockStore = blockStore.read()) { id }
+        if (resolution.saveBlockStore) blockStore.write(resolution.id)
+    }
+
+    private companion object {
+        const val BLOCK_STORE_TIMEOUT_MS = 2_000L
     }
 
     override fun onTrimMemory(level: Int) {
@@ -165,6 +198,8 @@ class AppGraph(context: Context, val prefs: DevicePrefs, logStore: LogStore, val
     init {
         api.diagSession = { diagnostics.diagCode }
         api.callListener = { call -> perf.onApiCall(call, logSink.isOffline) }
+        // Leaves made offline in an earlier run (also retried after every successful refresh).
+        appScope.launch { repository.sendPendingLeaves() }
         // Performance counts recorded outside an event go to the next one (API-014).
         appScope.launch {
             repository.bundle.map { it?.event?.id }.distinctUntilChanged().collect { perf.onEvent(it) }

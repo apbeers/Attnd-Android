@@ -2,6 +2,9 @@ package com.arcu.attnd.data.prefs
 
 import android.content.Context
 import androidx.core.content.edit
+import com.arcu.attnd.domain.AppLog
+import com.arcu.attnd.domain.LogCategory
+import com.arcu.attnd.domain.LogEvent
 import java.util.UUID
 
 /**
@@ -11,11 +14,40 @@ import java.util.UUID
 class DevicePrefs(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-    /** Stable per-install device id, generated on first use. */
+    /**
+     * The device id lives in its own file, excluded from Auto Backup and device transfer
+     * (`res/xml/data_extraction_rules.xml`), so two phones never share one; the rest of these
+     * preferences (hearts, plans) are backed up.
+     */
+    private val identity = context.applicationContext.getSharedPreferences(DEVICE_PREFS_NAME, Context.MODE_PRIVATE)
+
+    /**
+     * The device id stored by this install, or null before the first launch resolved one
+     * ([com.arcu.attnd.domain.DeviceIdentity]). Moves an id older builds kept in [PREFS_NAME] (backed
+     * up) into its own file once.
+     */
+    val storedDeviceId: String?
+        get() = identity.getString(KEY_DEVICE_ID, null)?.takeIf { it.isNotBlank() } ?: synchronized(this) {
+            identity.getString(KEY_DEVICE_ID, null)?.takeIf { it.isNotBlank() }
+                ?: prefs.getString(KEY_DEVICE_ID, null)?.takeIf { it.isNotBlank() }?.also { legacy ->
+                    identity.edit(commit = true) { putString(KEY_DEVICE_ID, legacy) }
+                    prefs.edit { remove(KEY_DEVICE_ID) }
+                    AppLog.notice(
+                        LogCategory.STORAGE, LogEvent.PREFS_MIGRATED, "Device id moved to its own preferences file",
+                        mapOf("from" to "$PREFS_NAME.$KEY_DEVICE_ID", "to" to "$DEVICE_PREFS_NAME.$KEY_DEVICE_ID"),
+                    )
+                }
+        }
+
+    fun setDeviceId(id: String) = synchronized(this) { identity.edit(commit = true) { putString(KEY_DEVICE_ID, id) } }
+
+    /**
+     * Stable device id. Normally resolved at launch (`AttndApplication`, with Block Store) before
+     * anything reads it; made here only if nothing resolved one.
+     */
     val deviceId: String
-        get() = prefs.getString(KEY_DEVICE_ID, null) ?: synchronized(this) {
-            prefs.getString(KEY_DEVICE_ID, null)
-                ?: UUID.randomUUID().toString().also { prefs.edit { putString(KEY_DEVICE_ID, it) } }
+        get() = storedDeviceId ?: synchronized(this) {
+            storedDeviceId ?: UUID.randomUUID().toString().also { setDeviceId(it) }
         }
 
     /** The joined event, or null when the device is not in an event. */
@@ -185,6 +217,9 @@ class DevicePrefs(context: Context) {
 
     companion object {
         const val PREFS_NAME = "attnd_prefs"
+
+        /** Excluded from backup and device transfer (`data_extraction_rules.xml`). */
+        const val DEVICE_PREFS_NAME = "attnd_device"
         private const val KEY_DEVICE_ID = "device_id"
         private const val KEY_EVENT_ID = "event_id"
         private const val KEY_EVENT_CODE = "event_code"
