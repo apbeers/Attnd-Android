@@ -379,7 +379,7 @@ private fun EventShell(state: AppUiState, bundle: EventBundle, viewModel: EventV
                         TabContent(state, bundle, viewModel, blockActions, onMapSearch = if (fabInMapToolbar) openSearch else null)
                     }
                     // Floats over the content (no layout space) so ended events stay obvious.
-                    EventStatusPills(bundle.event, Modifier.align(Alignment.TopCenter))
+                    EventStatusPills(bundle.event, state.instantUpdates, Modifier.align(Alignment.TopCenter))
                     // The input bar over this tab (the search FAB's target; never in screenshot mode).
                     if (state.assistantOpen) {
                         AssistantBarOverlay(

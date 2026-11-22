@@ -110,6 +110,15 @@ class AttndApi(
     suspend fun join(eventId: Int, request: JoinRequest): StatusResponseDto =
         post("events/$eventId/join/", ApiJson.encodeToString(JoinRequest.serializer(), request))
 
+    /**
+     * API-026 long-poll for the event's preview phone: answers at once when the event's content version
+     * is past [since], else after about 25 s.
+     */
+    suspend fun changes(eventId: Int, since: Int, deviceId: String): ChangesResponseDto = decode(
+        send("GET", "events/$eventId/changes/?since=$since", body = null, extraHeaders = mapOf("X-Device-Id" to deviceId)),
+        ChangesResponseDto.serializer(),
+    )
+
     suspend fun leave(eventId: Int, request: LeaveRequest): StatusResponseDto =
         post("events/$eventId/leave/", ApiJson.encodeToString(LeaveRequest.serializer(), request))
 

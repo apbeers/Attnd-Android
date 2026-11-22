@@ -25,6 +25,8 @@ object Redact {
     private val EMAIL = Regex("""[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}""")
     private val BEARER = Regex("""(?i)\b(bearer|token|key)([=: ]+)[A-Za-z0-9._~+/=-]{8,}""")
     private val JWT = Regex("""\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*""")
+    /** API-026: a preview token in a join link's query (`?preview=<token>`). */
+    private val PREVIEW = Regex("""(?i)\b(preview(?:_token)?)=[^&\s"'<>#]+""")
     private val UUID = Regex("""\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b""")
     /** FCM tokens, API keys and other long opaque strings (≥ 32 characters without spaces). */
     private val LONG_TOKEN = Regex("""[A-Za-z0-9_:\-]{32,}""")
@@ -74,6 +76,7 @@ object Redact {
         out = JWT.replace(out, "[jwt]")
         out = EMAIL.replace(out, "[email]")
         out = BEARER.replace(out) { "${it.groupValues[1]}${it.groupValues[2]}[redacted]" }
+        out = PREVIEW.replace(out) { "${it.groupValues[1]}=[redacted]" }
         out = UUID.replace(out, "[uuid]")
         out = LONG_TOKEN.replace(out, "[token]")
         out = URL_IN_TEXT.replace(out) { path(it.value) }

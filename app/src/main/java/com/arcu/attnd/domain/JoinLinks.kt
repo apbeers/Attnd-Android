@@ -32,6 +32,31 @@ object JoinLinks {
         return segments[1].trim().takeIf { it.isNotEmpty() }
     }
 
+    /**
+     * API-026: the organizer's preview token of a join link (`https://attnd.app/join/<code>/?preview=<token>`,
+     * an App Link, a scanned QR or a pasted link): only plain token characters (ASCII letters, digits,
+     * `-_.:`), at most 512; null for anything else (also a bare code or a non-join URL). Never log or show it.
+     */
+    fun previewToken(raw: String?): String? {
+        val value = raw?.trim().orEmpty()
+        if (parseJoinCode(value) == null || !value.contains("/")) return null
+        val uri = try {
+            URI(if (value.contains("://")) value else "https://$value")
+        } catch (_: Exception) {
+            return null
+        }
+        val token = uri.rawQuery.orEmpty().split('&')
+            .map { it.split('=', limit = 2) }
+            .firstOrNull { it.size == 2 && decode(it[0]) == "preview" }
+            ?.let { decode(it[1]).trim() } ?: return null
+        if (token.isEmpty() || token.length > MAX_PREVIEW_TOKEN) return null
+        return token.takeIf { t -> t.all { it.isAsciiLetterOrDigit() || it in "-_.:" } }
+    }
+
+    private const val MAX_PREVIEW_TOKEN = 512
+
+    private fun Char.isAsciiLetterOrDigit(): Boolean = this in 'a'..'z' || this in 'A'..'Z' || this in '0'..'9'
+
     /** A shared plan / item link (API-015): the event code and the still-encoded payload ([PlanShare.decode]). */
     data class ShareLink(val eventCode: String, val payload: String)
 

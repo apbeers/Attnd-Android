@@ -16,6 +16,7 @@ import com.arcu.attnd.data.InstallReferrer
 import com.arcu.attnd.data.OnDeviceAssistant
 import com.arcu.attnd.data.PermissionsState
 import com.arcu.attnd.data.PlanStore
+import com.arcu.attnd.data.PreviewPoller
 import com.arcu.attnd.data.ScheduleController
 import com.arcu.attnd.data.RefreshResult
 import com.arcu.attnd.data.SyncState
@@ -41,6 +42,7 @@ import com.arcu.attnd.domain.EventBundle
 import com.arcu.attnd.domain.EventNotification
 import com.arcu.attnd.domain.Hearts
 import com.arcu.attnd.domain.JoinLinks
+import com.arcu.attnd.domain.PreviewPoll
 import com.arcu.attnd.domain.LiveUpdates
 import com.arcu.attnd.domain.LogCategory
 import com.arcu.attnd.domain.LogEvent
@@ -180,6 +182,8 @@ data class AppUiState(
     val mapFocusLocationId: Int? = null,
     /** Store-screenshot mode: no location tracking, map glance features, badge or banner. */
     val isScreenshot: Boolean = false,
+    /** API-026: this phone is the event's preview phone (the green "Instant updates on" capsule). */
+    val instantUpdates: Boolean = false,
     val planner: PlanUiState = PlanUiState(),
     /** The onboarding tour (first join of an event, or Options → Tour). */
     val showOnboarding: Boolean = false,
@@ -246,6 +250,8 @@ class EventViewModel(
     @Volatile
     private var screenshotMode = false
 
+    private val previewPoller = PreviewPoller(repository)
+
     private val local = MutableStateFlow(
         LocalState(
             notificationsEnabled = prefs.notificationsEnabled,
@@ -284,11 +290,11 @@ class EventViewModel(
     val uiState: StateFlow<AppUiState> =
         combine(
             repository.bundle,
-            repository.sync,
+            combine(repository.sync, repository.previewEventId, ::Pair),
             combine(local, nav.state, planner.state, model.state, ::UiInputs),
             repository.appUpdate,
             combine(heartStore.version, planStore.version, diagnostics.state) { hearts, plans, diag -> Triple(hearts, plans, diag) },
-        ) { savedBundle, savedSync, inputs, savedUpdate, versions ->
+        ) { savedBundle, (savedSync, previewEventId), inputs, savedUpdate, versions ->
             val state = inputs.local
             val navState = inputs.nav
             val screenshot = state.screenshot
@@ -362,6 +368,7 @@ class EventViewModel(
                 ),
                 mapFocusLocationId = navState.mapFocusLocationId,
                 isScreenshot = screenshot != null,
+                instantUpdates = PreviewPoll.showsCapsule(previewEventId, eventId, screenshot != null),
                 planner = PlanUiState(
                     available = plannerAvailable,
                     plan = plan,
@@ -471,6 +478,8 @@ class EventViewModel(
     /** From the code field, a QR scan or an App Link. Accepts a bare code or a /join/<code>/ URL. */
     fun joinByCode(input: String, via: String = "search") {
         val trimmed = input.trim()
+        // API-026: a "Preview on my phone" link's token, sent once with the join (never logged or shown).
+        val previewToken = JoinLinks.previewToken(trimmed)
         // A shared plan's link or QR (API-015) joins its event and shows the plan.
         JoinLinks.parseShareLink(trimmed)?.let {
             openShareLink(it)
@@ -485,7 +494,7 @@ class EventViewModel(
         }
         viewModelScope.launch {
             startJob.join()
-            join(silent = false, via = via) { repository.lookup(code) }
+            join(silent = false, via = via, previewToken = previewToken) { repository.lookup(code) }
         }
     }
 
@@ -496,12 +505,12 @@ class EventViewModel(
         }
     }
 
-    private suspend fun join(silent: Boolean, via: String = "search", resolve: suspend () -> Event) {
+    private suspend fun join(silent: Boolean, via: String = "search", previewToken: String? = null, resolve: suspend () -> Event) {
         local.update { it.copy(join = JoinUiState(isJoining = true), message = null) }
         try {
             val event = resolve()
             val alreadyIn = repository.currentEventId == event.id && repository.bundle.value != null
-            val result = repository.join(event, via)
+            val result = repository.join(event, via, previewToken)
             // The tour, the first time this event is joined (never in screenshot mode).
             val tour = !alreadyIn && !screenshotMode && !prefs.onboardingSeen(event.id) && repository.bundle.value?.event?.id == event.id
             planner.clearError()
@@ -650,6 +659,16 @@ class EventViewModel(
                 repository.refresh(silent = true, failuresBeforeError = LiveUpdates.failuresBeforeOfflineNotice(interval), source = "poll")
             }
         }
+    }
+
+    /**
+     * API-026: runs while the activity is resumed: the preview phone's `changes/` long-poll
+     * ([PreviewPoller]; idle unless this is the shown event's preview phone). Never in screenshot mode.
+     */
+    suspend fun previewSync() {
+        startJob.join()
+        if (screenshotMode) return
+        previewPoller.run()
     }
 
     // ── Navigation & preferences ────────────────────────────────────────────

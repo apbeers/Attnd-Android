@@ -46,7 +46,11 @@ class MainActivity : ComponentActivity() {
         // Refresh when the app comes to the foreground, then a safety poll while it stays there
         // (live updates arrive as content_updated pushes; see EventViewModel.foregroundSync).
         lifecycleScope.launch {
-            repeatOnLifecycle(Lifecycle.State.RESUMED) { viewModel.foregroundSync() }
+            repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                // API-026: the preview phone's changes/ long-poll, only while resumed.
+                launch { viewModel.previewSync() }
+                viewModel.foregroundSync()
+            }
         }
 
         setContent { AttndApp(viewModel) }
@@ -141,7 +145,8 @@ class MainActivity : ComponentActivity() {
             }
             JoinLinks.parseJoinCode(intent.dataString)?.let {
                 AppLog.info(LogCategory.LIFECYCLE, LogEvent.DEEP_LINK, "Opened by a join link", mapOf("kind" to "join", "target" to "/join/{id}/"))
-                viewModel.joinByCode(it)
+                // The whole link: a "Preview on my phone" link's ?preview= token goes with the join (API-026).
+                viewModel.joinByCode(intent.dataString.orEmpty())
             }
         }
     }

@@ -150,7 +150,7 @@ Weather was never built.
 | API-023 theme | ✅ | Phase 7 (`domain/Theme.kt`, `AttndTheme`) |
 | API-024 layouts | ⬜ later | Phase 5 |
 | API-025 free limit | ⬜ | Phase 12 (optional; iOS hasn't done it) |
-| API-026 preview / jitter | ⬜ parked | Phase 9 |
+| API-026 preview / jitter | ✅ | Phase 9 (`domain/PreviewPhone.kt`, `data/PreviewPoller.kt`; `jitter_ms` in phase 1) |
 | API-027 catalogue 2 + `live_activity` | ⬜ parked | Phases 5c + 8 |
 | API-030 Apple Music | ⬜ paused | Phases 1 + 5 |
 | API-031 Google photo credit | ⬜ paused | Phases 1 + 5 |
@@ -631,7 +631,7 @@ Phase 0 (toolchain and dependencies, minSdk 36) runs elsewhere. When it lands, p
 - **Files:** A`domain/LiveFollow.kt`, A`live/LiveUpdateController.kt`, `LiveNotifications.kt`, `LiveUpdateReceiver.kt`.
 - **Tests:** `LiveFollowTest` re-synced to the iOS 26 cases.
 
-**Phase 9 — Preview phones + jitter, API-026 (S–M)**
+**Phase 9 — Preview phones + jitter, API-026 (S–M)** — ✅ done (Nov 22, 2026)
 - **Scope:**
   - `preview` kept by `JoinLinks` (App Links, QR, code field);
   - `preview_token` on join (redacted);
@@ -642,6 +642,13 @@ Phase 0 (toolchain and dependencies, minSdk 36) runs elsewhere. When it lands, p
 - **Files:** A`domain/JoinLinks.kt`, `LogRedaction.kt`, A`data/api/AttndApi.kt` / `ApiDtos.kt`, new
   `data/PreviewPoller.kt`, `MainActivity.kt`, `EventRepository.kt`.
 - **Tests:** `JoinLinksTest` (preview kept), a poll-policy test (pure), `LogRedactionTest` (token never logged).
+- **Built:** `JoinLinks.previewToken` (join links only, iOS's token alphabet, ≤ 512), `PreviewPoll` (`next`, `runs`,
+  `showsCapsule`, `afterJoin`) in `domain/PreviewPhone.kt`, `JoinRequest.previewToken`, `StatusResponseDto.preview`,
+  `AttndApi.changes`, `EventRepository.previewEventId` (`DevicePrefs.previewEventId` in the non-backed-up device file;
+  cleared by leave / switch / 404 / `preview: false`), `PreviewPoller` (started from `MainActivity`'s RESUMED block via
+  `EventViewModel.previewSync`), the green "Instant updates on" pill in `EventStatusPills`; `Redact` masks
+  `preview=` / `preview_token=`. Tests: `PreviewPhoneTest` (iOS's `testPreviewPoll` / `testPreviewToken_LinksAndJoinBody`
+  cases + Android's).
 
 **Phase 10a — Foldables: continuity + layouts (M)**
 - **Scope:**

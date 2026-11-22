@@ -163,6 +163,8 @@ data class JoinRequest(
     val platform: String = PLATFORM,
     @SerialName("push_token") val pushToken: String? = null,
     @SerialName("app_version") val appVersion: String? = null,
+    /** API-026: the organizer's preview token from a "Preview on my phone" link; left out without one. Never logged. */
+    @SerialName("preview_token") val previewToken: String? = null,
 )
 
 @Serializable
@@ -220,4 +222,15 @@ data class StatusResponseDto(
     @SerialName("content_version") val contentVersion: Int? = null,
     val subscribed: Boolean? = null,
     @SerialName("event_id") val eventId: Int? = null,
+    /** API-026 (join answer): true = this is now the event's preview phone, false = joined as an attendee. */
+    val preview: Boolean? = null,
+)
+
+/** `GET events/<id>/changes/?since=` (API-026, preview phones only). */
+@Serializable
+data class ChangesResponseDto(
+    @SerialName("content_version") val contentVersion: Int? = null,
+    val changed: Boolean? = null,
+    val preview: Boolean? = null,
+    @SerialName("retry_after") val retryAfter: Int? = null,
 )

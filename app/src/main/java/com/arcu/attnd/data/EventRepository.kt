@@ -17,6 +17,7 @@ import com.arcu.attnd.domain.LogCategory
 import com.arcu.attnd.domain.LogEvent
 import com.arcu.attnd.domain.LogLevel
 import com.arcu.attnd.domain.NearbyEvent
+import com.arcu.attnd.domain.PreviewPoll
 import com.arcu.attnd.domain.UpdateLevel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
@@ -91,6 +92,11 @@ class EventRepository(
     val sync: StateFlow<SyncState> = _sync.asStateFlow()
 
     private val refreshMutex = Mutex()
+
+    private val _previewEventId = MutableStateFlow(prefs.previewEventId)
+
+    /** API-026: the event this device is the organizer's preview phone for ([PreviewPoller] long-polls it). */
+    val previewEventId: StateFlow<Int?> = _previewEventId.asStateFlow()
 
     /** Failed refreshes since the last successful one; lets silent polls ride out a blip. */
     @Volatile
@@ -216,7 +222,7 @@ class EventRepository(
      * Joins [event], leaving any other event first, then downloads its bundle.
      * Throws when the join call fails; returns the result of the bundle download.
      */
-    suspend fun join(event: Event, via: String = "search"): RefreshResult = withContext(io) {
+    suspend fun join(event: Event, via: String = "search", previewToken: String? = null): RefreshResult = withContext(io) {
         val previous = prefs.eventId
         // Rejoining an event cancels a leave of it that is still queued.
         prefs.pendingLeaves = prefs.pendingLeaves - event.id
@@ -228,12 +234,22 @@ class EventRepository(
             prefs.pendingLeaves = prefs.pendingLeaves + previous
         }
         val token = pushToken()
-        api.join(event.id, JoinRequest(deviceId = deviceId, pushToken = token, appVersion = appVersion))
+        // API-026: a "Preview on my phone" link's token goes with this join only.
+        val answer = api.join(event.id, JoinRequest(deviceId = deviceId, pushToken = token, appVersion = appVersion, previewToken = previewToken))
         if (token != null) registeredToken = token
         if (previous != event.id) {
             clearLocal()
             prefs.eventId = event.id
             sendPendingLeaves()
+        }
+        val preview = PreviewPoll.afterJoin(_previewEventId.value, event.id, answer.preview)
+        if (preview != _previewEventId.value) {
+            setPreviewEvent(preview)
+            if (preview == event.id) {
+                AppLog.notice(LogCategory.LIFECYCLE, LogEvent.EVENT_JOINED, "Joined as the organizer's preview phone", mapOf("event_id" to event.id, "via" to "preview"))
+            }
+        } else if (previewToken != null && answer.preview != true) {
+            AppLog.info(LogCategory.LIFECYCLE, LogEvent.EVENT_JOINED, "Preview link joined as an attendee", mapOf("event_id" to event.id, "via" to "preview_refused"))
         }
         prefs.eventCode = event.eventCode
         AppLog.notice(
@@ -431,6 +447,27 @@ class EventRepository(
         return registerDevice()
     }
 
+    /**
+     * API-026 `GET events/<id>/changes/?since=` for the preview phone (a long-poll of about 25 s).
+     * Throws on network and server errors; [PreviewPoller] waits 15 s then.
+     */
+    suspend fun changes(eventId: Int, since: Int?): PreviewPoll.Answer = withContext(io) {
+        val dto = api.changes(eventId, since ?: 0, deviceId)
+        PreviewPoll.Answer.of(dto.contentVersion, dto.changed, dto.preview, dto.retryAfter)
+    }
+
+    /** The server says this is no longer [eventId]'s preview phone (`preview: false`): back to the normal polling. */
+    fun endPreview(eventId: Int) {
+        if (_previewEventId.value != eventId) return
+        AppLog.notice(LogCategory.LIFECYCLE, LogEvent.EVENT_JOINED, "No longer the preview phone", mapOf("event_id" to eventId, "via" to "preview_ended"))
+        setPreviewEvent(null)
+    }
+
+    private fun setPreviewEvent(eventId: Int?) {
+        prefs.previewEventId = eventId
+        _previewEventId.value = eventId
+    }
+
     // ── Internals ───────────────────────────────────────────────────────────
 
     /** Only send the ETag when the matching bundle is actually in memory; otherwise a 304 would leave us empty. */
@@ -508,6 +545,7 @@ class EventRepository(
 
     private fun clearLocal() {
         prefs.clearEvent()
+        setPreviewEvent(null)
         cacheFile.delete()
         images?.clear()
         _bundle.value = null

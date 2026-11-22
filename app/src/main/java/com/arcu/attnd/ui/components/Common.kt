@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.CloudOff
@@ -53,8 +54,11 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
@@ -67,9 +71,9 @@ import com.arcu.attnd.domain.LogCategory
 import com.arcu.attnd.domain.LogEvent
 import com.arcu.attnd.domain.LogLevel
 import com.arcu.attnd.domain.Redact
-import kotlinx.coroutines.delay
 import java.time.Instant
 import java.time.ZoneId
+import kotlinx.coroutines.delay
 
 /** The current time, re-emitted every [intervalMs] so countdowns and "now/next" stay live. */
 @Composable
@@ -84,31 +88,49 @@ fun rememberNow(intervalMs: Long = 30_000L): Instant {
 }
 
 /**
- * Event status pill: "Event ended" (`status == archived`; no "Demo event" pill, as on iOS). Small and
- * always visible; the caller overlays them (e.g. top-centre of the tab content) so they take no
- * layout space. It keeps clear of the status bar and display cutouts. Emits nothing for an event that hasn't ended.
+ * Event status pills: "Event ended" (`status == archived`; no "Demo event" pill, as on iOS) and, on the
+ * organizer's preview phone (API-026, [instantUpdates]), a green "Instant updates on". Small and always
+ * visible; the caller overlays them (e.g. top-centre of the tab content) so they take no layout space.
+ * They keep clear of the status bar and display cutouts. Emits nothing when neither applies.
  */
 @Composable
-fun EventStatusPills(event: Event, modifier: Modifier = Modifier) {
-    if (!event.isArchived) return
+fun EventStatusPills(event: Event, instantUpdates: Boolean = false, modifier: Modifier = Modifier) {
+    if (!event.isArchived && !instantUpdates) return
     Row(
         modifier = modifier
             .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
             .padding(top = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        StatusPill(
-            icon = Icons.Filled.EventBusy,
-            text = "Event ended",
-            container = MaterialTheme.colorScheme.secondaryContainer,
-            content = MaterialTheme.colorScheme.onSecondaryContainer,
-        )
+        if (event.isArchived) {
+            StatusPill(
+                icon = Icons.Filled.EventBusy,
+                text = "Event ended",
+                container = MaterialTheme.colorScheme.secondaryContainer,
+                content = MaterialTheme.colorScheme.onSecondaryContainer,
+            )
+        }
+        if (instantUpdates) {
+            val dark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
+            StatusPill(
+                icon = Icons.Filled.Bolt,
+                text = "Instant updates on",
+                container = if (dark) InstantGreenDark else InstantGreenLight,
+                content = if (dark) InstantGreenLight else InstantGreenDark,
+                description = "Instant updates are on: this phone shows the organizer's changes as they make them.",
+            )
+        }
     }
 }
 
+/** The "Instant updates on" capsule's greens (≥ 7:1 against each other). */
+private val InstantGreenLight = Color(0xFFC8E6C9)
+private val InstantGreenDark = Color(0xFF1B5E20)
+
 @Composable
-private fun StatusPill(icon: ImageVector, text: String, container: Color, content: Color) {
+private fun StatusPill(icon: ImageVector, text: String, container: Color, content: Color, description: String? = null) {
     Surface(
+        modifier = if (description != null) Modifier.semantics(mergeDescendants = true) { contentDescription = description } else Modifier,
         shape = CircleShape,
         color = container,
         contentColor = content,

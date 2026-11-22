@@ -220,6 +220,16 @@ class DevicePrefs(context: Context) {
         remove(KEY_LAST_SYNC)
     }
 
+    // ── API-026 preview phone ───────────────────────────────────────────────
+
+    /**
+     * The event this device is the organizer's preview phone for (until leaving, switching or `preview: false`).
+     * In the device file (not backed up): it belongs to this phone, not to a restore onto another one.
+     */
+    var previewEventId: Int?
+        get() = identity.getInt(KEY_PREVIEW_EVENT, -1).takeIf { it != -1 }
+        set(value) = identity.edit { if (value == null) remove(KEY_PREVIEW_EVENT) else putInt(KEY_PREVIEW_EVENT, value) }
+
     companion object {
         const val PREFS_NAME = "attnd_prefs"
 
@@ -257,3 +267,6 @@ class DevicePrefs(context: Context) {
         private const val NO_EVENT = -1
     }
 }
+
+/** API-026: [DevicePrefs.previewEventId] (kept apart from the companion's keys). */
+private const val KEY_PREVIEW_EVENT = "preview_event_id"

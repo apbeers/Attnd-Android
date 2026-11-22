@@ -60,7 +60,8 @@ app/
       EventTime.kt                #   ISO parsing and formatting in the EVENT's time zone
       ScheduleGrouping.kt         #   timeline / by_day / by_location / now_next, search, ended/now
       LocationGrouping.kt         #   category grouping, filters, mappable pins, bounds
-      JoinLinks.kt                #   /join/<code>/ App Links + install-referrer parsing
+      JoinLinks.kt                #   /join/<code>/ App Links + install-referrer parsing; API-026 `previewToken` (`?preview=`)
+      PreviewPhone.kt             #   API-026 `PreviewPoll`: changes/ answer → refresh / wait / stop, when it runs, the capsule, the join answer
       ScreenshotRequest.kt        #   Debug store-screenshot mode: launch extras → screen to show
       UsageAggregator.kt          #   API-005 counts by (name, detail, UTC 5-minute window) + metric names
       SupportInfo.kt              #   API-004 build/device/event details, support code, copy text
@@ -112,6 +113,7 @@ app/
       api/ApiMapper.kt            #   DTO → domain, applying defaults
       api/ContextMapper.kt        #   Lenient JsonElement decoding: API-018 context, API-023 theme, API-027 live_activity
       EventRepository.kt          #   Single source of truth (StateFlow bundle), join/leave/refresh, disk cache, push token state
+      PreviewPoller.kt            #   API-026 preview phone: `changes/` long-poll while resumed (`EventViewModel.previewSync`)
       ImageDiskCache.kt           #   API-007 offline images (filesDir/images/): fetch, prefetch, clean-up
       OnDeviceAssistant.kt        #   ML Kit GenAI Prompt API wrapper: availability, model download, answer (guarded)
       UsageReporter.kt            #   API-005 anonymous usage counts: aggregate, flush every ~60 s / background / leave
@@ -356,11 +358,14 @@ Base `https://attnd.app/api/v2/` — see attnd-web `API_V2.md`.
 | `GET events/nearby/?lat&lng` | Launch screen "Find nearby events" |
 | `GET events/lookup/?q=` | Event code / exact name (QR codes, App Links, referrer) |
 | `GET events/<id>/bundle/` | Everything shown; `If-None-Match` → `304`; `X-Device-Id` header |
-| `POST events/<id>/join/` | `{device_id, platform, push_token, app_version}` |
+| `POST events/<id>/join/` | `{device_id, platform, push_token, app_version, preview_token?}` (API-026: `preview` in the answer) |
+| `GET events/<id>/changes/?since=` | API-026 preview phone long-poll while resumed |
 | `POST events/<id>/leave/` | `{device_id}`; queued in `DevicePrefs.pendingLeaves` and sent at once, at launch and after every successful refresh until the server accepts it (404 / 400 drop it too); rejoining the event drops it (`EventRepository.sendPendingLeaves`) |
 | `POST devices/` | On launch and when push token / notification preference changes; `push_token` whenever there is one (omitted, never `""`, without one), `subscribed` = the opt-in |
 
 Bundle refresh (API-007): live updates are **push-driven**. A `content_updated` push refreshes silently after a random delay (0…`jitter_ms` when the push sends it, API-026, clamped to 60 s, 0 = at once; else 0–10 s), only when its `content_version` is newer than the bundle's (`EventRepository.onContentUpdated`, works in the background too). Also on join, when the app is resumed, on pull-to-refresh, and a poll while the activity is resumed and an event is joined (`EventViewModel.foregroundSync`; conditional GET, usually `304`): a **5-minute safety poll** when the server has this device's push token (`EventRepository.hasPushToken`), otherwise **every 60 s** (no Firebase config, no Play services, token fetch or registration failed), and **every 15 s** while the last refresh failed — `LiveUpdates.pollIntervalMs`. **Network tidy-ups** (iOS, Nov 22): `app-status/` once per launch, then at most hourly; `POST devices/` only when the token, opt-in or joined event changed since the last registration the server accepted this launch (or it failed); foreground and poll refreshes are skipped within 15 s of a successful fetch (pushes, pull to refresh and joins always go). After every successful refresh `retryPendingServerWork` sends queued leaves and a failed device registration. Polls and push refreshes use `refresh(silent = true)` (no spinner); at these intervals the offline notice appears after the first failed poll (`LiveUpdates.failuresBeforeOfflineNotice`; any success clears it) and reads "Offline · last updated 2:14 PM" (last successful refresh, device time zone and 12/24-hour setting). A `404` on the bundle clears the event and returns to the launch screen.
+
+**Preview phones (API-026)**: the console's **Preview on my phone** QR is the join link with `?preview=<token>`. A join link (App Link, scanned QR, pasted link; `JoinLinks.previewToken`: join links only, letters / digits / `-_.:`, ≤ 512) sends it once as `preview_token` with `join/` (never logged or shown: `Redact` masks `preview=` / `preview_token=` and drops `*token*` fields). `preview: true` in the answer makes this the event's preview phone (`EventRepository.previewEventId`, `DevicePrefs.previewEventId` in the non-backed-up device file); it ends on leaving, switching, a 404 or `preview: false` (a 4th preview phone joins as an ordinary attendee; an answer without the key keeps it). While the activity is resumed (`MainActivity`'s RESUMED block → `EventViewModel.previewSync` → `PreviewPoller`, never in screenshot mode) it long-polls `GET events/<id>/changes/?since=<content_version>` (`X-Device-Id`): changed or newer → `refresh(silent, source = "preview")` at once (15 s wait if that didn't move the version), else wait `retry_after` (≤ 3,600 s), errors 15 s, `preview: false` → stop (`PreviewPoll.next`). A green **Instant updates on** pill joins `EventStatusPills` meanwhile. Tests: `PreviewPhoneTest`.
 
 **Event website (API-016)**: `event.website_url` (the organizer's Attnd Studio site, or null) → `Event.websiteUrl` via `WebLinks.httpsUrl` (missing, null, blank, non-`https` or host-less → null). When set, `EventInfoCard` (Options' event card and the search screen's event detail) shows a **Website** button that opens it with `Intent.ACTION_VIEW` + `CATEGORY_BROWSABLE` (the browser, never a WebView; nothing from the app is sent to it). Not on the top bar, so store screenshots don't change.
 
