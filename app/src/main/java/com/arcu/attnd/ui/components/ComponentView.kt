@@ -106,6 +106,9 @@ class ComponentHost(
     val onEventInfo: (() -> Unit)? = null,
     /** Home's gear when Home is the Options tab. */
     val onOptions: (() -> Unit)? = null,
+    /** The newest unread update of the last day (`update_banner`, catalogue 2) and its ✕ / swipe. */
+    val updateBanner: EventNotification? = null,
+    val onDismissUpdate: ((Int) -> Unit)? = null,
 )
 
 val LocalComponentHost = staticCompositionLocalOf { ComponentHost() }
@@ -208,8 +211,16 @@ fun ScreenComponentView(component: Component, modifier: Modifier = Modifier) {
                 }
             }
         }
-        // `update_banner` (catalogue 2, phase 5c) and `status` (the fixed pills stay) draw nothing here yet;
-        // `ask_about` draws nothing since Nov 21, 2026; unknown types are skipped.
+        // Catalogue 2: the newest unread update of the last day, where the organizer put it (the fixed banner
+        // above the tab stays away then).
+        "update_banner" -> host.updateBanner?.let { update ->
+            val dismiss = { host.onDismissUpdate?.invoke(update.id); Unit }
+            SwipeUpToDismiss(onDismiss = dismiss) {
+                UpdateBanner(update, bundle, onOpen = { actions.onOpen(EntityRef(RefKind.UPDATE, update.id)) }, onDismiss = dismiss, modifier = modifier)
+            }
+        }
+        // `status`: the Demo / Event ended pills stay the fixed ones. `ask_about` draws nothing since
+        // Nov 21, 2026; unknown types are skipped.
         else -> Unit
     }
 }

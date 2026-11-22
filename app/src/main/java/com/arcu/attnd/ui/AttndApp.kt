@@ -110,6 +110,8 @@ import com.arcu.attnd.ui.screens.UpdateAvailableBanner
 import com.arcu.attnd.ui.screens.UpdateRequiredScreen
 import com.arcu.attnd.ui.theme.AttndTheme
 import com.arcu.attnd.ui.components.LocalScreenEnv
+import com.arcu.attnd.ui.components.rememberLayoutSections
+import com.arcu.attnd.domain.LayoutScreen
 import com.arcu.attnd.ui.components.ScreenEnv
 import com.arcu.attnd.ui.components.ComponentHost
 import com.arcu.attnd.ui.components.withOpen
@@ -210,6 +212,8 @@ fun AttndApp(viewModel: EventViewModel = viewModel(factory = EventViewModel.Fact
                                     onShowUserLocation = viewModel::setShowUserLocation,
                                     onNotificationsGranted = { viewModel.setNotificationsEnabled(true) },
                                     onDone = viewModel::finishOnboarding,
+                                    followsLive = state.followLive,
+                                    onFollowLive = viewModel::setFollowLive,
                                 )
                             }
                         }
@@ -397,8 +401,11 @@ private fun EventShell(state: AppUiState, bundle: EventBundle, viewModel: EventV
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
                     )
                 }
-                // The newest unread organizer update, on the other tabs, for 24 h (swipe up or ✕).
-                state.updateBanner?.takeIf { state.selectedTab != Tab.NOTIFICATIONS }?.let { update ->
+                // The newest unread organizer update, on the other tabs, for 24 h (swipe up or ✕). Home draws it
+                // itself where its layout places an `update_banner` section (API-027).
+                val homeLayout = rememberLayoutSections(LayoutScreen.HOME, bundle)
+                val homePlacesBanner = selected == EventTab.HOME && homeLayout.any { it.type == "update_banner" }
+                state.updateBanner?.takeIf { state.selectedTab != Tab.NOTIFICATIONS && !homePlacesBanner }?.let { update ->
                     SwipeUpToDismiss(onDismiss = { viewModel.dismissLatestUpdate(update.id) }) {
                         UpdateBanner(
                             notification = update,
@@ -494,9 +501,11 @@ private fun TabContent(
                 }
             }
             val showOptions = state.tabs.optionsTab == EventTab.HOME
-            val host = remember(state.mySchedule, state.dismissedUrgentIds, showOptions, viewModel) {
+            val host = remember(state.mySchedule, state.dismissedUrgentIds, state.updateBanner, showOptions, viewModel) {
                 ComponentHost(
                     mySchedule = state.mySchedule,
+                    updateBanner = state.updateBanner,
+                    onDismissUpdate = viewModel::dismissLatestUpdate,
                     dismissedUrgent = state.dismissedUrgentIds,
                     onDismissUrgent = viewModel::dismissUrgent,
                     onEventInfo = { viewModel.open(OpenRequest(eventId, OpenTarget.EventInfo)) },

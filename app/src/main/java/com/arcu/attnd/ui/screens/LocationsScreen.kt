@@ -61,7 +61,10 @@ import com.arcu.attnd.domain.EventBundle
 import com.arcu.attnd.domain.EventLocation
 import com.arcu.attnd.domain.EventTime
 import com.arcu.attnd.domain.Glance
+import com.arcu.attnd.domain.LayoutScreen
 import com.arcu.attnd.domain.LocationGrouping
+import com.arcu.attnd.domain.TabListLayout
+import com.arcu.attnd.ui.components.rememberLayoutSections
 import com.arcu.attnd.domain.LocationsStyle
 import com.arcu.attnd.domain.RelativeTime
 import com.arcu.attnd.domain.ScheduleGrouping
@@ -85,7 +88,10 @@ import com.arcu.attnd.ui.components.SectionHeader
 import com.arcu.attnd.ui.components.rememberNow
 import java.time.Instant
 
-/** Locations tab: list (styled by `display.locations_style`) with a detail pane. */
+/**
+ * Locations tab: list with a detail pane. The tab's own layout (API-027 `places_tab`, [TabListLayout]) picks the
+ * list (grouped / cards / list) and the organizer's featured places; else `display.locations_style`.
+ */
 @Composable
 fun LocationsTab(
     bundle: EventBundle,
@@ -98,6 +104,8 @@ fun LocationsTab(
     onLocationShown: (Int) -> Unit = {},
     onSearch: () -> Unit = {},
 ) {
+    val layoutSections = rememberLayoutSections(LayoutScreen.PLACES_TAB, bundle)
+    val tabLayout = remember(layoutSections) { TabListLayout.places(layoutSections) }
     IdListDetail(
         requestedId = focusLocationId,
         onRequestConsumed = onFocusConsumed,
@@ -105,6 +113,7 @@ fun LocationsTab(
         list = { selectedId, open ->
             LocationsList(
                 bundle = bundle,
+                tabLayout = tabLayout,
                 isRefreshing = isRefreshing,
                 onRefresh = onRefresh,
                 selectedId = selectedId,
@@ -144,8 +153,11 @@ fun LocationsList(
     onSearch: () -> Unit = {},
     /** A schedule item tapped in a place's "3 events" disclosure; null = not tappable. */
     onScheduleItemClick: ((Int) -> Unit)? = null,
+    /** The Places tab's layout (API-027); null beside the map and without a layout. */
+    tabLayout: TabListLayout? = null,
 ) {
     val display = bundle.display
+    val style = tabLayout?.style?.let(LocationsStyle::fromKey) ?: display.locationsStyle
     val hearts = LocalEventActions.current.hearts
     val now = rememberNow()
     var query by rememberSaveable { mutableStateOf("") }
@@ -188,7 +200,18 @@ fun LocationsList(
                 )
             } else {
                 LazyColumn(Modifier.fillMaxSize(), contentPadding = contentPadding) {
-                    when (display.locationsStyle) {
+                    // API-027: the organizer's featured places first (among those the filters keep, not while searching).
+                    if (query.isBlank()) {
+                        val featured = tabLayout?.featured.orEmpty().mapNotNull { id -> filtered.firstOrNull { it.id == id } }
+                        if (featured.isNotEmpty()) {
+                            item(key = "h-featured") { SectionHeader(tabLayout?.featuredTitle ?: "Featured") }
+                            items(featured, key = { "featured-${it.id}" }) { location ->
+                                LocationRow(bundle, location, display.showLocationImages, location.id == selectedId, now, { open(location.id) }, { longPress(location.id) }, onScheduleItemClick)
+                                HorizontalDivider()
+                            }
+                        }
+                    }
+                    when (style) {
                         LocationsStyle.CARDS -> items(filtered, key = { it.id }) { location ->
                             LocationCard(bundle, location, display.showLocationImages, location.id == selectedId, now, open, longPress, onScheduleItemClick)
                         }

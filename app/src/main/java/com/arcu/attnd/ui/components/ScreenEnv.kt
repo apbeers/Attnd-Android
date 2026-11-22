@@ -43,3 +43,16 @@ fun rememberSections(
         ScreenLayout.resolve(screen, layouts, facts(bundle, env.state(now)), subject)
     }
 }
+
+/**
+ * A screen's sections before the facts decide visibility (iOS `AppState.layoutSections`). Catalogue 2's tab
+ * screens (`schedule_tab`, `places_tab`, `updates_tab`, `onboarding`) have no built-in layout: empty = today's
+ * screen. Always empty in screenshot mode (the built-in screens).
+ */
+@Composable
+fun rememberLayoutSections(screen: LayoutScreen, bundle: EventBundle): List<LayoutSection> {
+    val env = LocalScreenEnv.current
+    return remember(screen, bundle, env.layoutsEnabled) {
+        ScreenLayout.sections(screen, bundle.layout.takeIf { env.layoutsEnabled })
+    }
+}

@@ -54,11 +54,43 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.arcu.attnd.data.log.PermissionLog
 import com.arcu.attnd.domain.EventBundle
+import com.arcu.attnd.domain.LayoutScreen
+import com.arcu.attnd.domain.OnboardingLayout
+import com.arcu.attnd.ui.components.RemoteImage
+import com.arcu.attnd.ui.components.rememberLayoutSections
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.ui.draw.clip
 import com.arcu.attnd.domain.PlanExample
 import com.arcu.attnd.push.PushNotifications
 import com.arcu.attnd.ui.PlanUiState
 
-private enum class TourCard { WELCOME, LOCATION, NOTIFICATIONS, PLAN }
+private enum class TourCard { INTRO, WELCOME, LOCATION, NOTIFICATIONS, LOCK_SCREEN, PLAN }
+
+/**
+ * The cards in order (iOS `OnboardingView.cards`): the organizer's (API-027 `onboarding`: which cards, their order,
+ * the welcome card; [OnboardingLayout]), else the built-in ones. The plan card needs the planner either way; a
+ * layout with no card left shows the intro alone.
+ */
+private fun tourCards(layout: OnboardingLayout?, planAvailable: Boolean): List<TourCard> {
+    if (layout == null) {
+        return listOf(TourCard.INTRO, TourCard.LOCATION, TourCard.NOTIFICATIONS, TourCard.PLAN)
+            .filter { it != TourCard.PLAN || planAvailable }
+    }
+    val mapped = layout.cards.mapNotNull { card ->
+        when (card) {
+            OnboardingLayout.Card.INTRO -> TourCard.INTRO
+            OnboardingLayout.Card.WELCOME -> TourCard.WELCOME
+            OnboardingLayout.Card.LOCATION -> TourCard.LOCATION
+            OnboardingLayout.Card.NOTIFICATIONS -> TourCard.NOTIFICATIONS
+            OnboardingLayout.Card.LOCK_SCREEN -> TourCard.LOCK_SCREEN
+            OnboardingLayout.Card.PLAN -> TourCard.PLAN.takeIf { planAvailable }
+        }
+    }
+    return mapped.ifEmpty { listOf(TourCard.INTRO) }
+}
 
 /**
  * The tour (shared spec §7): shown the first time an event is joined and from Options → Tour, never
@@ -75,11 +107,14 @@ fun OnboardingScreen(
     onShowUserLocation: (Boolean) -> Unit,
     onNotificationsGranted: () -> Unit,
     onDone: () -> Unit,
+    /** "Follow on Lock Screen" for the event (the `lock_screen` card). */
+    followsLive: Boolean = false,
+    onFollowLive: (Boolean) -> Unit = {},
 ) {
     val context = LocalContext.current
-    val cards = remember(planner.available) {
-        TourCard.entries.filter { it != TourCard.PLAN || planner.available }
-    }
+    val layoutSections = rememberLayoutSections(LayoutScreen.ONBOARDING, bundle)
+    val layout = remember(layoutSections) { OnboardingLayout.of(layoutSections) }
+    val cards = remember(layout, planner.available) { tourCards(layout, planner.available) }
     var index by rememberSaveable { mutableIntStateOf(0) }
     val card = cards[index.coerceIn(0, cards.lastIndex)]
     val isLast = index >= cards.lastIndex
@@ -100,6 +135,12 @@ fun OnboardingScreen(
         notificationsGranted = granted
         if (granted) onNotificationsGranted()
         next()
+    }
+    // The lock_screen card: Follow on Lock Screen needs POST_NOTIFICATIONS first.
+    val followPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        PermissionLog.notifications("onboarding", granted)
+        notificationsGranted = granted
+        if (granted) onFollowLive(true)
     }
     BackHandler(onBack = onDone)
 
@@ -125,6 +166,39 @@ fun OnboardingScreen(
             ) {
                 when (card) {
                     TourCard.WELCOME -> {
+                        // The organizer's welcome card (title / text / https image; skipped when it says nothing).
+                        layout?.welcomeImage?.let { image ->
+                            RemoteImage(
+                                image,
+                                contentDescription = null,
+                                modifier = Modifier.fillMaxWidth().height(180.dp).clip(RoundedCornerShape(18.dp)),
+                            )
+                        }
+                        Text(
+                            layout?.welcomeTitle ?: bundle.event.name.ifBlank { "Welcome" },
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center,
+                        )
+                        layout?.welcomeText?.let { Body(it) }
+                    }
+                    TourCard.LOCK_SCREEN -> {
+                        Title(Icons.Filled.Lock, "Follow on your Lock Screen")
+                        Body("See what's on now and next, with a countdown and the walk, without opening the app.")
+                        if (followsLive) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Filled.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                Spacer(Modifier.size(8.dp))
+                                Text("On your Lock Screen", color = MaterialTheme.colorScheme.primary)
+                            }
+                        } else {
+                            OutlinedButton(onClick = {
+                                if (PushNotifications.hasPermission(context)) onFollowLive(true)
+                                else followPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            }) { Text("Follow on Lock Screen") }
+                        }
+                    }
+                    TourCard.INTRO -> {
                         Title(Icons.Filled.Map, "Welcome to ${bundle.event.name}")
                         Feature(Icons.Filled.Map, "The map shows every place, what's on there now and how far it is.")
                         Feature(Icons.Filled.CalendarMonth, "The schedule counts down to what's next. Like what you don't want to miss.")

@@ -59,6 +59,9 @@ import androidx.compose.ui.unit.dp
 import com.arcu.attnd.domain.EventBundle
 import com.arcu.attnd.domain.EventLocation
 import com.arcu.attnd.domain.EventTime
+import com.arcu.attnd.domain.LayoutScreen
+import com.arcu.attnd.domain.TabListLayout
+import com.arcu.attnd.ui.components.rememberLayoutSections
 import com.arcu.attnd.domain.Glance
 import com.arcu.attnd.domain.RelativeTime
 import com.arcu.attnd.domain.ScheduleGrouping
@@ -83,7 +86,10 @@ import com.arcu.attnd.ui.components.rememberNow
 import java.time.Instant
 import java.time.ZoneId
 
-/** Schedule tab: list (styled by `display.schedule_style`) with a detail pane. */
+/**
+ * Schedule tab: list with a detail pane. The tab's own layout (API-027 `schedule_tab`, [TabListLayout]) picks the
+ * list style and the organizer's featured items; without one (and always in screenshot mode) `display.schedule_style`.
+ */
 @Composable
 fun ScheduleTab(
     bundle: EventBundle,
@@ -96,6 +102,8 @@ fun ScheduleTab(
     onItemShown: (Int) -> Unit = {},
     onSearch: () -> Unit = {},
 ) {
+    val layoutSections = rememberLayoutSections(LayoutScreen.SCHEDULE_TAB, bundle)
+    val tabLayout = remember(layoutSections) { TabListLayout.schedule(layoutSections) }
     IdListDetail(
         requestedId = focusItemId,
         onRequestConsumed = onFocusConsumed,
@@ -103,7 +111,8 @@ fun ScheduleTab(
         list = { selectedId, open ->
             ScheduleList(
                 bundle = bundle,
-                style = bundle.display.scheduleStyle,
+                style = tabLayout?.style?.let(ScheduleStyle::fromKey) ?: bundle.display.scheduleStyle,
+                tabLayout = tabLayout,
                 isRefreshing = isRefreshing,
                 onRefresh = onRefresh,
                 selectedId = selectedId,
@@ -139,6 +148,11 @@ fun ScheduleList(
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(0.dp),
     onSearch: () -> Unit = {},
+    /**
+     * The Schedule tab's layout (API-027): its featured items first. `showsMySchedule` is for the My schedule
+     * section once the Schedule tab has one (phase 3b). Null beside the map and without a layout.
+     */
+    tabLayout: TabListLayout? = null,
 ) {
     val zone = bundle.event.zone
     val now = rememberNow()
@@ -197,6 +211,26 @@ fun ScheduleList(
                 )
             } else {
                 LazyColumn(Modifier.fillMaxSize(), contentPadding = contentPadding) {
+                    // API-027: the organizer's featured items first (not while searching or filtering).
+                    if (query.isBlank() && !heartedOnly) {
+                        val featured = tabLayout?.featured.orEmpty().mapNotNull { bundle.scheduleItem(it) }
+                        if (featured.isNotEmpty()) {
+                            item(key = "h-featured") { SectionHeader(tabLayout?.featuredTitle ?: "Featured") }
+                            items(featured, key = { "featured-${it.id}" }) { item ->
+                                ScheduleRow(
+                                    item = item,
+                                    location = bundle.location(item.locationId),
+                                    zone = zone,
+                                    now = now,
+                                    showLocation = true,
+                                    selected = item.id == selectedId,
+                                    onClick = { onItemClick(item.id) },
+                                    onLongClick = { peek = item.id },
+                                )
+                                HorizontalDivider()
+                            }
+                        }
+                    }
                     sections.forEach { section ->
                         if (section.title.isNotEmpty()) item(key = "h-${section.key}") { SectionHeader(section.title) }
                         items(section.items, key = { "${section.key}-${it.id}" }) { item ->

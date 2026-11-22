@@ -151,7 +151,7 @@ Weather was never built.
 | API-024 layouts | ⬜ later | Phase 5 |
 | API-025 free limit | ⬜ | Phase 12 (optional; iOS hasn't done it) |
 | API-026 preview / jitter | ✅ | Phase 9 (`domain/PreviewPhone.kt`, `data/PreviewPoller.kt`; `jitter_ms` in phase 1) |
-| API-027 catalogue 2 + `live_activity` | ⬜ parked | Phases 5c + 8 |
+| API-027 catalogue 2 + `live_activity` | ✅ done | Phases 5c + 8 |
 | API-030 Apple Music | ⬜ paused | Phases 1 + 5 |
 | API-031 Google photo credit | ⬜ paused | Phases 1 + 5 |
 
@@ -597,7 +597,14 @@ Phase 0 (toolchain and dependencies, minSdk 36) runs elsewhere. When it lands, p
   `MapScreen.kt` (overlay flags), `ui/assistant/AssistantBlocksUi.kt` (shared pieces), `AttndApi.kt` (header).
 - **Tests:** `DisplayLogic` cases for `PlaceEvents` / `PlaceWalkMap`; a decoding round trip of a server layout.
 
-**Phase 5c — Catalogue-2 tab screens (M)**
+**Phase 5c — Catalogue-2 tab screens (M)** — ✅ done (Nov 22, 2026)
+- **Shipped:** Schedule / Places tabs from `schedule_tab` / `places_tab` (`TabListLayout`: style, featured first),
+  Updates in `UpdatesLayout.groups` (with FAQ / getting there cards, jumps into groups), onboarding cards from
+  `onboarding` (welcome with image, `lock_screen` → Follow on Lock Screen), `update_banner` as a Home section (the
+  fixed banner stays away then), `status` draws nothing; `rememberLayoutSections`. Domain tests were 5a's
+  (`ScreenLayoutTest`: `tabListLayout`, `updatesLayoutEachOnceNewestFirst`, `onboardingLayout`, catalogue 2 decoding).
+- **Deferred:** `TabListLayout.showsMySchedule` has nothing to hide until the Schedule tab gets its My schedule section
+  (phase 3b / one list); row parts (`show`) are not drawn (iOS neither).
 - **Scope:** `schedule_tab`, `places_tab` and `updates_tab` from `TabListLayout` / `UpdatesLayout` (featured, pinned,
   groups); `onboarding` from `OnboardingLayout` (welcome, lock_screen cards); `update_banner` as a section on Home.
 - **Files:** `ScheduleScreen.kt`, `LocationsScreen.kt`, `NotificationsScreen.kt`, `OnboardingScreen.kt`.
