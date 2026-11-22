@@ -41,6 +41,24 @@ class ImageCachePlanTest {
     }
 
     @Test
+    fun livePlacePhotos_areNeverPrefetched() {
+        // API-031: Attnd's live Google photo redirect is loaded per view, never kept on disk.
+        assertTrue(ImageCachePlan.isLivePlacePhoto("https://attnd.app/img/places/12/"))
+        assertTrue(ImageCachePlan.isLivePlacePhoto("https://dev.attnd.app/img/places/12"))
+        assertTrue(ImageCachePlan.isLivePlacePhoto("https://attnd.app/img/places/12/?format=json"))
+        assertFalse(ImageCachePlan.isLivePlacePhoto("https://attnd.app/img/places/abc/"))
+        assertFalse(ImageCachePlan.isLivePlacePhoto("https://attnd.app/img/places/"))
+        assertFalse(ImageCachePlan.isLivePlacePhoto("https://attnd.app/media/img/places/12/"))
+        assertFalse(ImageCachePlan.isLivePlacePhoto(taco))
+        val bundle = ApiMapper.parseBundle(
+            """{"event":{"id":1,"logo_url":"$logo"},"locations":[
+              {"id":1,"sort_order":1,"image_url":"https://attnd.app/img/places/1/","image_credit":"Photo: Google Maps"},
+              {"id":2,"sort_order":2,"image_url":"$taco"}]}""",
+        )!!
+        assertEquals(listOf(logo, taco), ImageCachePlan.referencedUrls(bundle))
+    }
+
+    @Test
     fun isPdf_ignoresQueryAndCase() {
         assertTrue(ImageCachePlan.isPdf("https://attnd.app/f.pdf"))
         assertTrue(ImageCachePlan.isPdf("https://cdn.example/flyer.PDF?sig=abc"))

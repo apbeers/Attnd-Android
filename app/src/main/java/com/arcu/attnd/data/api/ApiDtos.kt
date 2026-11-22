@@ -3,6 +3,7 @@ package com.arcu.attnd.data.api
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 
 /*
  * Wire format of the v2 API (see API_V2.md).
@@ -45,6 +46,10 @@ data class EventDto(
     @SerialName("join_url") val joinUrl: String? = null,
     /** API-016: the event's Attnd Studio website, or null. */
     @SerialName("website_url") val websiteUrl: String? = null,
+    /** API-018 (`bundle/` only), raw: decoded leniently by [ContextMapper]. */
+    val context: JsonElement? = null,
+    /** API-023 `{light, dark}` × primary / secondary / tertiary, raw ([ContextMapper.theme]). */
+    val theme: JsonElement? = null,
 )
 
 @Serializable
@@ -80,6 +85,12 @@ data class LocationDto(
     @SerialName("sort_order") val sortOrder: Int? = null,
     /** API-010; missing from older servers. */
     val tags: List<String?>? = null,
+    /** API-022 / API-031: the credit of a photo Attnd found ("Photo: Google Maps" for a live Google photo). */
+    @SerialName("image_credit") val imageCredit: String? = null,
+    /** API-031: https JSON with a live Google photo's authors. */
+    @SerialName("image_attribution_url") val imageAttributionUrl: String? = null,
+    /** API-018, raw ([ContextMapper.locationContext]). */
+    val context: JsonElement? = null,
 )
 
 @Serializable
@@ -92,6 +103,8 @@ data class ScheduleItemDto(
     @SerialName("location_id") val locationId: Int? = null,
     @SerialName("location_name") val locationName: String? = null,
     val tags: List<String?>? = null,
+    /** API-018 (performers with API-030 `apple_music_url`), raw ([ContextMapper.scheduleItemContext]). */
+    val context: JsonElement? = null,
 )
 
 @Serializable
@@ -131,6 +144,13 @@ data class BundleDto(
     val locations: List<LocationDto?>? = null,
     val schedule: List<ScheduleItemDto?>? = null,
     val notifications: List<NotificationDto?>? = null,
+    /** API-027: what the Live Update follows, raw ([ContextMapper.liveActivity]). */
+    @SerialName("live_activity") val liveActivity: JsonElement? = null,
+    /**
+     * API-024 / API-027 server-driven screens, kept raw until the app sends `X-Attnd-Sections`
+     * (it doesn't yet, so current servers leave this null). Mapped in a later phase.
+     */
+    val layout: JsonElement? = null,
 )
 
 // ── Requests ────────────────────────────────────────────────────────────────

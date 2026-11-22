@@ -51,6 +51,10 @@ data class Event(
     val joinUrl: String?,
     /** API-016: the event's website (Attnd Studio), only an absolute `https` URL; null when there is none. */
     val websiteUrl: String? = null,
+    /** API-018: about, FAQ, amenities, policies, getting there…; null when none (only `bundle/` sends it). */
+    val context: EventContext? = null,
+    /** API-023: the organizer's colours; null without a theme (then `accent_color`, else the brand). */
+    val theme: EventTheme? = null,
 ) {
     /** The zone every time in this event is displayed in. */
     val zone: ZoneId get() = EventTime.zoneOf(timezone)
@@ -76,6 +80,15 @@ data class EventLocation(
     val sortOrder: Int,
     /** API-010: lower-case labels ("live music", "kid-friendly"); filter and search as sent, see [Tags.display]. */
     val tags: List<String> = emptyList(),
+    /**
+     * API-022 / API-031: who an automatically found photo is by ("Photo: Google Maps" for a live
+     * Google photo); null for the organizer's own images.
+     */
+    val imageCredit: String? = null,
+    /** API-031: https JSON with a live Google photo's authors; null otherwise. */
+    val imageAttributionUrl: String? = null,
+    /** API-018: about, menu, hours, accessibility, age limit, links; null when none. */
+    val context: LocationContext? = null,
 )
 
 data class ScheduleItem(
@@ -87,6 +100,8 @@ data class ScheduleItem(
     val locationId: Int?,
     val locationName: String?,
     val tags: List<String>,
+    /** API-018: about, performers (API-030 Apple Music links), price, age limit, accessibility, links; null when none. */
+    val context: ScheduleItemContext? = null,
 )
 
 data class EventNotification(
@@ -119,6 +134,8 @@ data class EventBundle(
     val locations: List<EventLocation>,
     val schedule: List<ScheduleItem>,
     val notifications: List<EventNotification>,
+    /** API-027 `live_activity`: what the Live Update follows; null = the defaults. */
+    val liveActivity: LiveActivitySettings? = null,
 ) {
     fun location(id: Int?): EventLocation? = id?.let { wanted -> locations.firstOrNull { it.id == wanted } }
     fun scheduleItem(id: Int?): ScheduleItem? = id?.let { wanted -> schedule.firstOrNull { it.id == wanted } }

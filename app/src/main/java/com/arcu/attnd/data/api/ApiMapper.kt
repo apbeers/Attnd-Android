@@ -45,6 +45,7 @@ object ApiMapper {
             locations = dto.locations.orEmpty().mapNotNull { location(it) },
             schedule = dto.schedule.orEmpty().mapNotNull { scheduleItem(it) },
             notifications = dto.notifications.orEmpty().mapNotNull { notification(it) },
+            liveActivity = ContextMapper.liveActivity(dto.liveActivity),
         )
     }
 
@@ -76,6 +77,8 @@ object ApiMapper {
             contentVersion = dto.contentVersion ?: 0,
             joinUrl = dto.joinUrl?.takeIf { it.isNotBlank() },
             websiteUrl = WebLinks.httpsUrl(dto.websiteUrl),
+            context = ContextMapper.eventContext(dto.context),
+            theme = ContextMapper.theme(dto.theme),
         )
     }
 
@@ -119,6 +122,9 @@ object ApiMapper {
             coordinate = GeoPoint.of(dto.latitude, dto.longitude),
             sortOrder = dto.sortOrder ?: 0,
             tags = tags(dto.tags),
+            imageCredit = dto.imageCredit?.trim()?.takeIf { it.isNotEmpty() },
+            imageAttributionUrl = WebLinks.httpsUrl(dto.imageAttributionUrl),
+            context = ContextMapper.locationContext(dto.context),
         )
     }
 
@@ -134,6 +140,7 @@ object ApiMapper {
             locationId = dto.locationId,
             locationName = dto.locationName?.takeIf { it.isNotBlank() },
             tags = tags(dto.tags),
+            context = ContextMapper.scheduleItemContext(dto.context),
         )
     }
 

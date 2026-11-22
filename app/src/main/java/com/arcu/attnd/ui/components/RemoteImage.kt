@@ -22,6 +22,7 @@ import androidx.compose.ui.layout.ContentScale
 import com.arcu.attnd.data.ImageDiskCache
 import com.arcu.attnd.data.ImageFetch
 import com.arcu.attnd.domain.AppLog
+import com.arcu.attnd.domain.ImageCachePlan
 import com.arcu.attnd.domain.LogCategory
 import com.arcu.attnd.domain.LogEvent
 import kotlinx.coroutines.CancellationException
@@ -80,7 +81,8 @@ object ImageLoader {
     private fun key(url: String, maxDimension: Int) = "$maxDimension|$url"
 
     private suspend fun fetch(url: String, maxDimension: Int): Bitmap? = withContext(Dispatchers.IO) {
-        val disk = diskCache ?: return@withContext download(url, maxDimension)
+        // API-031: live Google place photos stay in memory only (Google's terms: never stored).
+        val disk = diskCache?.takeUnless { ImageCachePlan.isLivePlacePhoto(url) } ?: return@withContext download(url, maxDimension)
         disk.file(url)?.let { file ->
             decodeFile(file, maxDimension)?.let { return@withContext it }
             disk.evict(url) // unreadable: fetch it again

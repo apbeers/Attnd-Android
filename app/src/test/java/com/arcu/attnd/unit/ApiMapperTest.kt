@@ -2,14 +2,17 @@ package com.arcu.attnd.unit
 
 import com.arcu.attnd.data.api.ApiMapper
 import com.arcu.attnd.data.api.AppStatusDto
+import com.arcu.attnd.data.api.ContextMapper
 import com.arcu.attnd.domain.AppUpdate
 import com.arcu.attnd.domain.EventStatus
 import com.arcu.attnd.domain.GeoPoint
+import com.arcu.attnd.domain.LiveActivitySettings
 import com.arcu.attnd.domain.LocationsStyle
 import com.arcu.attnd.domain.ScheduleStyle
 import com.arcu.attnd.domain.SecondaryPane
 import com.arcu.attnd.domain.Tab
 import com.arcu.attnd.domain.UpdateLevel
+import kotlinx.serialization.json.Json
 import java.time.ZoneId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -190,5 +193,74 @@ class ApiMapperTest {
         // The full sample bundle carries it.
         assertEquals("https://sites.attnd-example.com/fw-fair/", ApiMapper.parseBundle(SampleBundles.FULL)!!.event.websiteUrl)
         assertNull(ApiMapper.parseBundle("""{"event": {"id": 1}}""")!!.event.websiteUrl)
+    }
+
+    // ── API-023 theme, API-022 / API-031 photo credit, API-027 live_activity (iOS ModelDecodingTests / ComponentTests / ScreenLayoutTests) ──
+
+    private fun eventWithTheme(theme: String) = ApiMapper.parseBundle("""{"event":{"id":1,"name":"X","event_code":"X","theme":$theme}}""")!!.event
+
+    @Test
+    fun theme_decodesBothModes_andIsLenient() {
+        val full = eventWithTheme("""{"light":{"primary":"#b23a1e","secondary":"#F2A65A","tertiary":"#1F7A8C","x":1},"dark":{"primary":"#F4895F","secondary":"#7A3B24","tertiary":"#4FB3C4"}}""")
+        assertEquals("#B23A1E", full.theme?.light?.primary)
+        assertEquals("#4FB3C4", full.theme?.colors(dark = true)?.tertiary)
+        // A bad value or a missing role / mode means the default for it.
+        val partial = eventWithTheme("""{"light":{"primary":"red","secondary":"#F2A65A"},"dark":null}""")
+        assertNull(partial.theme?.light?.primary)
+        assertEquals("#F2A65A", partial.theme?.light?.secondary)
+        assertNull(partial.theme?.dark)
+        assertNull(eventWithTheme("null").theme)
+        assertNull(eventWithTheme("""{"light":{"primary":"#12345"}}""").theme)
+        assertNull(eventWithTheme("\"nope\"").theme)
+        assertNull(ApiMapper.parseBundle(SampleBundles.FULL)!!.event.theme)
+    }
+
+    @Test
+    fun locationImageCredit_andAttributionUrl() {
+        val bundle = ApiMapper.parseBundle(
+            """{"event":{"id":1},"locations":[
+              {"id":1,"image_url":"https://attnd.app/img/places/1/","image_credit":" Photo: Google Maps ","image_attribution_url":"https://attnd.app/img/places/1/?format=json"},
+              {"id":2,"image_credit":"","image_attribution_url":"http://attnd.app/x"},
+              {"id":3}]}""",
+        )!!
+        assertEquals("Photo: Google Maps", bundle.locations[0].imageCredit)
+        assertEquals("https://attnd.app/img/places/1/?format=json", bundle.locations[0].imageAttributionUrl)
+        assertNull(bundle.locations[1].imageCredit)
+        assertNull("https only", bundle.locations[1].imageAttributionUrl)
+        assertNull(bundle.locations[2].imageCredit)
+        assertNull(bundle.locations[2].imageAttributionUrl)
+    }
+
+    @Test
+    fun liveActivitySettings_lenient() {
+        fun decode(json: String) = ContextMapper.liveActivity(Json.parseToJsonElement(json))!!
+        assertEquals(LiveActivitySettings.DEFAULTS, decode("{}"))
+        assertEquals(listOf("skip", "map"), decode("{}").liveButtons)
+        val set = decode("""{"follows": "LOCATION", "location_id": 3, "buttons": ["map", "add", "dance", "map"], "stale_text": "Open the app", "urgent": true}""")
+        assertEquals(LiveActivitySettings.Follows.LOCATION, set.follows)
+        assertEquals(listOf("map", "add"), set.buttons)
+        assertEquals(listOf("map"), set.liveButtons)
+        assertEquals("Open the app", set.staleText)
+        assertEquals(LiveActivitySettings.Follows.MY_SCHEDULE, decode("""{"follows": "nonsense", "buttons": []}""").follows)
+        assertEquals(emptyList<String>(), decode("""{"buttons": []}""").liveButtons)
+        assertEquals(60, decode("""{"stale_text": "${"x".repeat(80)}"}""").staleText?.length)
+        assertNull(ContextMapper.liveActivity(Json.parseToJsonElement("\"text\"")))
+        val bundle = ApiMapper.parseBundle("""{"event": {"id": 1, "name": "E", "event_code": "E"}, "live_activity": {"follows": "everything"}, "locations": [{"id": 3, "name": "Barn"}]}""")!!
+        assertEquals(LiveActivitySettings.Follows.EVERYTHING, bundle.liveActivity?.follows)
+        assertEquals(3, LiveActivitySettings(LiveActivitySettings.Follows.LOCATION, locationId = 3).followedLocation(bundle))
+        assertNull(LiveActivitySettings(LiveActivitySettings.Follows.LOCATION, locationId = 99).followedLocation(bundle))
+        assertNull(ApiMapper.parseBundle(SampleBundles.MINIMAL)!!.liveActivity)
+    }
+
+    @Test
+    fun bundleLayout_isAcceptedRaw_andHomeTabIgnoredForNow() {
+        // API-024: `layout` and a `home` tab only come with X-Attnd-Sections, which this build doesn't send;
+        // either way they must never break decoding.
+        val bundle = ApiMapper.parseBundle(
+            """{"event":{"id":1},"layout":{"home":[{"type":"header"}],"future":7},"display":{"tabs":["home","map","schedule"],"default_tab":"home"}}""",
+        )!!
+        assertEquals(listOf(Tab.MAP, Tab.SCHEDULE), bundle.display.tabs)
+        assertEquals(Tab.MAP, bundle.display.defaultTab)
+        assertNotNull(ApiMapper.parseBundle("""{"event":{"id":1},"layout":"nonsense","live_activity":[1]}"""))
     }
 }

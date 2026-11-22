@@ -15,4 +15,7 @@ object WebLinks {
         if (uri.host.isNullOrBlank()) return null
         return text
     }
+
+    /** The host of an absolute URL, or null. */
+    fun host(url: String): String? = runCatching { URI(url.trim()).host }.getOrNull()?.takeIf { it.isNotBlank() }
 }

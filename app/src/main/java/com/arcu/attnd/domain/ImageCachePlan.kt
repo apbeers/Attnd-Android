@@ -43,14 +43,27 @@ object ImageCachePlan {
     /**
      * Every image the bundle can show, most visible first (header logo, flyer, then locations in
      * list order), without duplicates: `display.logo_url`, `event.logo_url`, `event.flyer_url`
-     * unless it is a PDF, and each location's `image_url`.
+     * unless it is a PDF, and each location's `image_url`. API-031: live Google place photos
+     * ([isLivePlacePhoto]) are never kept on disk (Google's terms), so they are left out.
      */
     fun referencedUrls(bundle: EventBundle): List<String> = buildList {
         bundle.display.logoUrl?.let(::add)
         bundle.event.logoUrl?.let(::add)
         bundle.event.flyerUrl?.takeUnless(::isPdf)?.let(::add)
         bundle.locations.sortedBy { it.sortOrder }.forEach { location -> location.imageUrl?.let(::add) }
-    }.filter(::isRemote).distinct()
+    }.filter { isRemote(it) && !isLivePlacePhoto(it) }.distinct()
+
+    /**
+     * API-031: Attnd's live Google Places photo redirect, `/img/places/<id>/` (on any host, as on
+     * iOS `MediaCache.isLivePlacePhoto`). Loaded per view into memory only, never written to the
+     * image directory.
+     */
+    fun isLivePlacePhoto(url: String): Boolean {
+        if (!isRemote(url)) return false
+        val path = runCatching { java.net.URI(url.trim()).path }.getOrNull() ?: return false
+        val parts = path.split('/').filter { it.isNotEmpty() }
+        return parts.size == 3 && parts[0] == "img" && parts[1] == "places" && parts[2].all { it in '0'..'9' }
+    }
 
     /** Referenced URLs that have no file yet, in [referenced] order. */
     fun missing(referenced: List<String>, existingNames: Set<String>): List<String> =
