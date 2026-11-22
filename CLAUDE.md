@@ -93,7 +93,9 @@ app/
       LiveAssist.kt               #   Running late, check-off, skipped, gap filler, like clash, recap, organizer changes
       WhyNot.kt                   #   "Why isn't X in my plan?"
       PlanShare.kt                #   API-015 share payload/links, group plans
-      PlanTab.kt                  #   Plan tab spec: proposals (in-place previews: rows, diff pill), "do it"/"the second one" replies, no-AI rules
+      PlanProposal.kt             #   Proposals (in-place previews: rows, diff pill), "do it"/"the second one" replies, no-AI rules, swap, sequences
+      ConversationContext.kt      #   Assistant memory ("it", "the second one", "the taco place")
+      AssistantTools.kt           #   JSON tool protocol for the on-device model (tools, parse, ToolTurn)
       AssistantFlow.kt            #   Assistant screen rules: turn path (router / model / plan), block data (timeline sources, compare, summaries), live hints, shared plans (use / merge), transcript codec
       ScreenLayout.kt             #   API-024/027 server-driven screens: LayoutScreen/Section/Override, ScreenLayouts.decode (lenient), SectionCatalogue (VERSION 2), defaults, validate, overrides, `when` conditions, resolve, ScreenFacts (incl. the API-018 context parts), DetailColumns, HomeColumns(+Widths), TabletopSplit, AboutText, TabListLayout, UpdatesLayout, OnboardingLayout
       Component.kt                #   One component catalogue (chat blocks + layout sections; aliases plan_today/liked → my_schedule; chat decode/encode/valid)
@@ -244,8 +246,9 @@ The planner grows into an event assistant (`assistant_spec.md`; shared with iOS,
 fixtures). Tests: `AssistantRouterTest` (exact block/action JSON per input), `AssistantBlocksTest`, `PlanEditingTest`,
 `AssistantExtrasTest`, `AssistantFlowTest` (Android screen rules, transcript, shared plans), `QrCodeTest` (reference
 hashes from python-qrcode), all on `AssistantFixture` = `PlannerFixture` + the "live music and BBQ" plan.
-- **Rename** (§0): user-facing domain text says "liked" ("You liked this", "Because you liked X", "At X, which you liked",
-  "2 liked items today", `EventSearch.HEARTED_TITLE` = "Liked"). Identifiers, storage keys and the API-009 metric names keep "heart".
+- **Rename** (§0, then My schedule): user-facing domain text says "in your schedule" / "added" ("In your schedule",
+  "2 items and 0 places", WhyNot "(in your schedule)", `EventSearch.HEARTED_TITLE` = "My Schedule"); entity chips say
+  "Add to my schedule" / "Remove from my schedule". Identifiers, storage keys and the API-009 metric names keep "heart".
 - **Actions** (`AssistantActions.kt`): `ActionName` is the registry (key, typed params, `mutates`, `confirm` NONE / CHIP /
   SHEET, result type, `undoable`, `needsLocation`). `ActionRegistry.check` validates names and params against the bundle
   (ids exist, "HH:MM", event days, enums, readable ops). `ActionDispatcher` + the platform's `ActionExecutor`: CHIP actions
@@ -261,6 +264,32 @@ hashes from python-qrcode), all on `AssistantFixture` = `PlannerFixture` + the "
 - **Model path** (`AssistantModel`): `retrieve` (≤ 12), `prompt` (event facts, plan summary, likes, the last 6 turns +
   a keyword line, items), `parse` (first `{`…last `}`; invalid → `resolve` falls back to the router), `completeBlocks`
   for streaming, `AssistantConversation` (≤ 40 turns, stored with the plan per event).
+- **Phase 6a (iOS port, Nov 22, 2026)**: `ConversationContext` (memory: entities shown, focus, last action; "it / that /
+  them / the second one / option 3 / the taco place / there", stored in `AssistantConversation` as
+  `{"turns":[…],"memory":{…}}`, the old array still read); the router's My schedule grammar (`scheduleCommand`: add /
+  save / remove / move / remind me / what's on my schedule / show on the map / directions / find, clash question,
+  "Which one?"), `schedule_add` / `schedule_remove` (undoable) / `schedule_move` / `schedule_reminder` / read
+  `my_schedule` (like / unlike are add / remove), app settings behind confirm chips (`location`, `leave`,
+  `switch_server`), and iOS's eval rules ("Event facts and safety": safety → 911 + First Aid as intent `SAFETY`, never
+  the model; amenities, FAQ / policy / weather / getting-there topics, menus and diets, updates and changes, names in
+  questions, how far, event end, small talk, as `FACTS`, which go to the model when it's there). `TokenBudget` (4096
+  window, 1,300 fixed, 600 reply, UTF-8 bytes ÷ 3.5) + `AssistantModel.budget` / `assemble` / `answerText` /
+  `namedEntities`; `AssistantFlow.looksForeign` (other languages → the model), `doneLine`, `ChatTranscript` (≤ 40);
+  `PlanCommands.swap` / `sequence` (`PlanProposal.kt`, which holds every proposal type; the old `domain/PlanTab.kt` is gone).
+- **Tool protocol** (`AssistantTools.kt`, for Gemini Nano, which has no native tool calling): the prompt lists the tools
+  (find, event_info, my_schedule, now_next, add_to_schedule, remove_from_schedule, move_entry, set_reminder, plan_day,
+  show) and asks for exactly one JSON object per reply, `{"tool":"…","args":{…}}` or `{"answer":"…"}` (aliases
+  name / arguments / params / text accepted; the first balanced object is read). `ToolTurn.step(raw)` → `Continue`
+  (the "RESULT tool: …" line to send back and the working-line stage), `Finish` (the assembled turn) or `Fail`;
+  ≤ 4 rounds, writes validated by `ActionRegistry.check` (an error goes back as "Error: …"; two errors stop that tool).
+  The loop itself on `OnDeviceAssistant` is phase 6b.
+- **Assistant eval** (attnd-web `docs/assistant_eval/`): `scripts/assistant_eval/sync_data.py` copies `questions.json` and
+  `demo_bundle.json` into `app/src/test/resources/assistant_eval/`; `unit/AssistantEval.kt` (runner, grader, report;
+  iOS `AssistantEval.swift`'s rules, a turn as `AssistantController.submit` + swap / sequence) and `AssistantEvalTest`:
+  the catalogue check and every `critical` question run in every unit run; the full router run with
+  `./gradlew testDebugUnitTest -PassistantEval --tests '*AssistantEvalTest*'` (or `ATTND_ASSISTANT_EVAL=router`;
+  `ATTND_ASSISTANT_EVAL_ONLY` narrows) writes `app/build/assistant-eval/assistant-eval-android-router-<time>.json`
+  (`ATTND_ASSISTANT_EVAL_OUT`); Nov 22, 2026: 245/247 (iOS 242/247). Model mode needs Gemini Nano on a phone (not done).
 - **Plan editing** (`PlanEditing.kt`): `PlanOp`s → `PlanConstraints` → `Planner.replan` (rules 13–20: window/score with
   constraints, excluded/pinned/food filters, origin, pinned must-includes first, walk limit, pace, meals, re-solve with
   frozen started/checked-off entries). With `PlanConstraints.NONE` every rule 1–12 result is unchanged. `PlanDiff`,

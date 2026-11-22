@@ -187,6 +187,7 @@ android {
 // process's environment at execution time (also with the configuration cache), so the two variables
 // reach the tests without being stored in the build; the tests skip themselves when either is unset.
 def integrationTests = providers.gradleProperty('integrationTests').isPresent()
+def assistantEval = providers.gradleProperty('assistantEval').isPresent()
 tasks.withType(Test).configureEach { test ->
     if (integrationTests) {
         test.filter.includeTestsMatching 'com.arcu.attnd.integration.*'
@@ -195,6 +196,14 @@ tasks.withType(Test).configureEach { test ->
         test.outputs.cacheIf { false }
     } else {
         test.exclude 'com/arcu/attnd/integration/**'
+    }
+    // The full assistant eval (unit/AssistantEvalTest.routerEval) only with -PassistantEval; it writes a report,
+    // so it is never up to date or from the cache. The catalogue and critical questions run in every unit run.
+    if (assistantEval) {
+        test.systemProperty 'attnd.assistantEval', 'router'
+        test.testLogging.showStandardStreams = true
+        test.outputs.upToDateWhen { false }
+        test.outputs.cacheIf { false }
     }
 }
 

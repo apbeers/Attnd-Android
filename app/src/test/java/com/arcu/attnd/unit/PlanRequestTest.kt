@@ -95,6 +95,8 @@ class PlanRequestTest {
         assertTrue(PlanRequest.looksLikePlan("Kid-friendly afternoon"))
         assertTrue(PlanRequest.looksLikePlan("make an itinerary"))
         assertFalse(PlanRequest.looksLikePlan("What's on near me right now?"))
+        assertFalse("a time, not a duration (as iOS)", PlanRequest.looksLikePlan("what is on in an hour"))
+        assertFalse(PlanRequest.looksLikePlan("what starts in 2 hours"))
         assertFalse(PlanRequest.looksLikePlan("Where can I get coffee?"))
     }
 

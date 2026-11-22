@@ -188,9 +188,9 @@ already; for the new work the direction flips.
 | `RelativeTimeTest`, `GeoTest`, `WalkingTest`, `GlanceTest`, `HeartsTest` (+ `GlanceFixture`) | `GlanceTests` | Shared |
 | `PlannerTest`, `PlanRequestTest` (+ `PlannerFixture`) | `PlannerTests`, `PlanRequestTests` | **Diverged** on reason wording ("In your schedule", "Picked by", "Similar to"): re-sync in phase 3a |
 | `AssistantBlocksTest`, `PlanEditingTest`, `AssistantExtrasTest` (+ `AssistantFixture`) | same names | Shared; re-check after phase 6a (calendar removed: iOS lists `add_to_calendar` in `neverAvailable` and drops the `calendar` block) |
-| `AssistantRouterTest` | `AssistantRouterTests` | **Diverged** (My schedule grammar): re-sync in phase 6a |
-| `AssistantFlowTest` | `AssistantFlowTests` | **Diverged** (widget and transcript cases are Android-only; `ChatTranscript`, `doneLine`, `looksForeign` are iOS): re-sync in 6a |
-| `PlanTabTest` | `PlanProposalTests` | **Diverged** (sequences, swap, "more bbq"): re-sync in 6a |
+| `AssistantRouterTest` | `AssistantRouterTests` | Shared (re-synced in 6a) |
+| `AssistantFlowTest` | `AssistantFlowTests` | Shared (re-synced in 6a; widget cases Android-only; `ChatTranscript`, `doneLine`, `looksForeign` in `ConversationContextTest`) |
+| `PlanProposalTest` (+ `PlanTabTest` tabs) | `PlanProposalTests` | Shared (re-synced in 6a) |
 | `LiveFollowTest` (9) | `LiveFollowTests` (26) | **Diverged**: re-sync in phase 8 |
 | `LoggingTest`, `LogRedactionTest`, `DiagnosticsUploadTest` | `LoggingTests` | Shared spec; keep |
 | `ScheduleGroupingTest`, `LocationGroupingTest`, `DisplayConfigTest` | `DisplayLogicTests` (35) | Partly; port the missing cases (`PlaceEvents`, `PlaceWalkMap`, map clustering overlap, `filterRegion`) in phase 5b |
@@ -593,7 +593,16 @@ Phase 0 (toolchain and dependencies, minSdk 36) runs elsewhere. When it lands, p
 - **Files:** `ScheduleScreen.kt`, `LocationsScreen.kt`, `NotificationsScreen.kt`, `OnboardingScreen.kt`.
 - **Tests:** in 5a's `ScreenLayoutTest`.
 
-**Phase 6a — Assistant domain (L)**
+**Phase 6a — Assistant domain (L)** — ✅ done (Nov 22, 2026)
+- **Shipped:** everything below except the `PlanDock` rules (`addToPlan` / `planAround` / `summaryLine`: deferred, the
+  one-list spec (attnd-web `docs/specs/one_list_spec.md`) turns them into My schedule proposals). Tests:
+  `ConversationContextTest` (10, iOS's 11 minus the sequence case, which is in `PlanProposalTest`),
+  `AssistantToolsTest` (6), `AssistantRouterTest` (32 cases, iOS's), `PlanProposalTest`; the assistant eval
+  (`AssistantEvalTest`: catalogue + 50 critical questions in every run; the full router run with `-PassistantEval`):
+  **245/247** (iOS 242/247; Android passes "is the beer cold?", "cheapest food" and "bbq pitt lane" through the
+  no-AI keyword search, and fails "what did I miss this morning" and "resttoom", as iOS). `TODO(one-list)` markers:
+  `PlanCommands.sequence` (builds a Plan), the controller's SEQUENCE apply (`plans.applyPlan`), the router's
+  `plan_edit` commands.
 - **Scope:**
   - `ConversationContext`;
   - the router's My schedule grammar + `schedule_*` actions + app-settings commands (confirm chips);
