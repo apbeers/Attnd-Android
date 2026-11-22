@@ -85,7 +85,7 @@ import com.arcu.attnd.ui.assistant.AssistantController
 import com.arcu.attnd.ui.assistant.AssistantEffect
 import com.arcu.attnd.ui.assistant.AssistantIntents
 import com.arcu.attnd.ui.assistant.BlockActions
-import com.arcu.attnd.ui.assistant.MyPlanTab
+import com.arcu.attnd.ui.assistant.AskAttndChat
 import com.arcu.attnd.ui.assistant.RunningLateCard
 import com.arcu.attnd.ui.components.EventActions
 import com.arcu.attnd.ui.components.InAppBannerCard
@@ -303,7 +303,7 @@ private fun EventShell(state: AppUiState, bundle: EventBundle, viewModel: EventV
         }
     }
 
-    // My plan (until the phase 6b chat): the planner and assistant as a full-screen destination.
+    // Ask Attnd (phase 6b): the chat as a full-screen destination over the tabs.
     if (state.planOpen) {
         PlanDestination(state, bundle, viewModel, blockActions)
         return
@@ -462,39 +462,26 @@ private fun EventShell(state: AppUiState, bundle: EventBundle, viewModel: EventV
     }
 }
 
-/**
- * Ask Attnd (one list §7; was "My plan") as a full-screen destination with a Close action (the planner,
- * the assistant's router and Gemini Nano with its download card). Phase 6b replaces it with the chat.
- */
+/** Ask Attnd (one list §7; was "My plan"): the chat with Close (iOS `PlanChatStack`), over the tabs. */
 @Composable
 private fun PlanDestination(state: AppUiState, bundle: EventBundle, viewModel: EventViewModel, blockActions: BlockActions) {
-    BackHandler(onBack = viewModel::closePlan)
     LaunchedEffect(Unit) { viewModel.checkAssistant() }
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Ask Attnd") },
-                navigationIcon = { IconButton(onClick = viewModel::closePlan) { Icon(Icons.Filled.Close, contentDescription = "Close") } },
-            )
-        },
-    ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)) {
-            MyPlanTab(
-                controller = viewModel.assistantController,
-                bundle = bundle,
-                model = state.assistant,
-                planner = state.planner,
-                request = state.planRequest,
-                focusInput = state.focusInput,
-                actions = blockActions,
-                onRequestConsumed = viewModel::consumePlanRequest,
-                onSearch = viewModel::onSearch,
-                onDownloadModel = viewModel::downloadAssistant,
-                onLocationShown = viewModel::onLocationShown,
-                onScheduleItemShown = viewModel::onScheduleItemShown,
-            )
-        }
-    }
+    AskAttndChat(
+        controller = viewModel.assistantController,
+        bundle = bundle,
+        model = state.assistant,
+        planner = state.planner,
+        mySchedule = state.mySchedule,
+        request = state.planRequest,
+        focusInput = state.focusInput,
+        actions = blockActions,
+        onRequestConsumed = viewModel::consumePlanRequest,
+        onSearch = viewModel::onSearch,
+        onDownloadModel = viewModel::downloadAssistant,
+        onClose = viewModel::closePlan,
+        onLocationShown = viewModel::onLocationShown,
+        onScheduleItemShown = viewModel::onScheduleItemShown,
+    )
 }
 
 /** One tab's screen: Home, or an organizer tab (today's tabs in screenshot mode). */

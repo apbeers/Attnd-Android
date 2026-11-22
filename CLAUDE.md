@@ -146,7 +146,7 @@ app/
       OnDeviceModelController.kt  #   Gemini Nano availability and download
       AttndApp.kt                 #   Root composable, theme (accent colour), EventShell with NavigationSuiteScaffold
       MapTab.kt                   #   Foldable-aware map + secondary pane
-      assistant/                  #   Event assistant: AssistantController (state, proposals, ActionExecutor, model path, live hints), PlanTab (MyPlanTab, input bar, answer card, pills), AssistantBlocksUi (one component per block type), MiniMap (+ QrImage, day routes), AssistantIntents (share, calendar, Maps)
+      assistant/                  #   Event assistant: AssistantController (the chat's turns, proposals, ActionExecutor, the model's tool loop, live hints), PlanChat (AskAttndChat: bubbles, working / done lines, inline components, proposal + Undo cards, follow-up chips, composer, Your Day, download card, wide layout; RunningLateCard), AssistantBlocksUi (one component per block type), MiniMap (+ QrImage, day routes), AssistantIntents (share, Maps)
       components/                 #   ComponentView.kt (the one renderer: ComponentView / ScreenComponentView, ComponentHost), ScreenEnv.kt (LocalScreenEnv, rememberSections), EventInfo.kt (EventInfoCard, EventWebsiteButton), RemoteImage, FoldAwareSplit (+ FoldAwareBox), PaneSnackbarHost (Undo toast in one pane), IdListDetail, banners, chips, QR scanner; Glance.kt (DistanceArrow, WalkTime, HeartButton, AskAboutButton, PeekSheet, UpdateBanner, LocalEventActions, LocalScreenshotMode)
       sections/                   #   ContextSections.kt: API-018 sections (performers + Listen on Apple Music, good to know, links, hours, menu, FAQ, amenities, text), PhotoCreditLine (API-031)
       screens/                    #   Home (layout sections), LocationDetail / ScheduleDetail / EventInfoScreen (+ OptionsEventRows) from the layout, PlaceEventsDisclosure, Launch, Map, Locations, Schedule, Notifications, Flyer, Options (+ LogViewerScreen), Search (SearchFab, EventTopBar, SearchDetail), Onboarding (tour)
@@ -235,7 +235,7 @@ Everything is on the device; pure rules in `domain/` with JVM tests (`RelativeTi
 
 Everything on the device; pure rules in `domain/` with JVM tests on one fixture (`unit/PlannerFixture.kt`: a DEMO-like festival, America/Chicago, Sat Nov 14 – Sun Nov 15 2026, gates 10:00 AM, now Sat 10:00 AM, DEMO coordinates, hearted 101 The Prairie Lights + 114 Neon Armadillo; `PlannerTest`, `PlanRequestTest`, `LiveFollowTest`). iOS implements the same rules and cases.
 
-**Planner** (§6) — on every phone except in screenshot mode (`PlanUiState.available`, plan tab spec): with Gemini Nano AVAILABLE the model reads typed requests; without it plans come from likes and `PlanRequest.heuristic` alone (`buildPlan` skips the model).
+**Planner** (§6) — only on phones that can run Gemini Nano (phase 6b, owner: `checkStatus()` AVAILABLE, DOWNLOADABLE or DOWNLOADING), never in screenshot mode (`PlanUiState.available`, like Ask Attnd and the onboarding plan card): with Gemini Nano AVAILABLE the model reads typed requests; while it still has to download plans come from My schedule and `PlanRequest.heuristic` alone (`buildPlan` skips the model).
 - **Preferences** (`PlanPreferences`): liked/disliked tags and categories, `similarTo` ids, days, earliest/latest, duration (minutes), pace relaxed/balanced/packed, meals, kid-friendly. The model only extracts them: `PlanRequest.prompt` asks for one JSON object (`liked_tags, disliked_tags, liked_categories, disliked_categories, similar_to, days, earliest, latest, hours, pace, include_meals, kid_friendly`) listing NOW, DAYS, TAGS (≤ 40 by use), CATEGORIES, HEARTED and ITEMS (≤ 60 upcoming, "id name (tags)"); `OnDeviceAssistant.extractPreferences` (temperature 0, ≤ 320 tokens; plain `generateContent`: the typed/structured-output API needs the alpha `genai-schema` artifact). `PlanRequest.parse` takes the first `{`…last `}` and validates everything (tags lower case and in the bundle, categories case-insensitively → the event's spelling, ids in the schedule (also "S103"), days that are event days, `HH:MM`, 0 < hours ≤ 24, pace, booleans also as "true"). `PlanRequest.heuristic` reads the request with plain rules (tag/category phrases, plural `s`, a negation word among the two before → disliked; item names of 4+ chars → `similarTo`; weekdays/today/tonight/tomorrow; "after/from 3pm" / "before/until/till/by 9" (1–7 without am/pm = pm); else morning ≤ 12:00, afternoon 12–17, evening/tonight/night ≥ 17:00; "3 hours", "a couple of hours"; relaxed/packed words; meal words; kid words). `PlanRequest.merge(model, rules)`: sets unioned (disliked wins), days/times/duration from the model when given, pace the model's unless balanced, booleans OR; the rules alone when the model fails.
 - **Similarity** (`TfIdfSimilarity`): document = name + tags + location category + description + location name; terms = `SearchText.words`, ≥ 2 chars, not `SearchQuery.STOP_WORDS`; idf = ln((1+N)/(1+df)) + 1 over the whole schedule; weight = count × idf; cosine (sums in sorted term order). ML Kit's on-device `genai-embedding` exists only as 1.0.0-alpha1 (Oct 2026): not used, so both platforms compute the same plans.
 - **Scheduling** (`Planner`, rules 1–12 in its KDoc, the source of truth; rules 13–20 add the assistant's plan-edit constraints, see Event assistant): end = end or start + 1 h; booked minutes rounded down; `from` truncated to the minute; days = wanted event days ≥ today, else the first event day ≥ today with a candidate; window = max(from, day at earliest) … day at latest (next day when latest < 06:00 or ≤ earliest; else next midnight), capped by the duration; candidates start that day inside the window (start ≥ window start, end ≤ window end), kid-friendly drops `ADULT_TAGS` (21+, 18+, adults, adults only, adult), score ≤ 0 dropped (hearted never dropped); **score** in integer milli-points floor(x·1000 + 0.5), x = 0.5 + 3·hearted + 2·S (max similarity to hearted ∪ similarTo, not itself) + M (liked tag, liked category or hearted location) + K (kid-friendly and a `FAMILY_TAGS` tag: kid-friendly, kids, family, all ages, family-friendly) − 2·D (disliked tag/category); **gap** b after a: a.end + walk + 5 min ≤ b.start (walk = 0 same location or no coordinates, else `Walking` estimate in whole minutes rounded up, ≥ 1); **hearted must-include** by (score desc, start, end, id), a clash makes it an "or instead" of the earliest-starting kept item (then lower id); **pace** cap = max(floor(span × 50/70/90 %), kept hearted minutes), span = max(window start, first candidate start) … min(window end, last candidate end); **choice** = DP over (last item, booked minutes): max total score, then fewer booked minutes, fewer items, lexicographically smallest candidate positions; **meals** lunch 12:00–13:30 / dinner 18:00–19:30 clipped to the window, earliest of {clipped start, planned ends inside} rounded up to 5 min whose 45 min overlap nothing, suggesting the food location (category/tag contains "food") nearest the previous planned item (sort order, id), else the first; **reasons** in order (iOS wording since phase 3a) "Picked by <n> of you" (group) / "In your schedule" / "You added this" (pinned) / "Because X is in your schedule" (S ≥ 0.2) / "Because you asked for <tag>" / "Because you asked for <category>" / "At X, in your schedule" / "Kid-friendly" / "Similar to X" / "Fits your day"; **swap** ≤ 3 alternatives: "or instead" first, then candidates fitting between the neighbours by (score desc, start, id) (ignores the pace cap); **changed** = a planned item gone or its name/start/end/location differs (`Planner.fingerprint`). `Planner.summary`: "8 items, 10:00 AM – 11:00 PM, with a lunch break".
@@ -296,14 +296,30 @@ hashes from python-qrcode), all on `AssistantFixture` = `PlannerFixture` + the "
   name / arguments / params / text accepted; the first balanced object is read). `ToolTurn.step(raw)` → `Continue`
   (the "RESULT tool: …" line to send back and the working-line stage), `Finish` (the assembled turn) or `Fail`;
   ≤ 4 rounds, writes validated by `ActionRegistry.check` (an error goes back as "Error: …"; two errors stop that tool).
-  The loop itself on `OnDeviceAssistant` is phase 6b.
+  **The loop** (phase 6b, `AssistantTools.run`, pure, tested with a fake model in `AssistantToolsTest`): ML Kit has
+  no session, so every round re-sends the whole prompt — the budgeted turn prompt (`AssistantModel.toolPrompt`, fresh
+  session, ≤ `BASE_LIMIT` = window − reply − 900) + each earlier round as `CALL {…}` / `RESULT tool: …` (newest kept,
+  older results collapsed past `RESULTS_LIMIT` 900 tokens) + `REPLY:`; after 4 calls "No more tool calls". One round =
+  `OnDeviceAssistant.toolRound` (non-streaming `generateContent`, temperature 0.1, ≤ 256 tokens). A first reply that
+  isn't the protocol, a model error (quota, busy) or a turn with nothing to show → the router answers
+  (`assistant.error` `kind: tool_loop`, `assistant.turn` `fallback: true`, `tool_calls`); after at least one call a
+  plain-text reply counts as the answer. The writes it recorded run after the turn through the `ActionDispatcher`
+  (MODEL source: Undo, CHIP actions confirm first, `plan_day` → a plan proposal).
 - **Assistant eval** (attnd-web `docs/assistant_eval/`): `scripts/assistant_eval/sync_data.py` copies `questions.json` and
   `demo_bundle.json` into `app/src/test/resources/assistant_eval/`; `unit/AssistantEval.kt` (runner, grader, report;
   iOS `AssistantEval.swift`'s rules, a turn as `AssistantController.submit` + swap / sequence) and `AssistantEvalTest`:
   the catalogue check and every `critical` question run in every unit run; the full router run with
   `./gradlew testDebugUnitTest -PassistantEval --tests '*AssistantEvalTest*'` (or `ATTND_ASSISTANT_EVAL=router`;
   `ATTND_ASSISTANT_EVAL_ONLY` narrows) writes `app/build/assistant-eval/assistant-eval-android-router-<time>.json`
-  (`ATTND_ASSISTANT_EVAL_OUT`); Nov 22, 2026: 245/247 (iOS 242/247). Model mode needs Gemini Nano on a phone (not done).
+  (`ATTND_ASSISTANT_EVAL_OUT`); Nov 22, 2026: 245/247 (iOS 242/247). The runner and grader live in
+  `app/src/evalShared/java/` (in both the unit and the instrumented test source sets, the catalogue from
+  `src/test/resources`). **Model mode** (phase 6b, a phone with Gemini Nano AVAILABLE; not run in CI or the cloud
+  container): `androidTest/.../AssistantEvalModelTest` runs every question through the same turn with
+  `AssistantTools.run` on `OnDeviceAssistant.toolRound` (router fallback, as the app):
+  `./gradlew connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.attndAssistantEval=model`
+  (`…attndAssistantEvalOnly=<ids or categories>` narrows it); skipped without the argument or the model. The report
+  `assistant-eval-android-model-<time>.json` lands in `app/build/outputs/connected_android_test_additional_output/`
+  (AGP pulls the runner's `additionalTestOutputDir`), the summary in logcat (tag `AttndEval`).
 - **Plan editing** (`PlanEditing.kt`): `PlanOp`s → `PlanConstraints` → `Planner.replan` (rules 13–20: window/score with
   constraints, excluded/pinned/food filters, origin, pinned must-includes first, walk limit, pace, meals, re-solve with
   frozen started/checked-off entries). With `PlanConstraints.NONE` every rule 1–12 result is unchanged. `PlanDiff`,
@@ -329,34 +345,47 @@ hashes from python-qrcode), all on `AssistantFixture` = `PlannerFixture` + the "
   row, else the Updates tab's top bar, else the first tab's. Screenshot mode keeps today's tabs and default
   (`DisplayConfig.legacyLayout`, no Home). **Home** (`ui/screens/HomeScreen.kt`) draws the `home` layout's sections (phase 5b, see
   Server-driven screens).
+- **Who gets it** (owner, phase 6b): the floating **Ask Attnd** button (`AutoAwesome`) on phones capable of Gemini Nano
+  (`checkStatus()` not UNAVAILABLE: AVAILABLE, DOWNLOADABLE, DOWNLOADING; `AppUiState.planButton`); other phones get the
+  plain search button + search sheet, as iOS without the model. Never in screenshot mode. While the model still has to
+  download, the chat opens with a small card (Download / Not now, then a wavy progress bar) and runs on the router meanwhile.
 - **Ask Attnd** (was "My plan") is a full-screen destination over the tabs (`AppUiState.planOpen`, Close / Back; `PlanDestination` in
-  `ui/AttndApp.kt`) opened by the Ask Attnd button, Home's Ask Attnd card (on every phone until phase 6b gates the planner on
-  the model), plan links, proposals and onboarding examples; phase 6b replaces it with the chat.
-- **Ask Attnd's screen** (`MyPlanTab` in `ui/assistant/PlanTab.kt`, never a transcript): header (day switcher, `Planner.summary`,
-  Share, Undo), live hints (running late, recap, gap fillers, skipped chips), the
-  day's timeline (walk legs, meals, check-offs, likes) and mini map; no plan: the bar focused, example chips, the liked
-  items, progress while planning, the Gemini Nano download card. The **dock** at the bottom: answer card (≤ ⅓ of the
-  window, scrolls inside, swipe down / ✕; live search results while typing; only the last turn), the proposal pill or the
-  Undo pill (~8 s, `UndoOffer`), the input bar with the intent chip.
+  `ui/AttndApp.kt`) opened by the Ask Attnd button, plan links, proposals, shared `/p/` links and onboarding examples.
+- **The chat** (phase 6b, `AskAttndChat` in `ui/assistant/PlanChat.kt`; iOS `PlanChatView`): one continuous chat per event.
+  Typing does nothing until Return / Send (no live results); the message is a right bubble, then a **working line**
+  (`AssistantState.stage`: "Thinking…", then the tool loop's stages "Searching…", "Adding Taco Row…"; the router's from
+  `AssistantFlow.stageFor`) that becomes the turn's **done line** (`AssistantFlow.doneLine`: "Added Taco Row", "Found 4
+  results"; none for reading turns) with the answer: text + components inline and interactive (`AssistantBlockView`, cards
+  open their item on the chat's own back stack); the last turn's chips are the **follow-up chips** above the composer
+  (before anything is asked, the event's `PlanRequest.examples`); a write's Undo / Redo under its turn. Before anything is
+  asked: **Your Day** (My schedule's day with walks, `PlanTimeline` of the derived day plan, else the `my_day` component).
+  Live hints (running late, recap, gap fillers, skipped chips) at the top. Overflow → Clear chat. New lines are followed
+  only while the list is at the bottom (a send always scrolls). **Wide** (≥ 700 dp of the chat's own width, iOS's 700 pt):
+  the chat beside the last shown component, large (`AssistantState.lastComponent`, else Your Day). `MyPlanTab`, the dock,
+  the answer card, the intent chip and `AssistantBarOverlay` are gone.
 - **Proposals** (`PlanProposals`, `PreviewRows`, `ProposalText`): every plan edit (router, model, "Which one?" pick chips,
-  hint / like-clash / running-late chips, compare "Use this version", shared `/p/` links) is previewed in the timeline, not
-  applied: ADD → ≤ 4 dashed suggested rows where they'd go; REPLACE → the row crossed out with ≤ 4 options under it (the
-  edit's choice + the item's Swap alternatives); CHANGE (remove / move / constraints / versions) → rows marked (crossed out,
-  "Moves to 8:00 PM", added) + the diff pill ("−2 items, +1 lunch break"); SHARED → Use this plan / Merge with mine. Tap an
-  option or Apply, or type "do it" / "yes" / "the second one" / "option 3" (`ProposalReply`); "no" / "cancel" / Esc / Back /
-  Cancel clears it; anything else is a new turn. Applied through the dispatcher (MANUAL) as My schedule edits with one Undo
-  step (One list); "undo" typed or the pill undoes. `AssistantHost.onProposal` switches to Ask Attnd.
-- **Without on-device AI** the tab works on the router (plans from likes, commands, search, why-not); questions and
-  requests it can't read get "Needs on-device AI" + search results (`PlanTabFlow.withoutModel`).
+  hint / like-clash / running-late chips, compare "Use this version", shared `/p/` links, new plans) is a **proposal card**
+  under the last turn, not applied: its pill ("−2 items, +1 lunch break"), sentence and the changed rows of its day (≤ 8:
+  ADD / REPLACE options as dashed rows, each tap applies that option; removed / replaced crossed out, "Moves to 8:00 PM",
+  added rows and meals); Cancel + Apply (SHARED: Use this plan / Merge with mine). Or type "do it" / "yes" / "the second
+  one" / "option 3" (`ProposalReply`); "no" / "cancel" / Esc / Back / Cancel drops it ("… · Cancelled" stays in the chat);
+  anything else is a new turn ("… · Not applied"). Applied through the dispatcher (MANUAL) as My schedule edits with one
+  Undo step (One list), then the **Undo card** ("Schedule updated · Undo") until the next turn; "undo" typed works too.
+  `AssistantHost.onProposal` opens Ask Attnd.
+- **Without on-device AI** (still downloading) the chat works on the router (plans from My schedule, commands, search,
+  why-not); questions it can't read get "Needs on-device AI" + search results (`PlanTabFlow.withoutModel`).
 - **Turns** (`AssistantController`, owned by `EventViewModel`, `AssistantHost` = the VM): `AssistantFlow.path` — plan
-  intents and commands go to the router (instant, deterministic); with Gemini Nano a question, no match or a 4+ word search
-  goes to the model (`OnDeviceAssistant.turn`: streamed, `AssistantModel.completeBlocks` shown as they arrive, then `resolve`
-  with the router as fallback). Without the model it runs on the router only. A turn's actions run through
+  intents and commands go to the router (instant, deterministic); with Gemini Nano a question, no match, a 4+ word search
+  or another language goes to the model's JSON tool loop (`AssistantTools.run` on `OnDeviceAssistant.toolRound`, see Event
+  assistant → Tool protocol; the router answers on any failure). Without the model it runs on the router only. A turn's actions run through
   `ActionDispatcher` → the controller's `ActionExecutor` (likes with the API-009 count, plan edits / versions / undo via
   `ScheduleController.applyPlan` / `undo` (My schedule's history ≤ 20), check-offs, settings (POST_NOTIFICATIONS requested first),
   share, open, directions); chips run with source RULES (CHIP actions confirm first), the UI's own buttons as MANUAL.
-- **Stored per event** (kept after leaving): My schedule's Undo history (`ScheduleStore`), the model's `AssistantConversation`, shared plans
-  received (≤ 10). The answer card isn't restored (`AssistantTranscript` stays in the domain, unused by the UI).
+- **Stored per event** (kept after leaving): My schedule's Undo history (`ScheduleStore`); the chat (`ChatTranscript`, ≤ 40
+  turns: input, block JSON, model flag, done line; restored on open, stored confirms can't be answered again) and the
+  model's `AssistantConversation` (with its `ConversationContext` memory) as files `filesDir/assistant/transcript-<id>.json`
+  / `conversation-<id>.json` (`PlanStore`, atomic writes; the conversation moves there from its old preference on first
+  read, the old `AssistantTranscript` preference is dropped); shared plans received (≤ 10, preferences).
 - **Components** (`AssistantBlocksUi.kt`, `LocalBlockActions`): one composable per block type — text (bold), item / place /
   update cards (time + relative, place, image, distance + walk, like, "Open in Schedule" / "Show on map" / "Directions"),
   compact list (Show all), carousel, timeline (Now line, walk legs), mini map (`MiniMap`: lite-mode maps-compose, numbered
@@ -383,7 +412,7 @@ Everything is local: no server or API change, and the query only ever goes to th
 - **Open links**: `attnd-open://<event id|any>/<location/5|schedule/3|update/9|updates|event|search?q=…>` (`domain/OpenLinks.kt`) as the data of explicit intents to MainActivity (`OpenIntents.kt`, used by the Live Update and reminders; no intent filter declares the scheme). A link for another event than the joined one is ignored.
 - **Removed, following iOS** (parity plan phase 2): the home-screen widget, AppFunctions (and KSP), dynamic shortcuts.
 - **Planner**: see Planner, onboarding, Live Update; Ask requests that look like plans make one.
-- **On-device model** (the event assistant's model path and the planner): Gemini Nano via ML Kit GenAI Prompt API **beta** (`data/OnDeviceAssistant.kt`: `turn` streams the assistant's JSON, `extractPreferences` for plans). Used only when `checkStatus()` says AVAILABLE; DOWNLOADABLE shows a Download card in Ask Attnd's empty state, DOWNLOADING its progress; otherwise the assistant runs on the rule-based router. `AssistantPrompt.context` still feeds `AssistantModel.retrieve`. Never in screenshot mode. The old Search | Ask toggle is gone.
+- **On-device model** (the event assistant's model path and the planner): Gemini Nano via ML Kit GenAI Prompt API **beta** (`data/OnDeviceAssistant.kt`: `toolRound` = one non-streaming round of the JSON tool loop, `extractPreferences` for plans). Used only when `checkStatus()` says AVAILABLE; DOWNLOADABLE shows the small Download card in Ask Attnd, DOWNLOADING its progress; meanwhile the assistant runs on the rule-based router; UNAVAILABLE phones have no Ask Attnd (search sheet only). `AssistantPrompt.context` still feeds `AssistantModel.retrieve`. Never in screenshot mode. The old Search | Ask toggle is gone.
 
 ## Logging & diagnostics (API-013, API-014)
 

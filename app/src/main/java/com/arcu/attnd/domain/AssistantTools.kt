@@ -296,6 +296,108 @@ object AssistantTools {
         }
     }
 
+    /** What [run] ended with: an answered turn, or why the router answers instead. */
+    data class LoopOutcome(
+        val turn: AssistantTurn?,
+        val failure: String?,
+        /** Tool calls made. */
+        val calls: Int,
+        /** Model calls made (calls + the answer). */
+        val rounds: Int,
+        /** The last working-line stage ("Adding Taco Row…"), for the done line. */
+        val stage: String?,
+        /** The first prompt's estimate and what its budget dropped (logged, never silent). */
+        val promptTokens: Int,
+        val trimmed: List<String>,
+    )
+
+    /** The base prompt's share of the window; the rest is the tool results ([RESULTS_LIMIT]) and the reply. */
+    const val BASE_LIMIT = TokenBudget.WINDOW - TokenBudget.REPLY - 900
+
+    /** Tokens kept for the CALL / RESULT lines of earlier rounds (newest kept whole, older ones collapsed). */
+    const val RESULTS_LIMIT = 900
+
+    /**
+     * The loop on the platform's model (phase 6b; ML Kit's Prompt API has no tool calling and no session, so
+     * every round re-sends the whole prompt): the budgeted turn prompt ([AssistantModel.toolPrompt] with
+     * [promptSection]), then each earlier round as `CALL {…}` + `RESULT tool: …`, then `REPLY:`. [generate] is
+     * one model call (non-streaming). Ends with [ToolStep.Finish] → the turn; a first reply that isn't the
+     * protocol, a model error or an empty turn → [LoopOutcome.failure] and the router answers. After at least
+     * one call a plain-text reply (no JSON) counts as the answer: small models often drop the wrapper once
+     * they have the result. [onStage] gets the working line's text after each call.
+     */
+    suspend fun run(
+        input: String,
+        ctx: AssistantContext,
+        conversation: AssistantConversation,
+        generate: suspend (String) -> String,
+        onStage: (String) -> Unit = {},
+    ): LoopOutcome {
+        val retrieved = AssistantModel.retrieve(input, ctx)
+        val base = AssistantModel.toolPrompt(input, ctx, conversation, retrieved, freshSession = true, limit = BASE_LIMIT, tools = promptSection())
+        val turn = ToolTurn(ctx)
+        val rounds = mutableListOf<Pair<String, String>>()
+        var stage: String? = null
+        var made = 0
+        fun outcome(t: AssistantTurn?, failure: String?) = LoopOutcome(t, failure, turn.calls, made, stage, base.tokens, base.trimmed)
+        while (made <= MAX_ROUNDS) {
+            val prompt = roundPrompt(base.text, rounds, last = turn.calls >= MAX_ROUNDS)
+            val raw = try {
+                generate(prompt)
+            } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                made++
+                return outcome(null, "model: " + e.javaClass.simpleName)
+            }
+            made++
+            when (val step = turn.step(raw)) {
+                is ToolStep.Continue -> {
+                    rounds += (firstObject(raw) ?: raw.trim().take(200)) to step.result
+                    step.stage?.let { stage = it; onStage(it) }
+                }
+                is ToolStep.Finish -> return outcome(step.turn, null)
+                is ToolStep.Fail -> {
+                    val plain = raw.trim()
+                    if (turn.calls > 0 && plain.isNotEmpty() && '{' !in plain) {
+                        return when (val finished = turn.finish(plain)) {
+                            is ToolStep.Finish -> outcome(finished.turn, null)
+                            else -> outcome(null, "empty answer")
+                        }
+                    }
+                    return outcome(null, step.reason)
+                }
+            }
+        }
+        return when (val finished = turn.finish("")) {
+            is ToolStep.Finish -> outcome(finished.turn, null)
+            else -> outcome(null, "round limit")
+        }
+    }
+
+    /** One round's prompt: [base], the earlier rounds within [RESULTS_LIMIT] (older results collapsed), `REPLY:`. */
+    fun roundPrompt(base: String, rounds: List<Pair<String, String>>, last: Boolean = false): String {
+        val lines = ArrayList<String>()
+        var used = 0
+        for ((index, round) in rounds.withIndex().reversed()) {
+            val (call, result) = round
+            val whole = "CALL $call\n$result"
+            val cost = TokenBudget.estimate(whole)
+            lines += if (used + cost <= RESULTS_LIMIT || index == rounds.lastIndex) {
+                used += cost
+                whole.take(RESULTS_LIMIT * 3)
+            } else {
+                "CALL $call\n" + result.substringBefore(':') + ": (earlier result left out)"
+            }
+        }
+        return buildString {
+            append(base)
+            for (line in lines.asReversed()) append('\n').append(line)
+            if (last) append("\nNo more tool calls: reply with {\"answer\":\"…\"} now.")
+            append("\nREPLY:")
+        }
+    }
+
     /** A call in the protocol's compact text (tests, examples). */
     fun call(tool: String, args: Map<String, JsonElement> = emptyMap()): String = JsonObject(mapOf("tool" to JsonPrimitive(tool), "args" to JsonObject(args))).toString()
 }

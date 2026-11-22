@@ -197,7 +197,7 @@ class AppGraph(context: Context, val prefs: DevicePrefs, logStore: LogStore, val
     val assistant = OnDeviceAssistant()
 
     /** The assistant's conversation, "Follow on Lock Screen", skipped items, urgent block and reminders, per event (on the device). */
-    val plans = PlanStore(prefs)
+    val plans = PlanStore(prefs, java.io.File(appContext.filesDir, "assistant"))
 
     /** My schedule: adds, removes, times, reminders (API-009 counts), shared by the UI, the assistant and the planner. */
     val schedule = ScheduleController(

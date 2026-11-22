@@ -8,7 +8,9 @@ import com.arcu.attnd.domain.AssistantContext
 import com.arcu.attnd.domain.AssistantConversation
 import com.arcu.attnd.domain.AssistantFlow
 import com.arcu.attnd.domain.AssistantIntent
+import com.arcu.attnd.domain.AssistantModel
 import com.arcu.attnd.domain.AssistantRouter
+import com.arcu.attnd.domain.AssistantTools
 import com.arcu.attnd.domain.AssistantTurn
 import com.arcu.attnd.domain.BlockData
 import com.arcu.attnd.domain.BlockJson
@@ -53,7 +55,8 @@ import java.util.Locale
  * The event assistant question eval (attnd-web docs/assistant_eval/README.md), ported from iOS
  * `AttndTests/AssistantEval.swift`: the shared catalogue (questions.json) run against the DEMO bundle
  * (demo_bundle.json), both copied into src/test/resources/assistant_eval/ by scripts/assistant_eval/sync_data.py.
- * Router mode only on the JVM (the model path needs Gemini Nano on a phone). Each question runs in a fresh
+ * Router mode on the JVM; model mode (a [model] given: Gemini Nano's tool loop, `AssistantEvalModelTest` in
+ * androidTest) only on a phone. This file is in `src/evalShared` (both test source sets). Each question runs in a fresh
  * conversation, its `follows` first (ungraded). A turn mirrors `AssistantController.submit`, plus iOS's
  * swap and sequence commands: a pending proposal's reply, "swap …", sequences, the router, `AssistantFlow.path`.
  * Actions are recorded, never executed, except My schedule adds / removes (the conversation's own state).
@@ -181,7 +184,12 @@ data class EvalOutcome(
     var ms: Long = 0,
 )
 
-class AssistantEvalRunner {
+/** One model turn (model mode): the tool loop on the device's model. */
+typealias EvalModel = suspend (input: String, ctx: AssistantContext, conversation: AssistantConversation) -> AssistantTools.LoopOutcome
+
+class AssistantEvalRunner(private val model: EvalModel? = null) {
+    val mode: String get() = if (model == null) "router" else "model"
+
     val catalogue = EvalCatalogue.load()
     val bundleJson = EvalCatalogue.resource("demo_bundle.json")
     val bundle: EventBundle = checkNotNull(ApiMapper.parseBundle(bundleJson)) { "demo_bundle.json doesn't decode" }
@@ -203,7 +211,7 @@ class AssistantEvalRunner {
         val locale = Locale.forLanguageTag(catalogue.fixture.locale.replace('_', '-'))
         return AssistantContext(
             bundle = bundle, hearts = Hearts(scheduleItems = items), plan = null, now = now, user = user,
-            modelAvailable = false, units = DistanceUnits.forRegion(locale.country), locale = locale, schedule = schedule,
+            modelAvailable = model != null, units = DistanceUnits.forRegion(locale.country), locale = locale, schedule = schedule,
         )
     }
 
@@ -327,7 +335,13 @@ class AssistantEvalRunner {
         val turn = when (AssistantFlow.path(routed.intent, text, ctx.modelAvailable)) {
             TurnPath.SEARCH -> PlanTabFlow.withoutModel(routed, text, ctx)
             TurnPath.PLAN -> AssistantFlow.planTurn(text, routed, ctx)
-            TurnPath.ASK -> error("router mode never asks the model")
+            TurnPath.ASK -> {
+                // Model mode: the app's path (AssistantController.ask): the tool loop, the router on any failure.
+                val ask = checkNotNull(model) { "router mode never asks the model" }
+                val loop = kotlinx.coroutines.runBlocking { ask(text, ctx, c.conversation) }
+                out.path = if (loop.turn != null) "model" else "model_fallback"
+                loop.turn ?: AssistantModel.resolve(text, null, ctx).turn
+            }
         }
         PlanProposals.fromTurn(turn, ctx)?.let { return propose(it) }
         out.blocks = turn.blocks
@@ -519,7 +533,7 @@ class AssistantEvalGrader(private val bundle: EventBundle, private val now: Inst
 
 // ── Report ──────────────────────────────────────────────────────────────────
 
-class AssistantEvalReport {
+class AssistantEvalReport(private val mode: String = "router") {
     private val rows = mutableListOf<JsonObject>()
     var passed = 0
         private set
@@ -554,7 +568,7 @@ class AssistantEvalReport {
     private fun strings(values: List<String>): JsonArray = buildJsonArray { values.forEach { add(JsonPrimitive(it)) } }
 
     fun json(now: String): String = buildJsonObject {
-        put("platform", "android"); put("mode", "router"); put("fixture_now", now)
+        put("platform", "android"); put("mode", mode); put("fixture_now", now)
         put("passed", passed); put("total", total)
         put("categories", buildJsonObject {
             byCategory.forEach { (k, v) -> put(k, buildJsonObject { put("passed", v[0]); put("total", v[1]) }) }
@@ -565,7 +579,7 @@ class AssistantEvalReport {
 
     val summary: String
         get() = buildList {
-            add("Assistant eval (router): $passed/$total passed")
+            add("Assistant eval ($mode): $passed/$total passed")
             byCategory.forEach { (k, v) -> add("  " + k.padEnd(16) + "${v[0]}/${v[1]}") }
             if (criticalFailures.isNotEmpty()) add("  critical failures: ${criticalFailures.joinToString(", ")}")
         }.joinToString("\n")
@@ -574,7 +588,7 @@ class AssistantEvalReport {
     fun write(now: String, dir: File): File {
         dir.mkdirs()
         val stamp = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HHmmss'Z'").withZone(ZoneOffset.UTC).format(Instant.now())
-        return File(dir, "assistant-eval-android-router-$stamp.json").also { it.writeText(json(now) + "\n") }
+        return File(dir, "assistant-eval-android-$mode-$stamp.json").also { it.writeText(json(now) + "\n") }
     }
 
     companion object {

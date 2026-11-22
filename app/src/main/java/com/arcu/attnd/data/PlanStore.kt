@@ -1,40 +1,100 @@
 package com.arcu.attnd.data
 
 import com.arcu.attnd.data.prefs.DevicePrefs
+import com.arcu.attnd.domain.AppLog
 import com.arcu.attnd.domain.AssistantConversation
-import com.arcu.attnd.domain.AssistantTranscript
+import com.arcu.attnd.domain.ChatTranscript
 import com.arcu.attnd.domain.Hearts
-import com.arcu.attnd.domain.StoredTurn
+import com.arcu.attnd.domain.LogCategory
+import com.arcu.attnd.domain.LogLevel
 import com.arcu.attnd.domain.UrgentBlock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
+import java.io.File
 import java.time.Instant
 import java.time.LocalDate
 
 /**
- * Per-event state of the assistant and the Live Update, on the device only (SharedPreferences, in Auto
- * Backup like hearts): the assistant's conversation and transcript, shared plans opened, "Follow on Lock
- * Screen", reminders, skipped items, the urgent block (API-011) and which reminders were shown. [version]
+ * Per-event state of the assistant and the Live Update, on the device only: the Ask Attnd chat's transcript
+ * and the model's conversation as files in [dir] (`filesDir/assistant/transcript-<id>.json`,
+ * `conversation-<id>.json`, as iOS's `attnd-assistant/`; the conversation moves there from its old
+ * preference on first read), and in SharedPreferences (Auto Backup like hearts) the shared plans opened,
+ * "Follow on Lock Screen", reminders, skipped items, the urgent block (API-011) and which reminders were shown. [version]
  * changes on every write, so the UI and the Live Update follow. No plan: since the one-list change
  * (Nov 22, 2026) My schedule ([ScheduleStore]) is the only stored list and its Undo history.
  */
-class PlanStore(private val prefs: DevicePrefs) {
+class PlanStore(private val prefs: DevicePrefs, private val dir: File? = null) {
 
     private val _version = MutableStateFlow(0)
     val version: StateFlow<Int> = _version
 
     private fun changed() = _version.update { it + 1 }
 
-    fun conversation(eventId: Int): AssistantConversation = AssistantConversation.decode(prefs.assistantConversation(eventId))
+    @Synchronized
+    fun conversation(eventId: Int): AssistantConversation {
+        read("conversation-$eventId.json")?.let { return AssistantConversation.decode(it) }
+        // Older builds kept it in the preferences: move it to its file once.
+        val old = prefs.assistantConversation(eventId) ?: return AssistantConversation()
+        val conversation = AssistantConversation.decode(old)
+        if (dir != null && write("conversation-$eventId.json", conversation.encode())) prefs.setAssistantConversation(eventId, null)
+        return conversation
+    }
 
-    fun setConversation(eventId: Int, conversation: AssistantConversation) =
-        prefs.setAssistantConversation(eventId, conversation.turns.takeIf { it.isNotEmpty() }?.let { conversation.encode() })
+    @Synchronized
+    fun setConversation(eventId: Int, conversation: AssistantConversation) {
+        val text = conversation.turns.takeIf { it.isNotEmpty() }?.let { conversation.encode() }
+        if (dir == null) {
+            prefs.setAssistantConversation(eventId, text)
+            return
+        }
+        if (text == null) delete("conversation-$eventId.json") else write("conversation-$eventId.json", text)
+        prefs.setAssistantConversation(eventId, null)
+    }
 
-    fun transcript(eventId: Int): List<StoredTurn> = AssistantTranscript.decode(prefs.assistantTranscript(eventId))
+    /** The Ask Attnd chat (≤ 40 turns, kept after leaving like the conversation). */
+    @Synchronized
+    fun chat(eventId: Int): ChatTranscript = ChatTranscript.decode(read("transcript-$eventId.json"))
 
-    fun setTranscript(eventId: Int, turns: List<StoredTurn>) =
-        prefs.setAssistantTranscript(eventId, turns.takeIf { it.isNotEmpty() }?.let { AssistantTranscript.encode(it) })
+    @Synchronized
+    fun setChat(eventId: Int, chat: ChatTranscript) {
+        // The old answer card's transcript preference was never shown: drop it.
+        prefs.setAssistantTranscript(eventId, null)
+        if (chat.entries.isEmpty()) delete("transcript-$eventId.json") else write("transcript-$eventId.json", chat.encode())
+    }
+
+    private fun read(name: String): String? {
+        val file = dir?.resolve(name) ?: return null
+        return try {
+            if (file.isFile) file.readText() else null
+        } catch (e: Exception) {
+            AppLog.caught(LogCategory.ASSISTANT, "plans.read", e, LogLevel.WARNING)
+            null
+        }
+    }
+
+    /** Atomic: a temp file renamed into place. */
+    private fun write(name: String, text: String): Boolean {
+        val folder = dir ?: return false
+        return try {
+            folder.mkdirs()
+            val temp = File(folder, "$name.tmp")
+            temp.writeText(text)
+            if (!temp.renameTo(File(folder, name))) {
+                temp.delete()
+                false
+            } else {
+                true
+            }
+        } catch (e: Exception) {
+            AppLog.caught(LogCategory.ASSISTANT, "plans.write", e, LogLevel.WARNING)
+            false
+        }
+    }
+
+    private fun delete(name: String) {
+        dir?.resolve(name)?.delete()
+    }
 
     /** Shared plans (API-015) opened for this event, oldest first (≤ 10), each its schedule ids. */
     fun sharedPlans(eventId: Int): List<List<Int>> = prefs.sharedPlans(eventId).orEmpty().lines()

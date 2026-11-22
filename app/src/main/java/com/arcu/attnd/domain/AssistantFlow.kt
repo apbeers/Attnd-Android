@@ -93,6 +93,31 @@ object AssistantFlow {
         return null
     }
 
+    /**
+     * The working line's stage of a router turn (iOS: from the router's intent / action): the first write
+     * ("Adding Taco Row…", "Removing X…", "Moving X…", "Setting a reminder for X…", "Planning your day…"),
+     * else "Searching…" for searches and what's-on lists; null otherwise (no done line).
+     */
+    fun stageFor(intent: AssistantIntent, actions: List<AssistantAction>, bundle: EventBundle): String? {
+        for (action in actions) {
+            val ref = action.scheduleTarget()
+                ?: action.likeTarget()?.let { (kind, id) -> EntityRef(if (kind == SearchKind.SCHEDULE) RefKind.SCHEDULE else RefKind.LOCATION, id) }
+            val name = ref?.name(bundle) ?: "it"
+            when (action.name) {
+                ActionName.SCHEDULE_ADD, ActionName.LIKE -> return "Adding $name…"
+                ActionName.SCHEDULE_REMOVE, ActionName.UNLIKE -> return "Removing $name…"
+                ActionName.SCHEDULE_MOVE -> return "Moving $name…"
+                ActionName.SCHEDULE_REMINDER -> return "Setting a reminder for $name…"
+                ActionName.PLAN_MAKE -> return "Planning your day…"
+                else -> Unit
+            }
+        }
+        return when (intent) {
+            AssistantIntent.SEARCH, AssistantIntent.WHATS_ON, AssistantIntent.NEAR_ME -> "Searching…"
+            else -> null
+        }
+    }
+
     /** A plain `search` turn for a forced SEARCH. */
     fun searchTurn(input: String, ctx: AssistantContext): AssistantTurn {
         val blocks = AssistantRouter.renderRead(AssistantAction.search(input.trim()), ctx)
