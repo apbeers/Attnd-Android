@@ -3,9 +3,9 @@
     <string name="notification_channel_name">Event updates</string>
     <string name="notification_channel_description">Announcements from the organizers of the event you joined.</string>
     <string name="live_channel_name">Live Update</string>
-    <string name="live_channel_description">What\'s on now and next in your plan or likes, on your Lock Screen while you follow an event.</string>
+    <string name="live_channel_description">What\'s on now and next in your schedule, on your Lock Screen while you follow an event.</string>
     <string name="reminders_channel_name">Reminders</string>
-    <string name="reminders_channel_description">A reminder before the items you liked or planned start, with the walk time.</string>
+    <string name="reminders_channel_description">A reminder before the things in your schedule start, with the walk time.</string>
     <string name="urgent_channel_name">Urgent announcements</string>
     <string name="urgent_channel_description">Cancellations and safety notices from the organizers. Sent to everyone in the event.</string>
     <string name="live_action_skip">Skip next</string>

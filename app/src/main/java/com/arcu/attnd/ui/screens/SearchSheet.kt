@@ -62,6 +62,8 @@ import androidx.compose.ui.unit.dp
 import com.arcu.attnd.domain.AppLog
 import com.arcu.attnd.domain.EventBundle
 import com.arcu.attnd.domain.EventSearch
+import com.arcu.attnd.domain.MyScheduleText
+import com.arcu.attnd.ui.SearchList
 import com.arcu.attnd.domain.Hearts
 import com.arcu.attnd.domain.LogCategory
 import com.arcu.attnd.domain.LogEvent
@@ -88,6 +90,8 @@ fun SearchSheet(
     bundle: EventBundle,
     hearts: Hearts,
     request: SearchRequest?,
+    /** My schedule's places saved without a time (Home's "3 saved places" row opens them). */
+    savedPlaces: Set<Int> = emptySet(),
     onRequestConsumed: () -> Unit,
     onClose: () -> Unit,
     onSearch: () -> Unit,
@@ -97,7 +101,9 @@ fun SearchSheet(
     val sheet = rememberBottomSheetState(initialValue = SheetValue.Hidden, enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded))
     var query by rememberSaveable { mutableStateOf("") }
     var stackText by rememberSaveable { mutableStateOf("") }
-    var showLiked by rememberSaveable { mutableStateOf(false) }
+    var listName by rememberSaveable { mutableStateOf<String?>(null) }
+    val list = listName?.let { name -> SearchList.entries.firstOrNull { it.name == name } }
+    val showLiked = list != null
     val stack = remember(stackText) { if (stackText.isEmpty()) emptyList() else SearchEntry.decodeStack(stackText) }
     fun push(entry: SearchEntry) {
         AppLog.debug(LogCategory.SEARCH, LogEvent.SEARCH_OPEN, "Search result opened", mapOf("kind" to entry.kind.logName, "id" to entry.id))
@@ -111,7 +117,7 @@ fun SearchSheet(
     LaunchedEffect(request?.serial) {
         val r = request ?: return@LaunchedEffect
         query = r.query
-        showLiked = false
+        listName = r.list?.name
         if (r.detail != null) {
             focusField = false
             stackText = SearchEntry.encodeStack(listOf(r.detail))
@@ -123,19 +129,23 @@ fun SearchSheet(
         BackHandler {
             when {
                 stack.isNotEmpty() -> pop()
-                showLiked -> showLiked = false
+                showLiked -> listName = null
                 else -> onClose()
             }
         }
         Column(Modifier.fillMaxSize().imePadding()) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 if (stack.isNotEmpty() || showLiked) {
-                    IconButton(onClick = { if (stack.isNotEmpty()) pop() else showLiked = false }) {
+                    IconButton(onClick = { if (stack.isNotEmpty()) pop() else listName = null }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 }
                 Text(
-                    if (showLiked && stack.isEmpty()) EventSearch.HEARTED_TITLE else "Search",
+                    when {
+                        stack.isNotEmpty() || list == null -> "Search"
+                        list == SearchList.SAVED_PLACES -> MyScheduleText.SAVED_PLACES
+                        else -> EventSearch.HEARTED_TITLE
+                    },
                     style = MaterialTheme.typography.titleLarge,
                     modifier = Modifier.weight(1f).padding(start = 12.dp),
                 )
@@ -157,7 +167,8 @@ fun SearchSheet(
                 return@Column
             }
             if (!showLiked) SearchInput(query, { query = it }, focus = focusField, onSearch = onSearch)
-            SearchResults(bundle, hearts, if (showLiked) null else query, showLiked, onLiked = { showLiked = true }, onSuggestion = { query = it }, onOpen = ::push)
+            val listHearts = if (list == SearchList.SAVED_PLACES) Hearts(locations = savedPlaces) else hearts
+            SearchResults(bundle, listHearts, if (showLiked) null else query, showLiked, onLiked = { listName = SearchList.MY_SCHEDULE.name }, onSuggestion = { query = it }, onOpen = ::push)
         }
     }
 }
@@ -236,7 +247,7 @@ private fun SearchResults(
         return
     }
     if (results.isEmpty()) {
-        EmptyState(if (showLiked) "Nothing liked yet." else "Nothing matches “${settled.trim()}”.")
+        EmptyState(if (showLiked) MyScheduleText.NOTHING_YET else "Nothing matches “${settled.trim()}”.")
         return
     }
     LazyColumn(Modifier.fillMaxSize()) {

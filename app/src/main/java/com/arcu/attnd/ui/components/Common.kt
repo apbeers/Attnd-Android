@@ -47,6 +47,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.arcu.attnd.domain.MyScheduleText
 import com.arcu.attnd.domain.AppLog
 import com.arcu.attnd.domain.LogCategory
 import com.arcu.attnd.domain.LogEvent
@@ -172,7 +173,7 @@ fun RefreshBox(
 }
 
 /**
- * Horizontally scrolling filter chips: "Liked" first when [onHeartedChange] is set, then "All" +
+ * Horizontally scrolling filter chips: "My Schedule" first when [onHeartedChange] is set, then "All" +
  * one per category (none when [categories] is empty). Emits nothing when there is neither.
  */
 @Composable
@@ -202,13 +203,13 @@ fun CategoryChips(
     }
 }
 
-/** "Liked": show only liked items / places. */
+/** "My Schedule": only the places in My schedule (the places of its items too). */
 @Composable
 fun HeartedChip(selected: Boolean, onChange: (Boolean) -> Unit, modifier: Modifier = Modifier) {
     FilterChip(
         selected = selected,
         onClick = { onChange(!selected) },
-        label = { Text("Liked") },
+        label = { Text(MyScheduleText.TITLE) },
         leadingIcon = {
             Icon(
                 if (selected) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,

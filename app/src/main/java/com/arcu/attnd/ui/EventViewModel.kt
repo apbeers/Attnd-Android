@@ -29,6 +29,9 @@ import com.arcu.attnd.data.log.PerfRecorder
 import com.arcu.attnd.data.net.ApiException
 import com.arcu.attnd.data.prefs.DevicePrefs
 import com.arcu.attnd.domain.MySchedule
+import com.arcu.attnd.domain.MyScheduleText
+import com.arcu.attnd.domain.OrganizerChange
+import com.arcu.attnd.domain.ScheduleTarget
 import com.arcu.attnd.domain.ActionName
 import com.arcu.attnd.domain.ActionSource
 import com.arcu.attnd.domain.AppLog
@@ -127,7 +130,10 @@ data class PlanUiState(
  * A one-shot request to open the search screen with [query] and, optionally, an item's [detail] on its
  * back stack (shortcuts and assistants; items whose tab is hidden open this way).
  */
-data class SearchRequest(val query: String, val serial: Int, val detail: SearchEntry? = null, val ask: Boolean = false)
+data class SearchRequest(val query: String, val serial: Int, val detail: SearchEntry? = null, val ask: Boolean = false, val list: SearchList? = null)
+
+/** A list the search sheet opens on instead of results: My schedule (its "My Schedule" chip) or the saved places. */
+enum class SearchList { MY_SCHEDULE, SAVED_PLACES }
 
 /** On-device Gemini Nano for the event assistant and the planner: availability and the model download. */
 data class AssistantUiState(
@@ -816,6 +822,80 @@ class EventViewModel(
         val clash = if (bundle != null && hearted && kind == SearchKind.SCHEDULE && !screenshotMode) schedule.likeClash(bundle, id) else null
         if (!setLiked(kind, id, hearted)) return
         clash?.let { chip -> local.update { it.copy(message = chip.label, messageChip = chip) } }
+    }
+
+    /**
+     * The outline heart (iOS `addToScheduleWithUndo`): adds an item, or a place saved without a time, then
+     * offers Undo ("Taco Row added to My Schedule"). A like clash follows as its own snackbar.
+     */
+    fun addToSchedule(kind: SearchKind, id: Int) {
+        val eventId = repository.bundle.value?.event?.id ?: return
+        if (schedule.isLiked(eventId, kind, id)) return
+        toggleHeart(kind, id)
+        if (screenshotMode || !schedule.isLiked(eventId, kind, id)) return
+        showUndo(MyScheduleText.added(entityName(kind, id))) { undoScheduleChange() }
+    }
+
+    /** The filled heart's "Remove from My Schedule" (one Undo step; the snackbar offers it). */
+    fun removeFromSchedule(kind: SearchKind, id: Int) {
+        val eventId = repository.bundle.value?.event?.id ?: return
+        if (!setLiked(kind, id, false)) return
+        if (!screenshotMode) showUndo(MyScheduleText.removed(entityName(kind, id))) { undoScheduleChange() }
+        AppLog.debug(LogCategory.UI, LogEvent.UI_ACTION, "Removed from My schedule", mapOf("name" to "schedule_remove", "event_id" to eventId))
+    }
+
+    /** "When?": a place at [at] (added when it isn't in My schedule yet), or saved without a time (null). */
+    fun setPlaceTime(placeId: Int, at: Instant?) {
+        val eventId = repository.bundle.value?.event?.id ?: return
+        val target = ScheduleTarget.place(placeId)
+        if (schedule.isLiked(eventId, SearchKind.LOCATION, placeId)) schedule.move(eventId, target, at)
+        else schedule.add(eventId, target, at = at, countUsage = !screenshotMode)
+        assistantController.refreshLive()
+    }
+
+    /** "Remind Me": minutes before (0 = off). Not an Undo step. */
+    fun setScheduleReminder(kind: SearchKind, id: Int, minutes: Int) {
+        val eventId = repository.bundle.value?.event?.id ?: return
+        schedule.setReminder(eventId, ScheduleTarget(kind, id), minutes)
+    }
+
+    /** The Undo snackbar of a heart / remove: My schedule as it was before. */
+    private fun undoScheduleChange() {
+        val eventId = repository.bundle.value?.event?.id ?: return
+        if (schedule.undo(eventId, countUsage = !screenshotMode)) assistantController.refreshLive()
+    }
+
+    /** Organizer change "Keep" (a cancelled item: "Remove" clears it the same way). */
+    fun keepOrganizerChange(itemId: Int) {
+        val bundle = repository.bundle.value ?: return
+        schedule.keepOrganizerChange(bundle, itemId)
+    }
+
+    /**
+     * Organizer change "Find Another" (one list §5): a swap proposal in Ask Attnd when it is there and the
+     * item still has a slot; otherwise the search sheet with the item's name.
+     */
+    fun findAnother(change: OrganizerChange) {
+        val eventId = repository.bundle.value?.event?.id ?: return
+        if (uiState.value.planButton && change.kind != OrganizerChange.Kind.Cancelled) {
+            nav.showPlan()
+            assistantController.submit("swap ${change.name}")
+        } else {
+            nav.route(OpenTarget.Search(change.name))
+        }
+        AppLog.debug(LogCategory.UI, LogEvent.UI_ACTION, "Find another", mapOf("name" to "schedule_find_another", "event_id" to eventId))
+    }
+
+    /** Home's "3 saved places" row: the saved places in the search sheet's list. */
+    fun showSavedPlaces() = nav.openList(SearchList.SAVED_PLACES)
+
+    private fun entityName(kind: SearchKind, id: Int): String? {
+        val bundle = repository.bundle.value ?: return null
+        return when (kind) {
+            SearchKind.SCHEDULE -> bundle.scheduleItem(id)?.name
+            SearchKind.LOCATION -> bundle.location(id)?.name
+            else -> null
+        }
     }
 
     private fun setLiked(kind: SearchKind, id: Int, liked: Boolean): Boolean {

@@ -553,7 +553,19 @@ Phase 0 (toolchain and dependencies, minSdk 36) runs elsewhere. When it lands, p
   new `domain/Banners.kt`, `NavigationState.kt`, `push/PushNotifications.kt`.
 - **Tests:** `PlanTabTest` tab cases → `TabLayoutTest`; `SwipeDismissRule` cases; `ScreenshotRequestTest`.
 
-**Phase 3b — My schedule UI (M)**
+**Phase 3b — My schedule UI (M)** — ✅ done (Nov 22, 2026)
+- **Shipped:** the heart (`ui/components/MyScheduleHeart.kt`: outline = add at once with a haptic and the Undo
+  snackbar "X added to My Schedule", a place saved without a time; filled = a menu: Set a Time… / Change Time… (places,
+  "When?" with today's times and the Suggested one, Just Save It), Remind Me (5 / 10 / 15 / 30 min / 1 hour / Off),
+  Remove from My Schedule (Undo snackbar too)); the Schedule tab's "My Schedule" section (organizer changes "X moved to
+  8:00 PM." · Keep / Remove / Find Another (a `swap` turn in Ask Attnd, else the search sheet), timed entries, ended
+  ones dimmed) and "Saved Places", honouring the `schedule_tab` layout's `my_schedule` flag, hidden while searching; the
+  Liked chip gone from Schedule; Places / Map "My Schedule" chip with the places of My schedule's items; Home's "3 saved
+  places" row → the search sheet's Saved Places list (`SearchList`); "like" wording gone from the UI (peek, chips, empty
+  states, onboarding, channel descriptions, the assistant's like / unlike replies). Pure words in
+  `domain/MyScheduleText.kt` (`MyScheduleTextTest`). Per-entry reminders were already posted by phase 8.
+- **Deferred:** the Schedule section's Share (QR) button (iOS batch 7; needs the chat's share sheet, 6b); an empty-state
+  overlay on the Map for an empty My Schedule chip (the chip shows once My schedule has a place; 10a owns the map).
 - **Scope:**
   - heart semantics and menu;
   - the "When?" time dialog for places (suggested times);

@@ -63,6 +63,7 @@ import com.arcu.attnd.domain.EventTime
 import com.arcu.attnd.domain.Glance
 import com.arcu.attnd.domain.LayoutScreen
 import com.arcu.attnd.domain.LocationGrouping
+import com.arcu.attnd.domain.MySchedule
 import com.arcu.attnd.domain.TabListLayout
 import com.arcu.attnd.ui.components.rememberLayoutSections
 import com.arcu.attnd.domain.LocationsStyle
@@ -159,6 +160,8 @@ fun LocationsList(
     val display = bundle.display
     val style = tabLayout?.style?.let(LocationsStyle::fromKey) ?: display.locationsStyle
     val hearts = LocalEventActions.current.hearts
+    // My Schedule chip: saved and timed places plus the places of My schedule's items (iOS build 169).
+    val myPlaces = remember(hearts, bundle.schedule) { MySchedule.placeIds(hearts.locations, hearts.scheduleItems, bundle.schedule) }
     val now = rememberNow()
     var query by rememberSaveable { mutableStateOf("") }
     var category by rememberSaveable { mutableStateOf<String?>(null) }
@@ -167,10 +170,10 @@ fun LocationsList(
     val categories = remember(bundle.locations, bundle.categories) {
         LocationGrouping.availableCategories(bundle.locations, bundle.categories)
     }
-    val filtered = remember(bundle.locations, query, category, heartedOnly, hearts) {
-        LocationGrouping.filter(bundle.locations, query, category).filter { !heartedOnly || it.id in hearts.locations }
+    val filtered = remember(bundle.locations, query, category, heartedOnly, myPlaces) {
+        LocationGrouping.filter(bundle.locations, query, category).filter { !heartedOnly || it.id in myPlaces }
     }
-    val showHeartedChip = heartedOnly || hearts.locations.isNotEmpty()
+    val showHeartedChip = heartedOnly || myPlaces.isNotEmpty()
     val open: (Int) -> Unit = onLocationClick
     val longPress: (Int) -> Unit = { peek = it }
 
@@ -194,7 +197,7 @@ fun LocationsList(
                 EmptyState(
                     when {
                         bundle.locations.isEmpty() -> "No locations have been added yet."
-                        heartedOnly && query.isBlank() && category == null -> "No liked locations yet. Tap the heart on a location to keep it here."
+                        heartedOnly && query.isBlank() && category == null -> "Nothing in your schedule yet. Tap ♥ on places and events to see them here."
                         else -> "No locations match your search."
                     }
                 )

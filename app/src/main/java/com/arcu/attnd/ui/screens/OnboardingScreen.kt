@@ -201,7 +201,7 @@ fun OnboardingScreen(
                     TourCard.INTRO -> {
                         Title(Icons.Filled.Map, "Welcome to ${bundle.event.name}")
                         Feature(Icons.Filled.Map, "The map shows every place, what's on there now and how far it is.")
-                        Feature(Icons.Filled.CalendarMonth, "The schedule counts down to what's next. Like what you don't want to miss.")
+                        Feature(Icons.Filled.CalendarMonth, "The schedule counts down to what's next. Tap ♥ to add what you don't want to miss to your schedule.")
                         Feature(Icons.Filled.Notifications, "Updates from the organizers arrive live, even offline later.")
                         Feature(Icons.Filled.Search, "The search button finds anything at the event.")
                     }
@@ -211,8 +211,8 @@ fun OnboardingScreen(
                     }
                     TourCard.NOTIFICATIONS -> {
                         Title(Icons.Filled.Notifications, "Don't miss a change")
-                        Body("Get set-time changes from the organizers, and a reminder with the walk time before the things you liked.")
-                        Feature(Icons.Filled.Favorite, "You can follow your likes on the Lock Screen from Options.")
+                        Body("Get set-time changes from the organizers, and a reminder with the walk time before the things in your schedule.")
+                        Feature(Icons.Filled.Favorite, "You can follow your schedule on the Lock Screen from Options.")
                     }
                     TourCard.PLAN -> {
                         Title(Icons.Filled.AutoAwesome, "Plan your day")

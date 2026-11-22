@@ -134,6 +134,11 @@ class NavigationController(private val current: () -> AppUiState) {
 
     fun consumePlanRequest() = _state.update { it.copy(planRequest = null) }
 
+    /** The search sheet opened on one of its lists (Home's saved places row). */
+    fun openList(list: SearchList) = _state.update {
+        it.copy(showOptions = false, searchOpen = true, searchRequest = SearchRequest("", (it.searchRequest?.serial ?: 0) + 1, list = list))
+    }
+
     private fun search(query: String, detail: SearchEntry? = null) = _state.update {
         it.copy(showOptions = false, searchOpen = true, searchRequest = SearchRequest(query, (it.searchRequest?.serial ?: 0) + 1, detail))
     }

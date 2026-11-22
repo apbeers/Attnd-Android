@@ -55,6 +55,8 @@ import com.arcu.attnd.domain.EventTime
 import com.arcu.attnd.domain.HomeHeaderText
 import com.arcu.attnd.domain.HomeUrgent
 import com.arcu.attnd.domain.MySchedule
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import com.arcu.attnd.domain.MyScheduleText
 import com.arcu.attnd.domain.MyScheduleRow
 import com.arcu.attnd.domain.RefKind
 import com.arcu.attnd.domain.ScheduleEntryKind
@@ -109,6 +111,8 @@ class ComponentHost(
     /** The newest unread update of the last day (`update_banner`, catalogue 2) and its ✕ / swipe. */
     val updateBanner: EventNotification? = null,
     val onDismissUpdate: ((Int) -> Unit)? = null,
+    /** Home's "3 saved places" row: the saved places list. */
+    val onSavedPlaces: (() -> Unit)? = null,
 )
 
 val LocalComponentHost = staticCompositionLocalOf { ComponentHost() }
@@ -150,7 +154,7 @@ fun ScreenComponentView(component: Component, modifier: Modifier = Modifier) {
             UrgentCard(urgent, bundle, onOpen = { actions.onOpen(EntityRef(RefKind.UPDATE, urgent.id)) }, onDismiss = host.onDismissUrgent, modifier = modifier)
         }
         "countdown" -> EventCountdown(bundle, title, modifier)
-        "my_schedule" -> MyScheduleUpNext(bundle, host.mySchedule, now, title, component.limit ?: 5, modifier)
+        "my_schedule" -> MyScheduleUpNext(bundle, host.mySchedule, now, title, component.limit ?: 5, modifier, host.onSavedPlaces)
         "my_day" -> MyScheduleDay(bundle, host.mySchedule, now, title, modifier)
         "whats_on" -> {
             val ids = remember(bundle, now, component.limit) {
@@ -325,14 +329,14 @@ private fun EventCountdown(bundle: EventBundle, title: String?, modifier: Modifi
 }
 
 /** What Home's and the chat's My schedule say while it is empty (iOS `MyScheduleText.empty`). */
-const val MY_SCHEDULE_EMPTY = "Add things to your schedule to see them here"
+const val MY_SCHEDULE_EMPTY = MyScheduleText.EMPTY
 
 /**
  * Home's "Up next in my schedule" (and the chat's `my_schedule`): the next 3–5 entries as cards with
  * time, place and walk; the empty state otherwise; a small line for places saved without a time.
  */
 @Composable
-private fun MyScheduleUpNext(bundle: EventBundle, schedule: MySchedule?, now: Instant, title: String?, limit: Int, modifier: Modifier) {
+private fun MyScheduleUpNext(bundle: EventBundle, schedule: MySchedule?, now: Instant, title: String?, limit: Int, modifier: Modifier, onSavedPlaces: (() -> Unit)? = null) {
     val rows = remember(bundle, schedule, now, limit) { schedule?.upNext(bundle, now, limit.coerceIn(3, 5)).orEmpty() }
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         SectionTitle(title ?: "Up Next in My Schedule")
@@ -350,9 +354,16 @@ private fun MyScheduleUpNext(bundle: EventBundle, schedule: MySchedule?, now: In
         }
         val saved = schedule?.savedPlaceIds?.size ?: 0
         if (saved > 0) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                Modifier
+                    .then(if (onSavedPlaces != null) Modifier.clickable(onClickLabel = "Show saved places", onClick = onSavedPlaces) else Modifier)
+                    .padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Icon(Icons.Filled.FavoriteBorder, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                Text(if (saved == 1) "1 saved place" else "$saved saved places", style = MaterialTheme.typography.bodyMedium)
+                Text(MyScheduleText.savedPlaces(saved), style = MaterialTheme.typography.bodyMedium)
+                if (onSavedPlaces != null) Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }

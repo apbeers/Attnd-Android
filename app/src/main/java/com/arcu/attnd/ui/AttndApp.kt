@@ -195,11 +195,19 @@ fun AttndApp(viewModel: EventViewModel = viewModel(factory = EventViewModel.Fact
                         } else {
                             // Hearts and "Show on map" for every row, detail, card and the search sheet.
                             val hasMap = Tab.MAP in state.tabs
-                            val actions = remember(state.hearts, hasMap, viewModel) {
+                            val actions = remember(state.hearts, state.mySchedule, bundle, hasMap, viewModel) {
                                 EventActions(
                                     hearts = state.hearts,
                                     onToggleHeart = viewModel::toggleHeart,
                                     onShowOnMap = if (hasMap) { id -> viewModel.showOnMap(id) } else null,
+                                    bundle = bundle,
+                                    schedule = state.mySchedule,
+                                    onAdd = viewModel::addToSchedule,
+                                    onRemove = viewModel::removeFromSchedule,
+                                    onSetPlaceTime = viewModel::setPlaceTime,
+                                    onSetReminder = viewModel::setScheduleReminder,
+                                    onKeepOrganizerChange = viewModel::keepOrganizerChange,
+                                    onFindAnother = viewModel::findAnother,
                                 )
                             }
                             CompositionLocalProvider(LocalEventActions provides actions) {
@@ -441,6 +449,7 @@ private fun EventShell(state: AppUiState, bundle: EventBundle, viewModel: EventV
             bundle = bundle,
             hearts = state.hearts,
             request = state.searchRequest,
+            savedPlaces = state.mySchedule?.savedPlaceIds?.toSet().orEmpty(),
             onRequestConsumed = viewModel::consumeSearchRequest,
             onClose = viewModel::closeSearch,
             onSearch = viewModel::onSearch,
@@ -517,6 +526,7 @@ private fun TabContent(
                     dismissedUrgent = state.dismissedUrgentIds,
                     onDismissUrgent = viewModel::dismissUrgent,
                     onEventInfo = { viewModel.open(OpenRequest(eventId, OpenTarget.EventInfo)) },
+                    onSavedPlaces = viewModel::showSavedPlaces,
                     onOptions = if (showOptions) ({ viewModel.showOptions(true) }) else null,
                 )
             }

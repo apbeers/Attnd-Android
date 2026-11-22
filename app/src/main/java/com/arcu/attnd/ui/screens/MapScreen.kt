@@ -77,6 +77,7 @@ import com.arcu.attnd.domain.Geo
 import com.arcu.attnd.domain.GeoPoint
 import com.arcu.attnd.domain.Glance
 import com.arcu.attnd.domain.LocationGrouping
+import com.arcu.attnd.domain.MySchedule
 import com.arcu.attnd.domain.LogCategory
 import com.arcu.attnd.domain.LogEvent
 import com.arcu.attnd.domain.LogLevel
@@ -149,7 +150,7 @@ private fun GeoPoint.toLatLng() = LatLng(latitude, longitude)
 /**
  * The event map. Pins only for locations with real coordinates (null and 0,0 are skipped).
  * Honours `display.map_clustering`, `map_fit_all` and `group_by_category` (filter chips), plus a
- * "Liked" chip when anything is liked. Pins show a live dot when something is on there now and
+ * "My Schedule" chip once My schedule has a place (its items' places count). Pins show a live dot when something is on there now and
  * "Next 7:30" when something starts within 3 h; a "Now playing" strip lists what is on. Tapping a pin
  * selects it: a card with its now/next, distance + arrow, heart, Details and Directions, and (within
  * 8 km, with location permission) a walking route drawn on the map ([WalkRouter]: the Routes API,
@@ -182,6 +183,8 @@ fun EventMap(
     val display: DisplayConfig = bundle.display
     val eventCenter = bundle.event.coordinate
     val hearts = LocalEventActions.current.hearts
+    // My Schedule chip: saved and timed places plus the places of My schedule's items (iOS build 169).
+    val myPlaces = remember(hearts, bundle.schedule) { MySchedule.placeIds(hearts.locations, hearts.scheduleItems, bundle.schedule) }
     val now = rememberNow()
     // Store screenshots: plain pins, no Now playing strip (and no location tracking, see LocalScreenshotMode).
     val glance = !LocalScreenshotMode.current
@@ -193,9 +196,9 @@ fun EventMap(
     val categories = remember(bundle.locations, bundle.categories) {
         LocationGrouping.availableCategories(bundle.locations, bundle.categories)
     }
-    val pins = remember(bundle, selectedCategory, heartedOnly, hearts, selectedId, now, glance) {
+    val pins = remember(bundle, selectedCategory, heartedOnly, myPlaces, selectedId, now, glance) {
         LocationGrouping.mappable(LocationGrouping.filter(bundle.locations, "", selectedCategory))
-            .filter { (location, _) -> !heartedOnly || location.id in hearts.locations }
+            .filter { (location, _) -> !heartedOnly || location.id in myPlaces }
             .map { (location, point) ->
                 LocationPin(
                     location = location,
@@ -283,7 +286,7 @@ fun EventMap(
         if (!mapLoaded) return@LaunchedEffect
         bundle.location(id)?.takeIf { it.coordinate != null }?.let { location ->
             // A hidden pin (filtered out) would leave the card without its pin: clear the filters.
-            if (heartedOnly && id !in hearts.locations) heartedOnly = false
+            if (heartedOnly && id !in myPlaces) heartedOnly = false
             if (selectedCategory != null && location.category?.trim() != selectedCategory) selectedCategory = null
             select(location, center = true)
         }
@@ -422,7 +425,7 @@ fun EventMap(
                 .fillMaxWidth()
                 .padding(top = contentPadding.calculateTopPadding()),
         ) {
-            val showHeartedChip = heartedOnly || hearts.locations.isNotEmpty()
+            val showHeartedChip = heartedOnly || myPlaces.isNotEmpty()
             if (display.groupByCategory || showHeartedChip) {
                 CategoryChips(
                     categories = if (display.groupByCategory) categories else emptyList(),

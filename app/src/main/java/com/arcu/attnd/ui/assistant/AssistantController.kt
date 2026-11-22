@@ -662,7 +662,7 @@ class AssistantController(
                 val name = ref.name(bundle) ?: "it"
                 val clash = if (liked && kind == SearchKind.SCHEDULE) plan()?.let { LiveAssist.likeClash(id, it, bundle) } else null
                 ActionOutcome.Done(
-                    if (liked) "Liked $name." else "Unliked $name.",
+                    if (liked) "Added $name to your schedule." else "Removed $name from your schedule.",
                     listOf(BlockValidator.card(ref)) + listOfNotNull(clash?.let { AssistantBlock.Chips(listOf(it)) }),
                 )
             }

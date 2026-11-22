@@ -72,7 +72,6 @@ import com.arcu.attnd.domain.Tags
 import com.arcu.attnd.ui.components.DistanceArrow
 import com.arcu.attnd.ui.components.EmptyState
 import com.arcu.attnd.ui.components.HeartButton
-import com.arcu.attnd.ui.components.HeartedChip
 import com.arcu.attnd.ui.components.LiveDot
 import com.arcu.attnd.ui.components.LocalEventActions
 import com.arcu.attnd.ui.components.PeekSheet
@@ -85,6 +84,13 @@ import com.arcu.attnd.ui.components.SectionHeader
 import com.arcu.attnd.ui.components.rememberNow
 import java.time.Instant
 import java.time.ZoneId
+import androidx.compose.foundation.layout.Box
+import androidx.compose.material.icons.filled.Error
+import androidx.compose.ui.draw.alpha
+import com.arcu.attnd.domain.MyScheduleRow
+import com.arcu.attnd.domain.MyScheduleText
+import com.arcu.attnd.domain.OrganizerChange
+import com.arcu.attnd.domain.ScheduleEntryKind
 
 /**
  * Schedule tab: list with a detail pane. The tab's own layout (API-027 `schedule_tab`, [TabListLayout]) picks the
@@ -118,6 +124,9 @@ fun ScheduleTab(
                 selectedId = selectedId,
                 onItemClick = open,
                 onSearch = onSearch,
+                // API-027 `my_schedule` on / off (no layout: on); never in screenshot mode (no stored schedule).
+                showsMySchedule = tabLayout?.showsMySchedule ?: true,
+                onLocationClick = onLocationClick,
             )
         },
         detail = { id, showBack, back ->
@@ -149,23 +158,27 @@ fun ScheduleList(
     contentPadding: PaddingValues = PaddingValues(0.dp),
     onSearch: () -> Unit = {},
     /**
-     * The Schedule tab's layout (API-027): its featured items first. `showsMySchedule` is for the My schedule
-     * section once the Schedule tab has one (phase 3b). Null beside the map and without a layout.
+     * The Schedule tab's layout (API-027): its featured items first. Null beside the map and without a layout.
      */
     tabLayout: TabListLayout? = null,
+    /**
+     * The Schedule tab's first sections (iOS `MyScheduleSection`): organizer changes, My schedule's timed
+     * entries (upcoming first, ended ones dimmed at the end) and "Saved Places"; each hidden while empty
+     * and while searching. Off beside the map.
+     */
+    showsMySchedule: Boolean = false,
+    onLocationClick: (Int) -> Unit = {},
 ) {
     val zone = bundle.event.zone
     val now = rememberNow()
-    val hearts = LocalEventActions.current.hearts
+    val actions = LocalEventActions.current
     var query by rememberSaveable { mutableStateOf("") }
     // Past items are hidden by default while the event is live; an archived event shows everything.
     var showPast by rememberSaveable(bundle.event.id) { mutableStateOf(bundle.event.isArchived) }
-    var heartedOnly by rememberSaveable { mutableStateOf(false) }
     var peek by rememberSaveable { mutableStateOf<Int?>(null) }
 
-    val sections = remember(bundle.schedule, bundle.locations, style, query, showPast, heartedOnly, hearts, now) {
+    val sections = remember(bundle.schedule, bundle.locations, style, query, showPast, now) {
         val searched = ScheduleGrouping.filter(bundle.schedule, query)
-            .filter { !heartedOnly || it.id in hearts.scheduleItems }
         val visible = if (showPast || style == ScheduleStyle.NOW_NEXT) searched
         else searched.filterNot { ScheduleGrouping.hasEnded(it, now) }
         ScheduleGrouping.group(style, visible, bundle.locations, zone, now)
@@ -192,18 +205,21 @@ fun ScheduleList(
                 Spacer(Modifier.width(1.dp))
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if ((heartedOnly || hearts.scheduleItems.isNotEmpty())) HeartedChip(heartedOnly, { heartedOnly = it })
                 if (style != ScheduleStyle.NOW_NEXT) {
                     FilterChip(selected = showPast, onClick = { showPast = !showPast }, label = { Text("Show past") })
                 }
             }
         }
         RefreshBox(isRefreshing = isRefreshing, onRefresh = onRefresh, modifier = Modifier.fillMaxSize()) {
-            if (sections.isEmpty()) {
+            val mine = actions.schedule?.takeIf { showsMySchedule && query.isBlank() }
+            val mineRows = remember(mine, bundle, now) { mine?.sectionRows(bundle, now).orEmpty() }
+            val changes = remember(mine, bundle) { mine?.organizerChanges(bundle).orEmpty() }
+            val saved = remember(mine, bundle) { mine?.savedPlaceIds.orEmpty().mapNotNull { bundle.location(it) } }
+            val hasMine = mineRows.isNotEmpty() || changes.isNotEmpty() || saved.isNotEmpty()
+            if (sections.isEmpty() && !hasMine) {
                 EmptyState(
                     when {
                         bundle.schedule.isEmpty() -> "No schedule has been posted yet."
-                        heartedOnly && query.isBlank() && hearts.scheduleItems.isEmpty() -> "Nothing liked yet. Tap the heart on an item to keep it here."
                         query.isNotBlank() -> "Nothing on the schedule matches your search."
                         style == ScheduleStyle.NOW_NEXT -> "Nothing is happening now or coming up."
                         else -> "No upcoming items. Tap \"Show past\" to see earlier ones."
@@ -211,8 +227,50 @@ fun ScheduleList(
                 )
             } else {
                 LazyColumn(Modifier.fillMaxSize(), contentPadding = contentPadding) {
-                    // API-027: the organizer's featured items first (not while searching or filtering).
-                    if (query.isBlank() && !heartedOnly) {
+                    if (mineRows.isNotEmpty() || changes.isNotEmpty()) {
+                        item(key = "h-mine") { SectionHeader(MyScheduleText.TITLE) }
+                        items(changes, key = { "change-${it.itemId}" }) { change ->
+                            OrganizerChangeRow(change, zone, onKeep = { actions.onKeepOrganizerChange(change.itemId) }, onRemove = {
+                                if (change.kind == OrganizerChange.Kind.Cancelled) actions.onKeepOrganizerChange(change.itemId)
+                                else actions.onRemove(SearchKind.SCHEDULE, change.itemId)
+                            }, onFindAnother = { actions.onFindAnother(change) })
+                            HorizontalDivider()
+                        }
+                        items(mineRows, key = { "mine-${it.id}" }) { row ->
+                            Box(Modifier.alpha(if (row.ended) 0.5f else 1f)) {
+                                when (row.entry.kind) {
+                                    ScheduleEntryKind.ITEM -> bundle.scheduleItem(row.entry.id)?.let { item ->
+                                        ScheduleRow(
+                                            item = item,
+                                            location = bundle.location(item.locationId),
+                                            zone = zone,
+                                            now = now,
+                                            showLocation = true,
+                                            selected = item.id == selectedId,
+                                            onClick = { onItemClick(item.id) },
+                                            onLongClick = { peek = item.id },
+                                        )
+                                    }
+                                    ScheduleEntryKind.PLACE -> TimedPlaceRow(row, zone, onClick = { onLocationClick(row.entry.id) })
+                                }
+                            }
+                            HorizontalDivider()
+                        }
+                    }
+                    if (saved.isNotEmpty()) {
+                        item(key = "h-saved") { SectionHeader(MyScheduleText.SAVED_PLACES) }
+                        items(saved, key = { "saved-${it.id}" }) { location ->
+                            ListItem(
+                                selected = false,
+                                onClick = { onLocationClick(location.id) },
+                                leadingContent = { Icon(Icons.Filled.Place, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+                                trailingContent = { HeartButton(SearchKind.LOCATION, location.id, name = location.name) },
+                            ) { Text(location.name, fontWeight = FontWeight.SemiBold) }
+                            HorizontalDivider()
+                        }
+                    }
+                    // API-027: the organizer's featured items first (not while searching).
+                    if (query.isBlank()) {
                         val featured = tabLayout?.featured.orEmpty().mapNotNull { bundle.scheduleItem(it) }
                         if (featured.isNotEmpty()) {
                             item(key = "h-featured") { SectionHeader(tabLayout?.featuredTitle ?: "Featured") }
@@ -325,6 +383,43 @@ private fun ScheduleRow(
                     )
                 }
             }
+        }
+    }
+}
+
+/** A place in My schedule at a chosen time: "7:00 – 7:45 PM", the place, its heart (menu: Change Time…). */
+@Composable
+private fun TimedPlaceRow(row: MyScheduleRow, zone: ZoneId, onClick: () -> Unit) {
+    ListItem(
+        selected = false,
+        onClick = onClick,
+        leadingContent = { Icon(Icons.Filled.Place, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+        overlineContent = {
+            Text(
+                EventTime.formatTimeRange(row.start.atZone(zone).toOffsetDateTime(), row.end.atZone(zone).toOffsetDateTime(), zone),
+                fontWeight = FontWeight.SemiBold,
+            )
+        },
+        supportingContent = row.entry.reason?.let { reason -> { Text(reason, maxLines = 1, overflow = TextOverflow.Ellipsis) } },
+        trailingContent = { HeartButton(SearchKind.LOCATION, row.entry.id, name = row.name) },
+    ) { Text(row.name, fontWeight = FontWeight.SemiBold) }
+}
+
+/**
+ * "X moved to 8:00 PM." with Keep / Remove / Find Another for an item in My schedule the organizer changed
+ * (iOS `OrganizerChangeRow`); a cancelled one offers Remove and Find Another.
+ */
+@Composable
+private fun OrganizerChangeRow(change: OrganizerChange, zone: ZoneId, onKeep: () -> Unit, onRemove: () -> Unit, onFindAnother: () -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Icon(Icons.Filled.Error, contentDescription = null, tint = MaterialTheme.colorScheme.tertiary)
+            Text(MyScheduleText.organizerChange(change, zone), style = MaterialTheme.typography.bodyMedium)
+        }
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (change.kind != OrganizerChange.Kind.Cancelled) OutlinedButton(onClick = onKeep) { Text("Keep") }
+            OutlinedButton(onClick = onRemove) { Text("Remove", color = MaterialTheme.colorScheme.error) }
+            OutlinedButton(onClick = onFindAnother) { Text("Find Another") }
         }
     }
 }

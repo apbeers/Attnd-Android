@@ -32,7 +32,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.IconToggleButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
@@ -78,6 +77,9 @@ import com.arcu.attnd.domain.Geo
 import com.arcu.attnd.domain.GeoPoint
 import com.arcu.attnd.domain.Glance
 import com.arcu.attnd.domain.Hearts
+import com.arcu.attnd.domain.MySchedule
+import com.arcu.attnd.domain.MyScheduleText
+import com.arcu.attnd.domain.OrganizerChange
 import com.arcu.attnd.domain.RelativeTime
 import com.arcu.attnd.domain.ScheduleGrouping
 import com.arcu.attnd.domain.SearchKind
@@ -86,15 +88,29 @@ import kotlinx.coroutines.launch
 import java.time.Instant
 
 /**
- * Event-wide actions every row and detail can use (hearts, "Show on map"), provided once by the event
- * shell so they don't have to be threaded through every list. [onShowOnMap] is null when the event
- * has no Map tab.
+ * Event-wide actions every row and detail can use (My schedule's heart, "Show on map"), provided once by
+ * the event shell so they don't have to be threaded through every list. [onShowOnMap] is null when the
+ * event has no Map tab. [schedule] is null in screenshot mode (nothing is stored there): the heart then
+ * only toggles.
  */
 @Immutable
 class EventActions(
     val hearts: Hearts = Hearts.NONE,
     val onToggleHeart: (SearchKind, Int) -> Unit = { _, _ -> },
     val onShowOnMap: ((Int) -> Unit)? = null,
+    val bundle: EventBundle? = null,
+    val schedule: MySchedule? = null,
+    /** The outline heart: adds at once (a place without a time) with the Undo snackbar. */
+    val onAdd: (SearchKind, Int) -> Unit = onToggleHeart,
+    /** The filled heart's "Remove from My Schedule". */
+    val onRemove: (SearchKind, Int) -> Unit = onToggleHeart,
+    /** "When?": a place at a time, or saved without one (null). */
+    val onSetPlaceTime: (placeId: Int, at: Instant?) -> Unit = { _, _ -> },
+    /** "Remind Me": minutes before (0 = off). */
+    val onSetReminder: (SearchKind, Int, Int) -> Unit = { _, _, _ -> },
+    /** The Schedule tab's organizer changes: Keep (a cancelled item: Remove), Find Another. */
+    val onKeepOrganizerChange: (Int) -> Unit = {},
+    val onFindAnother: (OrganizerChange) -> Unit = {},
 )
 
 val LocalEventActions = compositionLocalOf { EventActions() }
@@ -220,25 +236,6 @@ fun WalkTime(target: GeoPoint?, modifier: Modifier = Modifier, color: Color = Ma
 
 // ── Hearts ──────────────────────────────────────────────────────────────────
 
-/** Like (heart) toggle for a schedule item or location (stored on the device per event). */
-@Composable
-fun HeartButton(kind: SearchKind, id: Int, modifier: Modifier = Modifier, name: String? = null) {
-    val actions = LocalEventActions.current
-    val hearted = actions.hearts.has(kind, id)
-    IconToggleButton(checked = hearted, onCheckedChange = { actions.onToggleHeart(kind, id) }, modifier = modifier) {
-        Icon(
-            if (hearted) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
-            contentDescription = when {
-                name != null && hearted -> "Unlike $name"
-                name != null -> "Like $name"
-                hearted -> "Unlike"
-                else -> "Like"
-            },
-            tint = if (hearted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
 /** A small "live" dot (something is happening now). */
 @Composable
 fun LiveDot(modifier: Modifier = Modifier, size: Dp = 8.dp) {
@@ -321,10 +318,10 @@ fun PeekSheet(bundle: EventBundle, target: PeekTarget, now: Instant, onOpen: () 
                 Text(item.locationName ?: ScheduleGrouping.GENERAL_TITLE, style = MaterialTheme.typography.bodyMedium)
             }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
-                FilledTonalButton(onClick = { actions.onToggleHeart(target.kind, target.id) }) {
+                FilledTonalButton(onClick = { if (hearted) actions.onRemove(target.kind, target.id) else actions.onAdd(target.kind, target.id) }) {
                     Icon(if (hearted) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
-                    Text(if (hearted) "Liked" else "Like")
+                    Text(if (hearted) MyScheduleText.REMOVE else MyScheduleText.ADD_LONG)
                 }
                 val showOnMap = actions.onShowOnMap
                 if (showOnMap != null && location?.coordinate != null) {
