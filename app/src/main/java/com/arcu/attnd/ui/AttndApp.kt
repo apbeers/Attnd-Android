@@ -48,13 +48,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.arcu.attnd.domain.DisplayConfig
 import com.arcu.attnd.domain.EventBundle
 import com.arcu.attnd.domain.OpenRequest
 import com.arcu.attnd.domain.OpenTarget
@@ -109,15 +107,11 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 
-/** Root composable: theme (with the event's accent colour) and launch vs. event UI. */
+/** Root composable: theme (the event's API-023 theme, else its accent colour) and launch vs. event UI. */
 @Composable
 fun AttndApp(viewModel: EventViewModel = viewModel(factory = EventViewModel.Factory)) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    val accent = remember(state.bundle?.display?.accentColor) {
-        DisplayConfig.parseHexColor(state.bundle?.display?.accentColor)?.let { Color(it) }
-    }
-
-    AttndTheme(accentColor = accent) {
+    AttndTheme(eventTheme = state.bundle?.event?.theme, accentColor = state.bundle?.display?.accentColor, screenshot = state.isScreenshot) {
         CompositionLocalProvider(LocalScreenshotMode provides state.isScreenshot) {
             if (state.update.level == UpdateLevel.REQUIRED) {
                 UpdateRequiredScreen(state.update)

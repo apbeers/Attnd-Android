@@ -2,6 +2,7 @@
 
 package com.arcu.attnd.ui.screens
 
+import com.arcu.attnd.ui.theme.themedProgressColor
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.foundation.layout.Arrangement
@@ -257,6 +258,7 @@ private fun ScheduleRow(
                     LinearProgressIndicator(
                         progress = { progress },
                         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).height(3.dp),
+                        color = themedProgressColor,
                         drawStopIndicator = {},
                     )
                 }
@@ -343,7 +345,7 @@ fun ScheduleItemDetail(
                 )
             }
             Glance.progress(item, now)?.let { progress ->
-                LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
+                LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth(), color = themedProgressColor)
             }
             if (location != null) {
                 OutlinedButton(onClick = { onLocationClick(location.id) }) {

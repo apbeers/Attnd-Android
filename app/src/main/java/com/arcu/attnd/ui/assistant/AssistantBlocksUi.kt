@@ -2,6 +2,8 @@
 
 package com.arcu.attnd.ui.assistant
 
+import com.arcu.attnd.ui.theme.themedElevatedCardColors
+import com.arcu.attnd.ui.theme.themedProgressColor
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.foundation.clickable
@@ -223,7 +225,7 @@ fun ItemCard(item: ScheduleItem, show: List<String>, modifier: Modifier = Modifi
     val now = rememberNow()
     val location = bundle.location(item.locationId)
     val ref = EntityRef(RefKind.SCHEDULE, item.id)
-    ElevatedCard(onClick = { actions.onOpen(ref) }, modifier = modifier.fillMaxWidth()) {
+    ElevatedCard(onClick = { actions.onOpen(ref) }, modifier = modifier.fillMaxWidth(), colors = themedElevatedCardColors()) {
         if ("image" in show && bundle.display.showLocationImages && location?.imageUrl != null) {
             RemoteImage(location.imageUrl, contentDescription = null, modifier = Modifier.fillMaxWidth().height(140.dp))
         }
@@ -245,7 +247,7 @@ fun ItemCard(item: ScheduleItem, show: List<String>, modifier: Modifier = Modifi
                 RelativeTime.forItem(item, now, zone, showEnd = true)?.let {
                     Text(it, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = if (it == RelativeTime.ENDED) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.primary)
                 }
-                Glance.progress(item, now)?.let { LinearProgressIndicator(progress = { it }, modifier = Modifier.fillMaxWidth().padding(end = 12.dp)) }
+                Glance.progress(item, now)?.let { LinearProgressIndicator(progress = { it }, modifier = Modifier.fillMaxWidth().padding(end = 12.dp), color = themedProgressColor) }
             }
             if ("place" in show) {
                 Text(location?.name ?: item.locationName ?: ScheduleGrouping.GENERAL_TITLE, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -279,7 +281,7 @@ fun PlaceCard(id: Int, show: List<String>, modifier: Modifier = Modifier) {
     val bundle = actions.bundle
     val location = bundle.location(id) ?: return
     val now = rememberNow()
-    ElevatedCard(onClick = { actions.onOpen(EntityRef(RefKind.LOCATION, id)) }, modifier = modifier.fillMaxWidth()) {
+    ElevatedCard(onClick = { actions.onOpen(EntityRef(RefKind.LOCATION, id)) }, modifier = modifier.fillMaxWidth(), colors = themedElevatedCardColors()) {
         if ("image" in show && bundle.display.showLocationImages && location.imageUrl != null) {
             RemoteImage(location.imageUrl, contentDescription = null, modifier = Modifier.fillMaxWidth().height(140.dp))
         }
@@ -413,7 +415,7 @@ fun Carousel(ids: List<EntityRef>, title: String?, modifier: Modifier = Modifier
         title?.let { BlockTitle(it) }
         LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             items(ids, key = { it.code }) { ref ->
-                ElevatedCard(onClick = { actions.onOpen(ref) }, modifier = Modifier.width(220.dp)) {
+                ElevatedCard(onClick = { actions.onOpen(ref) }, modifier = Modifier.width(220.dp), colors = themedElevatedCardColors()) {
                     val location = when (ref.kind) {
                         RefKind.LOCATION -> bundle.location(ref.id)
                         RefKind.SCHEDULE -> bundle.location(bundle.scheduleItem(ref.id)?.locationId)

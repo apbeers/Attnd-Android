@@ -2,6 +2,8 @@
 <resources>
     <!-- Brand purple from the app icon; keep in sync with ui/theme/Color.kt. -->
     <color name="attnd_primary">#431F86</color>
-    <!-- Live Update progress: the gaps between items (items use attnd_primary). -->
+    <!-- Live Update progress: the gaps between items (items use the event's accent, LiveTheme). -->
     <color name="live_gap">#B8B0C9</color>
+    <!-- Urgent announcements (API-011) stay red, whatever the event's theme (Material's error tone). -->
+    <color name="live_urgent">#B3261E</color>
 </resources>

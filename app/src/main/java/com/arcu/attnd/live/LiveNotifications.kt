@@ -1,5 +1,6 @@
 package com.arcu.attnd.live
 
+import com.arcu.attnd.domain.LiveTheme
 import android.annotation.SuppressLint
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -86,9 +87,12 @@ object LiveNotifications {
             focus != null -> open(context, eventId, OpenTarget.ScheduleItem(focus.id))
             else -> open(context, eventId, OpenTarget.MyPlan)
         }
+        // API-023: the theme's light primary, else accent_color, else the brand; urgent stays red.
+        val accent = LiveTheme.accent(bundle.event.theme, bundle.display.accentColor) ?: context.getColor(R.color.attnd_primary)
+        val isUrgent = state.mode == LiveMode.URGENT && urgent != null
         val builder = NotificationCompat.Builder(context, CHANNEL_LIVE)
             .setSmallIcon(R.drawable.ic_stat_attnd)
-            .setColor(context.getColor(R.color.attnd_primary))
+            .setColor(if (isUrgent) context.getColor(R.color.live_urgent) else accent)
             .setContentTitle(state.title)
             .setContentText(state.text)
             .setSubText(bundle.event.name)
@@ -113,7 +117,7 @@ object LiveNotifications {
             builder.setStyle(NotificationCompat.BigTextStyle().bigText(urgent.body).setBigContentTitle(state.title))
             builder.addAction(0, context.getString(R.string.live_action_dismiss_urgent), action(context, LiveUpdateReceiver.ACTION_DISMISS_URGENT, eventId, urgent.id))
         } else {
-            builder.setStyle(progressStyle(context, state))
+            builder.setStyle(progressStyle(context, state, accent))
         }
 
         state.next?.takeIf { state.mode != LiveMode.URGENT }?.let { next ->
@@ -128,10 +132,9 @@ object LiveNotifications {
     }
 
     /** The day as a journey: item segments in the accent colour, gaps neutral, a point at each start. */
-    private fun progressStyle(context: Context, state: LiveState): NotificationCompat.ProgressStyle {
+    private fun progressStyle(context: Context, state: LiveState, accent: Int): NotificationCompat.ProgressStyle {
         val style = NotificationCompat.ProgressStyle().setStyledByProgress(true)
         if (state.segments.isEmpty()) return style.setProgressIndeterminate(true)
-        val accent = context.getColor(R.color.attnd_primary)
         val gap = context.getColor(R.color.live_gap)
         style.setProgressSegments(state.segments.map { NotificationCompat.ProgressStyle.Segment(it.minutes).setColor(if (it.isItem) accent else gap) })
         style.setProgressPoints(state.points.map { NotificationCompat.ProgressStyle.Point(it).setColor(accent) })
@@ -180,7 +183,7 @@ object LiveNotifications {
         val tap = PushNotifications.openNotificationsIntent(context, localId, notificationId)
         val notification = NotificationCompat.Builder(context, CHANNEL_URGENT)
             .setSmallIcon(R.drawable.ic_stat_attnd)
-            .setColor(context.getColor(R.color.attnd_primary))
+            .setColor(context.getColor(R.color.live_urgent))
             .setContentTitle(title)
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))

@@ -147,7 +147,7 @@ Weather was never built.
 | API-019 | n/a (no App Clip) | Never send `app_clip` |
 | API-021 plan_suggestions | ⬜ | Phase 12 (optional; iOS hasn't done it) |
 | API-022 image_credit | ⬜ | Phases 1 + 5 |
-| API-023 theme | ⬜ later | Phase 7 |
+| API-023 theme | ✅ | Phase 7 (`domain/Theme.kt`, `AttndTheme`) |
 | API-024 layouts | ⬜ later | Phase 5 |
 | API-025 free limit | ⬜ | Phase 12 (optional; iOS hasn't done it) |
 | API-026 preview / jitter | ⬜ parked | Phase 9 |
