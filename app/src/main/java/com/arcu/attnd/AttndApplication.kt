@@ -11,7 +11,9 @@ import com.arcu.attnd.data.HeadingSource
 import com.arcu.attnd.data.HeartStore
 import com.arcu.attnd.data.ImageDiskCache
 import com.arcu.attnd.data.OnDeviceAssistant
+import com.arcu.attnd.data.PermissionsState
 import com.arcu.attnd.data.PlanStore
+import com.arcu.attnd.data.ScheduleController
 import com.arcu.attnd.data.UsageReporter
 import com.arcu.attnd.data.UserLocationSource
 import com.arcu.attnd.data.WalkRouter
@@ -150,6 +152,12 @@ class AppGraph(context: Context, val prefs: DevicePrefs, logStore: LogStore, val
 
     /** Plans, "Follow on Lock Screen", skipped items, urgent block and reminders, per event (on the device). */
     val plans = PlanStore(prefs)
+
+    /** The attendee's picks (likes for now, My schedule later), shared by the UI and the assistant. */
+    val schedule = ScheduleController(hearts, plans, usage)
+
+    /** What the system allows the app (notifications, location), read on demand. */
+    val permissions = PermissionsState(appContext)
 
     /** The device-driven Live Update and reminders (shared spec §8). */
     val liveUpdates = LiveUpdateController(appContext, repository, hearts, plans, appScope, perf)

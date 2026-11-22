@@ -1,10 +1,7 @@
 package com.arcu.attnd.ui
 
-import android.Manifest
 import android.content.Context
-import android.content.pm.PackageManager
 import android.os.Build
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -13,12 +10,13 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.arcu.attnd.AttndApplication
 import com.arcu.attnd.BuildConfig
 import com.arcu.attnd.data.AssistantAvailability
-import com.arcu.attnd.data.AssistantDownload
 import com.arcu.attnd.data.EventRepository
 import com.arcu.attnd.data.HeartStore
 import com.arcu.attnd.data.InstallReferrer
 import com.arcu.attnd.data.OnDeviceAssistant
+import com.arcu.attnd.data.PermissionsState
 import com.arcu.attnd.data.PlanStore
+import com.arcu.attnd.data.ScheduleController
 import com.arcu.attnd.data.RefreshResult
 import com.arcu.attnd.data.SyncState
 import com.arcu.attnd.data.UsageReporter
@@ -36,9 +34,7 @@ import com.arcu.attnd.domain.Chip
 import com.arcu.attnd.domain.DistanceUnits
 import com.arcu.attnd.domain.EntityRef
 import com.arcu.attnd.domain.GeoPoint
-import com.arcu.attnd.domain.LiveAssist
 import com.arcu.attnd.domain.PlanShare
-import com.arcu.attnd.domain.RefKind
 import com.arcu.attnd.domain.JoinLinks.ShareLink
 import com.arcu.attnd.domain.Event
 import com.arcu.attnd.domain.EventBundle
@@ -51,17 +47,12 @@ import com.arcu.attnd.domain.LogEvent
 import com.arcu.attnd.domain.LogFilter
 import com.arcu.attnd.domain.LogLevel
 import com.arcu.attnd.domain.LogRecord
-import com.arcu.attnd.domain.MealBreak
 import com.arcu.attnd.domain.NearbyEvent
 import com.arcu.attnd.domain.OpenRequest
-import com.arcu.attnd.domain.OpenTarget
-import com.arcu.attnd.domain.PerfMetric
 import com.arcu.attnd.domain.Plan
 import com.arcu.attnd.domain.PlanExample
 import com.arcu.attnd.domain.PlanRequest
-import com.arcu.attnd.domain.PlannedItem
 import com.arcu.attnd.domain.Planner
-import com.arcu.attnd.domain.Redact
 import com.arcu.attnd.domain.ScreenshotRequest
 import com.arcu.attnd.domain.ScreenshotScreen
 import com.arcu.attnd.domain.SearchKind
@@ -200,22 +191,10 @@ data class AppUiState(
 
 private data class LocalState(
     val ready: Boolean = false,
-    val selectedItem: NavItem? = null,
-    /** Explore's view per event (also in [DevicePrefs.exploreView]). */
-    val exploreViews: Map<Int, Tab> = emptyMap(),
-    val focusInput: Int = 0,
     val join: JoinUiState = JoinUiState(),
     val nearby: NearbyUiState = NearbyUiState(),
-    val showOptions: Boolean = false,
     val notificationsEnabled: Boolean = false,
     val showUserLocation: Boolean = false,
-    val focusLocationId: Int? = null,
-    val focusScheduleItemId: Int? = null,
-    val focusNotificationId: Int? = null,
-    val searchRequest: SearchRequest? = null,
-    val assistantOpen: Boolean = false,
-    val assistant: AssistantUiState = AssistantUiState(),
-    val recenterRequest: Int = 0,
     val message: String? = null,
     val messageChip: Chip? = null,
     val dismissedUpdateVersion: String? = null,
@@ -223,15 +202,14 @@ private data class LocalState(
     val screenshot: ScreenshotRequest? = null,
     /** The screenshot event is still being joined: keep showing the loading screen, not the launch screen. */
     val screenshotPending: Boolean = false,
-    val mapFocusLocationId: Int? = null,
     /** Per event: when its Updates tab was last seen (epoch ms) and which update banner was dismissed. */
     val updatesSeenAt: Map<Int, Long> = emptyMap(),
     val dismissedUpdateBanners: Map<Int, Int> = emptyMap(),
-    val isPlanning: Boolean = false,
-    val planError: String? = null,
-    val showPlanRequest: Int = 0,
     val showOnboarding: Boolean = false,
 )
+
+/** Everything [EventViewModel.uiState] combines besides the repository's flows. */
+private data class UiInputs(val local: LocalState, val nav: NavState, val planner: PlannerProgress, val model: AssistantUiState)
 
 class EventViewModel(
     private val appContext: Context,
@@ -240,6 +218,8 @@ class EventViewModel(
     private val usage: UsageReporter,
     private val assistant: OnDeviceAssistant,
     private val heartStore: HeartStore,
+    private val schedule: ScheduleController,
+    private val permissions: PermissionsState,
     private val planStore: PlanStore,
     private val liveUpdates: LiveUpdateController,
     private val diagnostics: DiagnosticsController,
@@ -266,10 +246,6 @@ class EventViewModel(
     @Volatile
     private var screenshotMode = false
 
-    /** A plan being made and the model download (see [makePlan], [downloadAssistant]). */
-    private var planJob: Job? = null
-    private var downloadJob: Job? = null
-
     private val local = MutableStateFlow(
         LocalState(
             notificationsEnabled = prefs.notificationsEnabled,
@@ -278,14 +254,42 @@ class EventViewModel(
         )
     )
 
+    /** Gemini Nano's availability and download (checked once an event is shown). */
+    private val model = OnDeviceModelController(viewModelScope, assistant) { screenshotMode }
+
+    /** The selected item / tab, Explore's view, focus requests, the bar and Options. */
+    private val nav = NavigationController(
+        store = object : ExploreViewStore {
+            override fun exploreView(eventId: Int): String? = prefs.exploreView(eventId)
+            override fun setExploreView(eventId: Int, key: String) = prefs.setExploreView(eventId, key)
+        },
+        eventId = { repository.bundle.value?.event?.id },
+        current = { uiState.value },
+    )
+
+    /** Making, re-planning, swapping and clearing plans. */
+    private val planner = PlannerController(
+        scope = viewModelScope,
+        bundle = { repository.bundle.value },
+        hearts = heartStore,
+        plans = planStore,
+        assistant = assistant,
+        perf = perf,
+        available = { uiState.value.planner.available },
+        modelAvailable = { model.isAvailable },
+        countPerf = { !screenshotMode },
+    )
+
     val uiState: StateFlow<AppUiState> =
         combine(
             repository.bundle,
             repository.sync,
-            local,
+            combine(local, nav.state, planner.state, model.state, ::UiInputs),
             repository.appUpdate,
             combine(heartStore.version, planStore.version, diagnostics.state) { hearts, plans, diag -> Triple(hearts, plans, diag) },
-        ) { savedBundle, savedSync, state, savedUpdate, versions ->
+        ) { savedBundle, savedSync, inputs, savedUpdate, versions ->
+            val state = inputs.local
+            val navState = inputs.nav
             val screenshot = state.screenshot
             // Screenshot mode: the screen's layout tweaks, and nothing on top (no update banner or
             // screen, status pill, offline notice or refresh spinner).
@@ -303,8 +307,8 @@ class EventViewModel(
             // The planner runs without on-device AI too (likes + the plain-rule reading); never in screenshot mode.
             val plannerAvailable = screenshot == null
             val tabs = display?.let { EventTabModel.of(it, legacy = screenshot != null) } ?: EventTabModel.of(emptyList(), null)
-            val selectedItem = state.selectedItem?.takeIf { it in tabs.items } ?: tabs.initialItem
-            val exploreView = tabs.exploreView(eventId?.let { id -> state.exploreViews[id] ?: prefs.exploreView(id)?.let(Tab::fromKey) })
+            val selectedItem = navState.selectedItem?.takeIf { it in tabs.items } ?: tabs.initialItem
+            val exploreView = tabs.exploreView(eventId?.let(nav::exploreView))
             AppUiState(
                 phase = when {
                     !state.ready || state.screenshotPending -> AppPhase.LOADING
@@ -317,24 +321,24 @@ class EventViewModel(
                 selectedItem = selectedItem,
                 exploreView = exploreView,
                 selectedTab = tabs.contentTab(selectedItem, exploreView),
-                focusInput = state.focusInput,
+                focusInput = navState.focusInput,
                 join = state.join,
                 nearby = state.nearby,
-                showOptions = state.showOptions && bundle != null,
+                showOptions = navState.showOptions && bundle != null,
                 notificationsEnabled = state.notificationsEnabled,
                 showUserLocation = state.showUserLocation,
-                focusLocationId = state.focusLocationId,
-                focusScheduleItemId = state.focusScheduleItemId,
-                focusNotificationId = state.focusNotificationId,
-                searchRequest = state.searchRequest.takeIf { bundle != null },
+                focusLocationId = navState.focusLocationId,
+                focusScheduleItemId = navState.focusScheduleItemId,
+                focusNotificationId = navState.focusNotificationId,
+                searchRequest = navState.searchRequest.takeIf { bundle != null },
                 // The input bar over the other tabs (My plan has its own); never in screenshot mode.
-                assistantOpen = (state.assistantOpen || state.searchRequest != null) && bundle != null && screenshot == null &&
+                assistantOpen = (navState.assistantOpen || navState.searchRequest != null) && bundle != null && screenshot == null &&
                     selectedItem != NavItem.PLAN,
                 messageChip = state.messageChip.takeIf { screenshot == null && state.message != null },
                 remindersOn = eventId != null && planStore.reminders(eventId, hearts),
                 // Store screenshots never show the on-device assistant.
-                assistant = if (screenshot != null) AssistantUiState(availability = AssistantAvailability.UNAVAILABLE) else state.assistant,
-                recenterRequest = state.recenterRequest,
+                assistant = if (screenshot != null) AssistantUiState(availability = AssistantAvailability.UNAVAILABLE) else inputs.model,
+                recenterRequest = navState.recenterRequest,
                 message = state.message.takeIf { screenshot == null },
                 update = update,
                 showUpdateBanner = update.level == UpdateLevel.AVAILABLE &&
@@ -355,16 +359,16 @@ class EventViewModel(
                     state.dismissedUpdateBanners[eventId] ?: prefs.dismissedUpdateBanner(eventId),
                     Instant.now(),
                 ),
-                mapFocusLocationId = state.mapFocusLocationId,
+                mapFocusLocationId = navState.mapFocusLocationId,
                 isScreenshot = screenshot != null,
                 planner = PlanUiState(
                     available = plannerAvailable,
                     plan = plan,
                     changed = plan != null && Planner.changed(plan, bundle),
-                    isPlanning = state.isPlanning,
-                    error = state.planError,
+                    isPlanning = inputs.planner.isPlanning,
+                    error = inputs.planner.error,
                     examples = if (bundle != null && plannerAvailable) PlanRequest.examples(bundle, Instant.now()) else emptyList(),
-                    showRequest = state.showPlanRequest,
+                    showRequest = navState.showPlanRequest,
                 ),
                 showOnboarding = state.showOnboarding && screenshot == null && bundle != null,
                 followLive = eventId != null && planStore.follows(eventId, hearts),
@@ -424,7 +428,7 @@ class EventViewModel(
     private fun checkAssistantInEvent() {
         viewModelScope.launch {
             uiState.map { it.phase == AppPhase.EVENT && !it.isScreenshot }.distinctUntilChanged().collect { inEvent ->
-                if (inEvent) checkAssistant()
+                if (inEvent) model.check()
             }
         }
     }
@@ -499,19 +503,12 @@ class EventViewModel(
             val result = repository.join(event, via)
             // The tour, the first time this event is joined (never in screenshot mode).
             val tour = !alreadyIn && !screenshotMode && !prefs.onboardingSeen(event.id) && repository.bundle.value?.event?.id == event.id
+            planner.clearError()
+            nav.resetForJoin(alreadyIn)
             local.update {
                 it.copy(
                     join = JoinUiState(),
                     showOnboarding = tour || (alreadyIn && it.showOnboarding),
-                    planError = null,
-                    selectedItem = if (alreadyIn) it.selectedItem else null,
-                    showOptions = false,
-                    focusLocationId = null,
-                    focusScheduleItemId = null,
-                    focusNotificationId = null,
-                    mapFocusLocationId = null,
-                    searchRequest = null,
-                    assistantOpen = false,
                     message = when (result) {
                         is RefreshResult.Failed -> "Joined, but the event couldn't be downloaded. ${result.message}"
                         RefreshResult.EventGone -> "This event is no longer available."
@@ -545,19 +542,9 @@ class EventViewModel(
     fun leaveEvent() {
         viewModelScope.launch {
             repository.leave()
-            local.update {
-                it.copy(
-                    showOptions = false,
-                    showOnboarding = false,
-                    planError = null,
-                    selectedItem = null,
-                    focusLocationId = null,
-                    focusScheduleItemId = null,
-                    focusNotificationId = null,
-                    searchRequest = null,
-                    assistantOpen = false,
-                )
-            }
+            planner.clearError()
+            nav.resetForLeave()
+            local.update { it.copy(showOnboarding = false) }
         }
     }
 
@@ -571,14 +558,13 @@ class EventViewModel(
         screenshotMode = true
         liveUpdates.suspended = true
         liveUpdates.requestRefresh()
+        nav.update { it.copy(showOptions = false, focusLocationId = null) }
         local.update {
             it.copy(
                 screenshot = request,
                 screenshotPending = true,
-                showOptions = false,
                 showOnboarding = false,
                 message = null,
-                focusLocationId = null,
             )
         }
         viewModelScope.launch {
@@ -586,11 +572,11 @@ class EventViewModel(
                 startJob.join()
                 if (request.screen == ScreenshotScreen.LAUNCH) {
                     if (repository.currentEventId != null) repository.leave()
-                    local.update { it.copy(selectedItem = null) }
+                    nav.update { it.copy(selectedItem = null) }
                 } else {
                     join(silent = false, via = "search") { repository.lookup(request.eventCode) }
                     val location = repository.bundle.value?.let { request.focusLocation(it.locations) }
-                    local.update { it.copy(selectedItem = request.tab?.let(NavItem::direct), focusLocationId = location?.id) }
+                    nav.update { it.copy(selectedItem = request.tab?.let(NavItem::direct), focusLocationId = location?.id) }
                 }
             } finally {
                 local.update { it.copy(screenshotPending = false) }
@@ -677,43 +663,17 @@ class EventViewModel(
      * Shows [tab]'s screen: Explore on that view for the map / schedule / places, else the tab's own
      * item. Reselecting the map recenters it. A tab the event doesn't show changes nothing.
      */
-    fun selectTab(tab: Tab) {
-        val current = uiState.value
-        if (tab == Tab.MAP && current.selectedTab == Tab.MAP && !current.showOptions) {
-            local.update { it.copy(recenterRequest = it.recenterRequest + 1) }
-            return
-        }
-        local.update { withTab(it, tab) }
-    }
+    fun selectTab(tab: Tab) = nav.selectTab(tab)
 
     /** A navigation item tapped (My plan, Explore, Flyer, Updates; today's tabs in screenshot mode). */
-    fun selectItem(item: NavItem) {
-        val current = uiState.value
-        if (item == current.selectedItem && current.selectedTab == Tab.MAP) {
-            local.update { it.copy(recenterRequest = it.recenterRequest + 1) }
-            return
-        }
-        local.update { it.copy(selectedItem = item, assistantOpen = if (item == NavItem.PLAN) false else it.assistantOpen) }
-    }
+    fun selectItem(item: NavItem) = nav.selectItem(item)
 
     /** Explore's switch: shows [view] and remembers it for the event. */
-    fun selectExploreView(view: Tab) {
-        local.update { withTab(it, view) }
-    }
-
-    /** [state] showing [tab] (the item that holds it; Explore's view remembered per event). */
-    private fun withTab(state: LocalState, tab: Tab): LocalState {
-        val ui = uiState.value
-        val item = ui.tabs.itemFor(tab) ?: return state
-        val eventId = repository.bundle.value?.event?.id
-        if (item != NavItem.EXPLORE || eventId == null) return state.copy(selectedItem = item)
-        prefs.setExploreView(eventId, tab.key)
-        return state.copy(selectedItem = item, exploreViews = state.exploreViews + (eventId to tab))
-    }
+    fun selectExploreView(view: Tab) = nav.selectExploreView(view)
 
     /** Opening the app from a push notification lands on the Notifications tab. */
     fun openNotifications(notificationId: Int? = null) {
-        local.update { withTab(it, Tab.NOTIFICATIONS).copy(showOptions = false, focusNotificationId = notificationId ?: it.focusNotificationId) }
+        nav.showNotifications(notificationId)
         viewModelScope.launch {
             // On a cold start the saved bundle (and so the event id) is only known after start().
             startJob.join()
@@ -723,41 +683,23 @@ class EventViewModel(
     }
 
     /** Shows a location's detail: on the Locations tab, or as an overlay when that tab is hidden. */
-    fun focusLocation(locationId: Int) {
-        local.update { withTab(it, Tab.LOCATIONS).copy(focusLocationId = locationId) }
-    }
+    fun focusLocation(locationId: Int) = nav.focusLocation(locationId)
 
-    fun consumeFocusLocation() {
-        local.update { it.copy(focusLocationId = null) }
-    }
+    fun consumeFocusLocation() = nav.consumeFocusLocation()
 
-    fun focusScheduleItem(itemId: Int) {
-        local.update { withTab(it, Tab.SCHEDULE).copy(focusScheduleItemId = itemId) }
-    }
+    fun focusScheduleItem(itemId: Int) = nav.focusScheduleItem(itemId)
 
-    fun consumeFocusScheduleItem() {
-        local.update { it.copy(focusScheduleItemId = null) }
-    }
+    fun consumeFocusScheduleItem() = nav.consumeFocusScheduleItem()
 
     /** Shows a notification on the Notifications tab (or as an overlay when that tab is hidden). */
-    fun focusNotification(notificationId: Int) {
-        local.update { withTab(it, Tab.NOTIFICATIONS).copy(focusNotificationId = notificationId, showOptions = false) }
-    }
+    fun focusNotification(notificationId: Int) = nav.focusNotification(notificationId)
 
-    fun consumeFocusNotification() {
-        local.update { it.copy(focusNotificationId = null) }
-    }
+    fun consumeFocusNotification() = nav.consumeFocusNotification()
 
     /** Selects a location on the Map tab (when the event shows one). */
-    fun showOnMap(locationId: Int) {
-        val bundle = uiState.value.bundle ?: return
-        if (Tab.MAP !in bundle.display.tabs) return
-        local.update { withTab(it, Tab.MAP).copy(showOptions = false, mapFocusLocationId = locationId) }
-    }
+    fun showOnMap(locationId: Int) = nav.showOnMap(locationId)
 
-    fun consumeMapFocus() {
-        local.update { it.copy(mapFocusLocationId = null) }
-    }
+    fun consumeMapFocus() = nav.consumeMapFocus()
 
     /** The update banner's ✕: hides that update's banner (the badge stays until the tab is seen). */
     fun dismissLatestUpdate(notificationId: Int) {
@@ -771,13 +713,12 @@ class EventViewModel(
     /** Hearts or un-hearts a schedule item / location (stored per event; API-009 usage count). */
     fun toggleHeart(kind: SearchKind, id: Int) {
         val eventId = repository.bundle.value?.event?.id ?: return
-        val hearted = !heartStore.hearts(eventId).has(kind, id)
+        val hearted = !schedule.isLiked(eventId, kind, id)
         setLiked(kind, id, hearted)
         // Assistant spec §6, like clash: a liked item that overlaps the plan → "Add to plan instead of X?".
         val bundle = repository.bundle.value ?: return
-        val plan = planStore.plan(eventId)?.takeIf { !it.isEmpty }
-        if (hearted && kind == SearchKind.SCHEDULE && plan != null && !screenshotMode) {
-            LiveAssist.likeClash(id, plan, bundle)?.let { chip ->
+        if (hearted && kind == SearchKind.SCHEDULE && !screenshotMode) {
+            schedule.likeClash(bundle, id)?.let { chip ->
                 local.update { it.copy(message = chip.label, messageChip = chip) }
             }
         }
@@ -785,8 +726,7 @@ class EventViewModel(
 
     private fun setLiked(kind: SearchKind, id: Int, liked: Boolean): Boolean {
         val eventId = repository.bundle.value?.event?.id ?: return false
-        if (!heartStore.set(eventId, kind, id, liked)) return false
-        Hearts.metric(kind, liked)?.let { track(it, id.toString()) }
+        if (!schedule.setLiked(eventId, kind, id, liked, countUsage = !screenshotMode)) return false
         assistantController.refreshLive()
         return true
     }
@@ -803,75 +743,34 @@ class EventViewModel(
     // ── Search & assistant ──────────────────────────────────────────────────
 
     /**
-     * An internal open link (launcher shortcut, AppFunctions result). An item opens on its own tab
-     * when `display.tabs` shows it, otherwise on the search screen. Ignored when it names another
-     * event than the joined one; waits for the saved bundle on a cold start.
+     * An internal open link (a notification or Live Update tap). An item opens on its own tab when
+     * `display.tabs` shows it, otherwise on the search screen. Ignored when it names another event than
+     * the joined one; waits for the saved bundle on a cold start.
      */
     fun open(request: OpenRequest) {
         viewModelScope.launch {
             startJob.join()
             val bundle = repository.bundle.value ?: return@launch
             if (request.eventId != null && request.eventId != bundle.event.id) return@launch
-            val tabs = bundle.display.tabs
-            // Searches go to My plan's input bar; items of hidden tabs open in the bar over the current tab.
-            fun search(query: String, detail: SearchEntry? = null) = local.update {
-                val base = if (detail == null && NavItem.PLAN in uiState.value.tabs.items) it.copy(selectedItem = NavItem.PLAN) else it
-                base.copy(showOptions = false, searchRequest = SearchRequest(query, (it.searchRequest?.serial ?: 0) + 1, detail))
-            }
-            when (val target = request.target) {
-                is OpenTarget.Location ->
-                    if (Tab.LOCATIONS in tabs) {
-                        local.update { it.copy(showOptions = false) }
-                        focusLocation(target.id)
-                    } else {
-                        search("", SearchEntry(SearchKind.LOCATION, target.id))
-                    }
-                is OpenTarget.ScheduleItem ->
-                    if (Tab.SCHEDULE in tabs) {
-                        local.update { it.copy(showOptions = false) }
-                        focusScheduleItem(target.id)
-                    } else {
-                        search("", SearchEntry(SearchKind.SCHEDULE, target.id))
-                    }
-                is OpenTarget.Notification -> when {
-                    Tab.NOTIFICATIONS !in tabs -> search("", target.id?.let { SearchEntry(SearchKind.NOTIFICATION, it) })
-                    target.id != null -> focusNotification(target.id)
-                    else -> local.update { withTab(it, Tab.NOTIFICATIONS).copy(showOptions = false) }
-                }
-                OpenTarget.EventInfo -> showOptions(true)
-                is OpenTarget.Search -> search(target.query)
-                is OpenTarget.MapLocation ->
-                    if (Tab.MAP in tabs) showOnMap(target.id)
-                    else if (Tab.LOCATIONS in tabs) {
-                        local.update { it.copy(showOptions = false) }
-                        focusLocation(target.id)
-                    } else {
-                        search("", SearchEntry(SearchKind.LOCATION, target.id))
-                    }
-                OpenTarget.MyPlan -> showPlan()
-            }
+            nav.route(request.target, bundle.display.tabs)
         }
     }
 
     /** The bar took the request; [keepOpen] = the bar over a tab (My plan's bar is always there). */
-    fun consumeSearchRequest(keepOpen: Boolean = true) {
-        local.update { it.copy(searchRequest = null, assistantOpen = if (keepOpen) it.assistantOpen || it.searchRequest != null else it.assistantOpen) }
-    }
+    fun consumeSearchRequest(keepOpen: Boolean = true) = nav.consumeSearchRequest(keepOpen)
 
     // ── Event assistant (assistant spec) ────────────────────────────────────
 
     /** The assistant: conversation, actions, live hints (see [AssistantController]). */
     val assistantController: AssistantController = AssistantController(viewModelScope, repository, heartStore, planStore, assistant, object : AssistantHost {
-        override fun modelAvailable(): Boolean = !screenshotMode && local.value.assistant.availability == AssistantAvailability.AVAILABLE
+        override fun modelAvailable(): Boolean = !screenshotMode && model.isAvailable
         override fun setLiked(kind: SearchKind, id: Int, liked: Boolean): Boolean = this@EventViewModel.setLiked(kind, id, liked)
-        override suspend fun makePlan(request: String, source: String): Plan? = buildPlan(request, source)
-        override fun planError(): String? = local.value.planError
+        override suspend fun makePlan(request: String, source: String): Plan? = planner.buildPlan(request, source)
+        override fun planError(): String? = planner.state.value.error
         override fun open(screen: String, ref: EntityRef?) = openScreen(screen, ref)
         override fun canPlan(): Boolean = !screenshotMode
-        override fun onProposal() {
-            // A plan edit previews in place on My plan (typed on another tab, a hint, a like clash).
-            if (NavItem.PLAN in uiState.value.tabs.items) local.update { it.copy(selectedItem = NavItem.PLAN, assistantOpen = false, searchRequest = null, showOptions = false) }
-        }
+        // A plan edit previews in place on My plan (typed on another tab, a hint, a like clash).
+        override fun onProposal() = nav.showProposal()
         override fun setSetting(name: ActionName, on: Boolean): Boolean {
             if (on && !hasNotificationPermission()) return false
             when (name) {
@@ -892,8 +791,7 @@ class EventViewModel(
         override fun units(): DistanceUnits = DistanceUnits.forRegion(Locale.getDefault().country)
     })
 
-    private fun hasNotificationPermission(): Boolean =
-        ContextCompat.checkSelfPermission(appContext, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+    private fun hasNotificationPermission(): Boolean = permissions.notifications
 
     private fun userLocationSource(): GeoPoint? =
         (appContext.applicationContext as? AttndApplication)?.graph?.userLocation?.location?.value
@@ -902,14 +800,10 @@ class EventViewModel(
     fun openAssistant() {
         if (screenshotMode) return
         AppLog.debug(LogCategory.UI, LogEvent.SCREEN, "Screen assistant", mapOf("name" to "assistant"))
-        // On My plan the bar is always there: focus it; elsewhere it opens over the tab.
-        if (uiState.value.selectedItem == NavItem.PLAN) local.update { it.copy(focusInput = it.focusInput + 1, showOptions = false) }
-        else local.update { it.copy(assistantOpen = true, showOptions = false) }
+        nav.openAssistant()
     }
 
-    fun closeAssistant() {
-        local.update { it.copy(assistantOpen = false, searchRequest = null) }
-    }
+    fun closeAssistant() = nav.closeAssistant()
 
     /** `reminders(on)`: reminders before liked and planned items (the caller holds POST_NOTIFICATIONS to turn on). */
     fun setReminders(on: Boolean) {
@@ -921,21 +815,7 @@ class EventViewModel(
     /** `open(screen, id?)` from the assistant: closes it and shows the manual screen. */
     private fun openScreen(screen: String, ref: EntityRef?) {
         val bundle = repository.bundle.value ?: return
-        val tabs = bundle.display.tabs
-        closeAssistant()
-        when (screen) {
-            "map" -> when {
-                ref?.kind == RefKind.LOCATION && Tab.MAP in tabs -> showOnMap(ref.id)
-                Tab.MAP in tabs -> selectTab(Tab.MAP)
-            }
-            "locations" -> if (ref?.kind == RefKind.LOCATION) focusLocation(ref.id) else if (Tab.LOCATIONS in tabs) selectTab(Tab.LOCATIONS)
-            "schedule" -> if (ref?.kind == RefKind.SCHEDULE) focusScheduleItem(ref.id) else if (Tab.SCHEDULE in tabs) selectTab(Tab.SCHEDULE)
-            "updates" -> if (ref?.kind == RefKind.UPDATE && Tab.NOTIFICATIONS in tabs) focusNotification(ref.id) else if (Tab.NOTIFICATIONS in tabs) selectTab(Tab.NOTIFICATIONS)
-            "flyer" -> if (Tab.FLYER in tabs) selectTab(Tab.FLYER)
-            "options" -> showOptions(true)
-            "tour" -> showTour()
-            "plan" -> showPlan()
-        }
+        if (!nav.openScreen(screen, ref, bundle.display.tabs) && screen == "tour") showTour()
     }
 
     /**
@@ -959,160 +839,35 @@ class EventViewModel(
                 )
                 return@launch
             }
-            local.update { it.copy(selectedItem = NavItem.PLAN, showOptions = false, showOnboarding = false) }
+            nav.update { it.copy(selectedItem = NavItem.PLAN, showOptions = false) }
+            local.update { it.copy(showOnboarding = false) }
             assistantController.openShared(payload, joined = !already)
         }
     }
 
     /** Checks once (when the search screen opens) whether the on-device model can be used. */
-    fun checkAssistant() {
-        if (screenshotMode) return
-        val current = local.value.assistant.availability
-        if (current != AssistantAvailability.UNKNOWN && current != AssistantAvailability.DOWNLOADING) return
-        viewModelScope.launch {
-            val availability = assistant.availability()
-            AppLog.info(LogCategory.ASSISTANT, LogEvent.MODEL_STATUS, "Gemini Nano: $availability", mapOf("status" to availability))
-            AppLog.info(LogCategory.PLANNER, LogEvent.PLANNER_AVAILABILITY, "Planner: $availability", mapOf("status" to availability))
-            local.update { it.copy(assistant = it.assistant.copy(availability = availability)) }
-        }
-    }
+    fun checkAssistant() = model.check()
 
     /** Downloads Gemini Nano (only when the person asks for it). */
-    fun downloadAssistant() {
-        if (downloadJob?.isActive == true) return
-        downloadJob = viewModelScope.launch {
-            local.update { it.copy(assistant = it.assistant.copy(availability = AssistantAvailability.DOWNLOADING, downloadError = null)) }
-            assistant.download().collect { status ->
-                when (status) {
-                    is AssistantDownload.Started -> AppLog.info(LogCategory.ASSISTANT, LogEvent.MODEL_DOWNLOAD, "Model download started", mapOf("state" to "started", "pct" to 0))
-                    AssistantDownload.Completed -> AppLog.info(LogCategory.ASSISTANT, LogEvent.MODEL_DOWNLOAD, "Model download finished", mapOf("state" to "finished", "pct" to 100))
-                    is AssistantDownload.Failed -> AppLog.warning(LogCategory.ASSISTANT, LogEvent.MODEL_DOWNLOAD, "Model download failed: ${status.message}", mapOf("state" to "failed"))
-                    is AssistantDownload.Progress -> Unit
-                }
-                local.update { state ->
-                    val a = state.assistant
-                    state.copy(
-                        assistant = when (status) {
-                            is AssistantDownload.Started -> a.copy(totalBytes = status.totalBytes, downloadedBytes = 0)
-                            is AssistantDownload.Progress -> a.copy(downloadedBytes = status.downloadedBytes)
-                            AssistantDownload.Completed -> a.copy(availability = AssistantAvailability.AVAILABLE)
-                            is AssistantDownload.Failed -> a.copy(availability = AssistantAvailability.DOWNLOADABLE, downloadError = status.message)
-                        }
-                    )
-                }
-            }
-            // The flow can end without a final status: ask AICore again.
-            if (local.value.assistant.availability == AssistantAvailability.DOWNLOADING) {
-                val availability = assistant.availability()
-                local.update { it.copy(assistant = it.assistant.copy(availability = availability)) }
-            }
-        }
-    }
+    fun downloadAssistant() = model.download()
 
     // ── Planner ─────────────────────────────────────────────────────────────
 
-    /**
-     * Makes and stores a plan for [request]: the on-device model extracts preferences (JSON, validated
-     * against the bundle; the plain-rule reading fills gaps or replaces it on failure), then the
-     * deterministic [Planner] schedules. Returns null when there is no event or the planner is off.
-     */
-    private suspend fun buildPlan(request: String, source: String): Plan? {
-        val bundle = repository.bundle.value ?: return null
-        if (!uiState.value.planner.available) return null
-        AppLog.info(LogCategory.PLANNER, LogEvent.PLANNER_REQUEST, "Plan requested ($source)", mapOf("source" to source) + Redact.textFields("query", request, AppLog.allowText))
-        local.update { it.copy(isPlanning = true, planError = null) }
-        try {
-            val now = Instant.now()
-            val hearts = heartStore.hearts(bundle.event.id)
-            val rules = PlanRequest.heuristic(request, bundle, now)
-            val modelStarted = System.nanoTime()
-            val model = if (local.value.assistant.availability != AssistantAvailability.AVAILABLE) null else try {
-                val prompt = PlanRequest.prompt(bundle, request, hearts, now)
-                val raw = assistant.extractPreferences(prompt)
-                PlanRequest.parse(raw, bundle, now)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                AppLog.caught(LogCategory.PLANNER, "plan.preferences", e, LogLevel.WARNING)
-                null
-            }
-            val preferences = PlanRequest.merge(model, rules)
-            AppLog.log(
-                if (model != null) LogLevel.INFO else LogLevel.WARNING, LogCategory.PLANNER, LogEvent.PLANNER_EXTRACT,
-                if (model != null) "Preferences from Gemini Nano" else "Preferences from the plain rules only",
-                mapOf(
-                    "ms" to (System.nanoTime() - modelStarted) / 1_000_000, "ok" to (model != null),
-                    "model" to if (model != null) "gemini_nano" else "rules",
-                    "liked_tags" to preferences.likedTags.size, "disliked_tags" to preferences.dislikedTags.size, "days" to preferences.days.size,
-                ),
-            )
-            val plan = timedPlan { Planner(bundle, preferences, hearts).plan(now, request.trim()) }
-            if (plan.isEmpty) {
-                local.update { it.copy(planError = "Nothing on the schedule fits that. Try another day or fewer limits.") }
-                return plan
-            }
-            planStore.applyPlan(bundle.event.id, plan)
-            return plan
-        } finally {
-            local.update { it.copy(isPlanning = false) }
-        }
-    }
-
-    /** From the plan card in Schedule (or an example chip). */
-    fun makePlan(request: String, source: String = "card") {
-        val trimmed = request.trim()
-        if (trimmed.isEmpty() || planJob?.isActive == true) return
-        planJob = viewModelScope.launch { buildPlan(trimmed, source) }
-    }
+    /** From the plan card (or an example chip). */
+    fun makePlan(request: String, source: String = "card") = planner.makePlan(request, source)
 
     /** "Re-plan from now": the same preferences from the current time (also after a content change). */
-    fun replanFromNow() {
-        val bundle = repository.bundle.value ?: return
-        val plan = planStore.plan(bundle.event.id) ?: return
-        val replanned = timedPlan {
-            Planner(bundle, plan.preferences, heartStore.hearts(bundle.event.id), plan.constraints).replan(plan, Instant.now())
-        }
-        if (replanned.isEmpty) {
-            local.update { it.copy(planError = "Nothing left on the schedule fits this plan.") }
-        } else {
-            local.update { it.copy(planError = null) }
-            planStore.applyPlan(bundle.event.id, replanned.copy(constraints = plan.constraints, checkedOff = plan.checkedOff))
-        }
-    }
+    fun replanFromNow() = planner.replanFromNow()
 
-    fun swapPlanItem(oldId: Int, newId: Int) {
-        val bundle = repository.bundle.value ?: return
-        val plan = planStore.plan(bundle.event.id) ?: return
-        val swapped = Planner(bundle, plan.preferences, heartStore.hearts(bundle.event.id)).swap(plan, oldId, newId) ?: return
-        AppLog.info(LogCategory.PLANNER, LogEvent.PLANNER_SWAP, "Plan item swapped", mapOf("item_id" to oldId))
-        planStore.applyPlan(bundle.event.id, swapped)
-    }
+    fun swapPlanItem(oldId: Int, newId: Int) = planner.swapPlanItem(oldId, newId)
 
     /** "Keep my plan" after a content change: the changed items are accepted as they are now. */
-    fun keepChangedPlan() {
-        val bundle = repository.bundle.value ?: return
-        val plan = planStore.plan(bundle.event.id) ?: return
-        val kept = plan.days.map { day -> day.copy(entries = day.entries.filter { it !is PlannedItem || bundle.scheduleItem(it.itemId) != null }) }
-        val updated = plan.copy(
-            days = kept,
-            fingerprints = kept.flatMap { it.items }.mapNotNull { bundle.scheduleItem(it.itemId) }.associate { it.id to Planner.fingerprint(it) },
-        )
-        AppLog.debug(LogCategory.UI, LogEvent.UI_ACTION, "Changed plan kept", mapOf("name" to "plan_keep"))
-        planStore.applyPlan(bundle.event.id, updated)
-    }
+    fun keepChangedPlan() = planner.keepChangedPlan()
 
-    fun clearPlan() {
-        val eventId = repository.bundle.value?.event?.id ?: return
-        AppLog.debug(LogCategory.UI, LogEvent.UI_ACTION, "Plan cleared", mapOf("name" to "plan_clear"))
-        planStore.applyPlan(eventId, null)
-        local.update { it.copy(planError = null) }
-    }
+    fun clearPlan() = planner.clearPlan()
 
     /** Opens the My plan tab. */
-    fun showPlan() {
-        if (NavItem.PLAN !in uiState.value.tabs.items) return
-        local.update { it.copy(selectedItem = NavItem.PLAN, showOptions = false, assistantOpen = false, showPlanRequest = it.showPlanRequest + 1) }
-    }
+    fun showPlan() = nav.showPlan()
 
     // ── Live Update and onboarding ─────────────────────────────────────────
 
@@ -1124,7 +879,8 @@ class EventViewModel(
     }
 
     fun showTour() {
-        local.update { it.copy(showOptions = false, showOnboarding = true) }
+        nav.showOptions(false)
+        local.update { it.copy(showOnboarding = true) }
     }
 
     fun finishOnboarding() {
@@ -1139,9 +895,7 @@ class EventViewModel(
             makePlan(example.text, source = "example")
             showPlan()
         } else {
-            local.update {
-                it.copy(showOptions = false, selectedItem = NavItem.PLAN, searchRequest = SearchRequest(example.text, (it.searchRequest?.serial ?: 0) + 1, ask = true))
-            }
+            nav.ask(example.text)
         }
     }
 
@@ -1168,9 +922,7 @@ class EventViewModel(
         usage.track(eventId, name, detail)
     }
 
-    fun showOptions(show: Boolean) {
-        local.update { it.copy(showOptions = show) }
-    }
+    fun showOptions(show: Boolean) = nav.showOptions(show)
 
     fun showMessage(message: String) {
         local.update { it.copy(message = message, messageChip = null) }
@@ -1216,22 +968,6 @@ class EventViewModel(
     /** A `.jsonl` file of the records matching [filter], for the share sheet. */
     suspend fun exportLogs(filter: LogFilter?): File = diagnostics.export(filter)
 
-    /** One planner run: Trace section `planner` (+ `perf.signpost`), `planner.run`, API-014 `perf_planner_ms`. */
-    private inline fun timedPlan(block: () -> Plan): Plan {
-        val started = System.nanoTime()
-        val plan = AppLog.section("planner") { block() }
-        val ms = (System.nanoTime() - started) / 1_000_000
-        AppLog.info(
-            LogCategory.PLANNER, LogEvent.PLANNER_RUN, "Plan: ${plan.itemIds.size} items in $ms ms",
-            mapOf(
-                "ms" to ms, "items" to plan.itemIds.size, "days" to plan.days.size,
-                "meals" to plan.days.sumOf { day -> day.entries.count { it is MealBreak } },
-                "pace" to plan.preferences.pace,
-            ),
-        )
-        if (!screenshotMode) perf.record(PerfMetric.PLANNER_MS, PerfMetric.plannerBucket(ms))
-        return plan
-    }
 
     companion object {
         private const val RESUME_DEBOUNCE_MS = 30 * 1000L
@@ -1241,7 +977,7 @@ class EventViewModel(
                 val app = checkNotNull(this[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY]) as AttndApplication
                 EventViewModel(
                     app, app.graph.repository, app.graph.prefs, app.graph.usage, app.graph.assistant, app.graph.hearts,
-                    app.graph.plans, app.graph.liveUpdates, app.graph.diagnostics, app.graph.perf,
+                    app.graph.schedule, app.graph.permissions, app.graph.plans, app.graph.liveUpdates, app.graph.diagnostics, app.graph.perf,
                 )
             }
         }
