@@ -109,18 +109,17 @@ class LiveUpdatesTest {
         val zone = ZoneId.of("America/Chicago")
         val synced = Instant.parse("2026-11-14T20:14:00Z").toEpochMilli() // 2:14 PM in Chicago
         val now = Instant.parse("2026-11-14T20:30:00Z").toEpochMilli()
-        val error = "Can't reach Attnd right now. Showing saved content."
         assertEquals(
-            "Offline · last updated 2:14 PM",
-            LiveUpdates.offlineNoticeText(error, offline = true, synced, now, zone, is24Hour = false, Locale.US),
+            "Offline · Updated 2:14 PM · everything still works",
+            LiveUpdates.offlineNoticeText(offline = true, synced, now, zone, is24Hour = false, Locale.US),
         )
         assertEquals(
-            "Offline · last updated 14:14",
-            LiveUpdates.offlineNoticeText(error, offline = true, synced, now, zone, is24Hour = true, Locale.US),
+            "Offline · Updated 14:14 · everything still works",
+            LiveUpdates.offlineNoticeText(offline = true, synced, now, zone, is24Hour = true, Locale.US),
         )
         assertEquals(
-            "Server error (503). Showing saved content. Last updated 2:14 PM.",
-            LiveUpdates.offlineNoticeText("Server error (503). Showing saved content.", offline = false, synced, now, zone, false, Locale.US),
+            "Can't update · Updated 2:14 PM",
+            LiveUpdates.offlineNoticeText(offline = false, synced, now, zone, false, Locale.US),
         )
     }
 
@@ -130,9 +129,9 @@ class LiveUpdatesTest {
         val synced = Instant.parse("2026-11-14T20:14:00Z").toEpochMilli()
         val nextDay = Instant.parse("2026-11-15T15:00:00Z").toEpochMilli()
         assertEquals(
-            "Offline · last updated Nov 14, 2:14 PM",
-            LiveUpdates.offlineNoticeText("x", offline = true, synced, nextDay, zone, is24Hour = false, Locale.US),
+            "Offline · Updated Nov 14, 2:14 PM · everything still works",
+            LiveUpdates.offlineNoticeText(offline = true, synced, nextDay, zone, is24Hour = false, Locale.US),
         )
-        assertEquals("x", LiveUpdates.offlineNoticeText("x", offline = true, lastSyncedAt = null, now = nextDay, zone = zone, is24Hour = false))
+        assertEquals("Offline", LiveUpdates.offlineNoticeText(offline = true, lastSyncedAt = null, now = nextDay, zone = zone, is24Hour = false))
     }
 }

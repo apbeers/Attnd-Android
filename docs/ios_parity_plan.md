@@ -169,7 +169,7 @@ Weather was never built.
 | `EventPersonalState` (`pref.event.<id>` JSON, written ~0.6 s after the last change) | One per-event JSON in `DevicePrefs` (`personal_<id>`: schedule entries, updates seen, dismissed banner / urgent ids, follow, skipped) through a debounced writer; old keys read once (migration) |
 | actors `EventStore` / `ImageStore` | `EventRepository` file cache + `ImageDiskCache` (already off main) |
 | SwiftUI views per screen; `ComponentView` the one renderer | Composables per screen; `ComponentView(component, surface)` the one renderer; screens receive state slices + callbacks (the existing rule) |
-| `NavigationStack` paths (`searchPath`, `mapNavigation.path`, `pagePath`) | Per-tab back stacks as `SnapshotStateList<Entry>` held in `NavigationState` (saveable) — or Navigation 3 (`androidx.navigation3`, AndroidX) if phase 0 brings a stable release; decide in phase 4 by what phase 0 shipped. `BackHandler` / predictive back pops. |
+| `NavigationStack` paths (`searchPath`, `mapNavigation.path`, `pagePath`) | Per-tab back stacks as `SnapshotStateList<Entry>` held in `NavigationState` (saveable) — or Navigation 3 (`androidx.navigation3`, AndroidX) if phase 0 brings a stable release; decide in phase 4 by what phase 0 shipped (phase 4: kept in `NavState`, no Navigation 3). `BackHandler` / predictive back pops. |
 | `fullScreenCover` (My plan chat), sheets (Options, search) | Full-screen destination for the chat; `ModalBottomSheet` for search and Options |
 | `ReservedRegionAvoiding`, `ArrangementView` | `currentWindowAdaptiveInfoV2().windowPosture` hinge bounds + `FoldAwareSplit` (exists) (§3) |
 | `MetricKitReporter` | `ExitReporter` (exists, `ApplicationExitInfo`) |
@@ -526,7 +526,17 @@ Phase 0 (toolchain and dependencies, minSdk 36) runs elsewhere. When it lands, p
 - **Tests:** `MyScheduleTest` (8), `PlannerTest` re-synced (reason wording), `HeartsTest`, `TabLayoutTest` (11),
   `UsageReportingTest` (metric only on membership changes).
 
-**Phase 4 — Tabs, navigation, Options, search, banners, Permissions (L)**
+**Phase 4 — Tabs, navigation, Options, search, banners, Permissions (L)** — ✅ done (Nov 22, 2026)
+- **Shipped:** `TabLayout` in the shell (`DisplayConfig.layout` / `legacyLayout`, `NavigationController` on `EventTab`;
+  Explore, `exploreView` and the My plan tab deleted); Home placeholder (`HomeScreen.kt`, today's essentials); the
+  search sheet (`SearchSheet.kt`) or the My plan button (§4.3 states) as the floating button; My plan as a full-screen
+  destination; the gear on `optionsTab`'s root; `domain/Banners.kt` (`SwipeDismissRule`, `StatusBadges`, `InAppBanner`)
+  + `SwipeUpToDismiss`, Options → Status; the in-app organizer-update banner; Options → Permissions
+  (`domain/PermissionRules.kt`) and the join rule; Follow default on. Tests `BannersTest`, `PlanTabTest` tab cases,
+  `NavigationControllerTest`. Navigation 3 was not adopted (state stays in `NavState`).
+- **Deferred:** Home's urgent card with sideways swipe + Undo and a set of dismissed urgent ids (5b with Home's
+  sections); hiding the planner / onboarding plan card without the model (6b: until then Home's My plan card keeps the
+  planner on every phone, as the lead asked); distance + arrow on the sheet's place results.
 - **Scope:**
   - iOS `TabLayout` in the shell; Home tab placeholder (built-in sections only until 5b; Home is always on);
   - Explore and the My plan tab gone;

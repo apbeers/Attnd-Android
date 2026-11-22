@@ -109,9 +109,10 @@ class PlanStore(private val prefs: DevicePrefs) {
         changed()
     }
 
-    /** "Follow on Lock Screen" for the event: the user's choice, else on when they have hearts or a plan. */
+    /** "Follow on Lock Screen" for the event: the user's choice, else on (iOS default, batch 7). */
+    @Suppress("UNUSED_PARAMETER") // kept so callers don't change; the default no longer depends on likes
     fun follows(eventId: Int, hearts: Hearts): Boolean =
-        prefs.followLive(eventId) ?: (!hearts.isEmpty || plan(eventId)?.isEmpty == false)
+        prefs.followLive(eventId) ?: true
 
     fun setFollows(eventId: Int, follow: Boolean) {
         prefs.setFollowLive(eventId, follow)

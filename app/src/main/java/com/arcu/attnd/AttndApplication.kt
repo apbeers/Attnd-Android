@@ -39,9 +39,11 @@ import com.arcu.attnd.live.LiveUpdateController
 import com.arcu.attnd.push.PushNotifications
 import com.arcu.attnd.ui.components.ImageLoader
 import com.arcu.attnd.util.integrity.AttestationManager
+import com.arcu.attnd.domain.InAppBanner
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -200,7 +202,10 @@ class AppGraph(context: Context, val prefs: DevicePrefs, logStore: LogStore, val
     )
 
     /** What the system allows the app (notifications, location), read on demand. */
-    val permissions = PermissionsState(appContext)
+    val permissions = PermissionsState(appContext, prefs)
+
+    /** Organizer updates pushed while the app is open: the shell's in-app banner (iOS `InAppBannerOverlay`). */
+    val inAppBanners = MutableSharedFlow<InAppBanner>(extraBufferCapacity = 4)
 
     /** The device-driven Live Update and reminders (shared spec §8). */
     val liveUpdates = LiveUpdateController(appContext, repository, hearts, plans, appScope, perf)

@@ -10,6 +10,7 @@ import com.arcu.attnd.domain.LiveActivitySettings
 import com.arcu.attnd.domain.LocationsStyle
 import com.arcu.attnd.domain.ScheduleStyle
 import com.arcu.attnd.domain.SecondaryPane
+import com.arcu.attnd.domain.EventTab
 import com.arcu.attnd.domain.Tab
 import com.arcu.attnd.domain.UpdateLevel
 import kotlinx.serialization.json.Json
@@ -52,7 +53,9 @@ class ApiMapperTest {
     @Test
     fun fullBundle_displayValuesAreUsed_unknownTabDropped() {
         val display = ApiMapper.parseBundle(SampleBundles.FULL)!!.display
-        assertEquals(listOf(Tab.SCHEDULE, Tab.MAP, Tab.LOCATIONS, Tab.NOTIFICATIONS, Tab.FLYER), display.tabs)
+        // Home takes one of the five places, so Flyer is cut (iOS TabLayout); screenshot mode keeps all five.
+        assertEquals(listOf(Tab.SCHEDULE, Tab.MAP, Tab.LOCATIONS, Tab.NOTIFICATIONS), display.tabs)
+        assertEquals(listOf(Tab.SCHEDULE, Tab.MAP, Tab.LOCATIONS, Tab.NOTIFICATIONS, Tab.FLYER), display.legacyLayout.organizerTabs)
         assertEquals(Tab.SCHEDULE, display.defaultTab)
         assertEquals(LocationsStyle.GROUPED, display.locationsStyle)
         assertEquals(ScheduleStyle.NOW_NEXT, display.scheduleStyle)
@@ -123,8 +126,9 @@ class ApiMapperTest {
         assertFalse(bundle.event.isDemo)
         val display = bundle.display
         // "nonsense" is the only tab, so the defaults apply, including flyer since flyer_url is set.
-        assertEquals(listOf(Tab.MAP, Tab.LOCATIONS, Tab.SCHEDULE, Tab.FLYER, Tab.NOTIFICATIONS), display.tabs)
-        assertEquals(Tab.FLYER, display.defaultTab)
+        assertEquals(listOf(Tab.MAP, Tab.LOCATIONS, Tab.SCHEDULE, Tab.NOTIFICATIONS), display.tabs)
+        assertEquals(listOf(Tab.MAP, Tab.LOCATIONS, Tab.SCHEDULE, Tab.FLYER, Tab.NOTIFICATIONS), display.legacyLayout.organizerTabs)
+        assertEquals("screenshot mode honours default_tab", EventTab.FLYER, display.legacyLayout.defaultTab)
         assertEquals(ScheduleStyle.BY_LOCATION, display.scheduleStyle)
         assertEquals(LocationsStyle.LIST, display.locationsStyle)
         assertEquals(SecondaryPane.LOCATIONS, display.secondaryPane)
@@ -253,14 +257,15 @@ class ApiMapperTest {
     }
 
     @Test
-    fun bundleLayout_isAcceptedRaw_andHomeTabIgnoredForNow() {
-        // API-024: `layout` and a `home` tab only come with X-Attnd-Sections, which this build doesn't send;
-        // either way they must never break decoding.
+    fun bundleLayout_isAcceptedRaw_andHomeTabReadIntoTheLayout() {
+        // API-024: `layout` and a `home` tab only come with X-Attnd-Sections; they must never break decoding.
+        // A listed `home` goes into the navigation (Home is first and the default anyway).
         val bundle = ApiMapper.parseBundle(
             """{"event":{"id":1},"layout":{"home":[{"type":"header"}],"future":7},"display":{"tabs":["home","map","schedule"],"default_tab":"home"}}""",
         )!!
         assertEquals(listOf(Tab.MAP, Tab.SCHEDULE), bundle.display.tabs)
         assertEquals(Tab.MAP, bundle.display.defaultTab)
+        assertEquals(listOf(EventTab.HOME, EventTab.MAP, EventTab.SCHEDULE), bundle.display.layout.tabs)
         assertNotNull(ApiMapper.parseBundle("""{"event":{"id":1},"layout":"nonsense","live_activity":[1]}"""))
     }
 }

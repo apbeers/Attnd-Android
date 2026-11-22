@@ -71,6 +71,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.app.NotificationManagerCompat
 import com.arcu.attnd.data.log.DiagnosticsState
 import com.arcu.attnd.data.log.PermissionLog
+import com.arcu.attnd.domain.StatusBadge
 import com.arcu.attnd.domain.Event
 import com.arcu.attnd.domain.SupportInfo
 import com.arcu.attnd.push.PushNotifications
@@ -100,11 +101,16 @@ fun OptionsScreen(
     onStartDebugMode: () -> Unit = {},
     onStopDebugMode: () -> Unit = {},
     logs: LogViewerSource? = null,
+    /** Every status pill (dismissed or not) and the last refresh's time, for the Status section. */
+    statusBadges: List<StatusBadge> = emptyList(),
+    lastUpdated: String? = null,
+    /** Whether Attnd asked for a permission before, and recording that it asks now (Permissions section). */
+    permissionAsked: (String) -> Boolean = { false },
+    onPermissionAsked: (String) -> Unit = {},
 ) {
     val context = LocalContext.current
     val eventName = event.name
     var confirmLeave by remember { mutableStateOf(false) }
-    var permissionDenied by remember { mutableStateOf(false) }
     var showLogs by rememberSaveable { mutableStateOf(false) }
     if (showLogs && logs != null) {
         LogViewerScreen(logs, title = if (diagnostics.debugMode) "Logs" else "Recent logs", onBack = { showLogs = false })
@@ -112,15 +118,6 @@ fun OptionsScreen(
     }
     BackHandler(onBack = onBack)
 
-    val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        PermissionLog.notifications("options", granted)
-        permissionDenied = !granted
-        if (granted) onNotificationsChange(true)
-    }
-    val locationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
-        PermissionLog.location("options", result)
-        if (result.values.any { it }) onShowUserLocationChange(true)
-    }
     var followDenied by remember { mutableStateOf(false) }
     val followPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         PermissionLog.notifications("follow_live", granted)
@@ -131,9 +128,6 @@ fun OptionsScreen(
     // The user can turn Live Updates (promoted notifications) off for the app.
     val promotedOff = !NotificationManagerCompat.from(context).canPostPromotedNotifications()
 
-    // The switch reflects both the preference and the system permission (which can be revoked).
-    val pushOn = notificationsEnabled && PushNotifications.hasPermission(context)
-    val locationOn = showUserLocation && hasLocationPermission(context)
 
     Surface(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
@@ -153,47 +147,16 @@ fun OptionsScreen(
             ) {
                 if (supportInfo.isTestBuild) TestBuildWarning(supportInfo.serverHost)
                 EventInfoCard(event)
-                ListItem(
-                    supportingContent = {
-                        Text(
-                            if (permissionDenied) "Notifications are blocked. Allow them in system settings."
-                            else "Announcements from the organizers"
-                        )
-                    },
-                    trailingContent = {
-                        Switch(
-                            checked = pushOn,
-                            onCheckedChange = { checked ->
-                                when {
-                                    !checked -> onNotificationsChange(false)
-                                    PushNotifications.hasPermission(context) -> onNotificationsChange(true)
-                                    else -> notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-                                }
-                            },
-                        )
-                    },
-                ) {
-                    Text("Push notifications")
-                }
-                ListItem(
-                    supportingContent = { Text("Your position on the event map") },
-                    trailingContent = {
-                        Switch(
-                            checked = locationOn,
-                            onCheckedChange = { checked ->
-                                when {
-                                    !checked -> onShowUserLocationChange(false)
-                                    hasLocationPermission(context) -> onShowUserLocationChange(true)
-                                    else -> locationPermission.launch(
-                                        arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
-                                    )
-                                }
-                            },
-                        )
-                    },
-                ) {
-                    Text("Show my location")
-                }
+                StatusSection(statusBadges, lastUpdated)
+                PermissionsSection(
+                    showUserLocation = showUserLocation,
+                    onShowUserLocationChange = onShowUserLocationChange,
+                    notificationsEnabled = notificationsEnabled,
+                    onNotificationsChange = onNotificationsChange,
+                    asked = permissionAsked,
+                    onAsked = onPermissionAsked,
+                )
+                HorizontalDivider(Modifier.padding(vertical = 8.dp))
                 ListItem(
                     supportingContent = {
                         Column {
@@ -220,7 +183,10 @@ fun OptionsScreen(
                                 when {
                                     !checked -> onFollowLiveChange(false)
                                     PushNotifications.hasPermission(context) -> onFollowLiveChange(true)
-                                    else -> followPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                    else -> {
+                                        onPermissionAsked(Manifest.permission.POST_NOTIFICATIONS)
+                                        followPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                    }
                                 }
                             },
                         )

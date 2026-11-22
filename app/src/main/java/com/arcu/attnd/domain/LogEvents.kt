@@ -95,6 +95,7 @@ object LogEvent {
 
     // search
     const val SEARCH_QUERY = "search.query"
+    const val SEARCH_OPEN = "search.open"
 
     // storage
     const val BUNDLE_SAVED = "storage.bundle.saved"
@@ -107,6 +108,7 @@ object LogEvent {
     const val SCREEN = "ui.screen"
     const val UI_ACTION = "ui.action"
     const val UI_ERROR_SHOWN = "ui.error.shown"
+    const val UI_BANNER = "ui.banner"
 
     // Logged under the ui category (attnd-web LOG_EVENTS.md).
     const val SHARE_CREATED = "share.created"
@@ -145,9 +147,9 @@ object LogEvent {
         MAP_FIRST_RENDER,
         PLANNER_REQUEST, PLANNER_EXTRACT, PLANNER_RUN, PLANNER_SWAP, PLANNER_AVAILABILITY, PLAN_EDIT, PLAN_UNDO,
         ASSISTANT_REQUEST, MODEL_STATUS, MODEL_DOWNLOAD, ASSISTANT_ANSWER, ASSISTANT_ERROR, ASSISTANT_INDEX, ASSISTANT_TURN, ASSISTANT_BLOCK, ASSISTANT_ACTION,
-        SEARCH_QUERY,
+        SEARCH_QUERY, SEARCH_OPEN,
         BUNDLE_SAVED, BUNDLE_RESTORED, BUNDLE_FAILED, IMAGES_PREFETCH, PREFS_MIGRATED,
-        SCREEN, UI_ACTION, UI_ERROR_SHOWN, SHARE_CREATED, SHARE_OPENED,
+        SCREEN, UI_ACTION, UI_ERROR_SHOWN, UI_BANNER, SHARE_CREATED, SHARE_OPENED,
         SIGNPOST, PERF_METRIC,
         ATTEST_STARTED, ATTEST_FINISHED, ATTEST_FAILED, TOKEN_EXPIRED,
         DEBUG_MODE, UPLOAD, UPLOAD_FAILED, DROPPED, EXPORT, REPORT_SENT,

@@ -5,10 +5,9 @@ import com.arcu.attnd.domain.AssistantAction
 import com.arcu.attnd.domain.AssistantBlock
 import com.arcu.attnd.domain.AssistantRouter
 import com.arcu.attnd.domain.DisplayConfig
-import com.arcu.attnd.domain.EventTabModel
+import com.arcu.attnd.domain.EventTab
 import com.arcu.attnd.domain.MealKind
 import com.arcu.attnd.domain.MealSlot
-import com.arcu.attnd.domain.NavItem
 import com.arcu.attnd.domain.PlanDiff
 import com.arcu.attnd.domain.PlanOp
 import com.arcu.attnd.domain.PlanProposals
@@ -21,6 +20,7 @@ import com.arcu.attnd.domain.ProposalReply
 import com.arcu.attnd.domain.ProposalText
 import com.arcu.attnd.domain.RowMark
 import com.arcu.attnd.domain.Tab
+import com.arcu.attnd.domain.TabLayout
 import com.arcu.attnd.unit.AssistantFixture.ctx
 import com.arcu.attnd.unit.AssistantFixture.plan
 import com.arcu.attnd.unit.PlannerFixture.bundle
@@ -32,7 +32,7 @@ import org.junit.Test
 import java.time.LocalDate
 
 /**
- * Plan tab spec (shared with iOS, same cases): the tab model, proposals previewed in place (rows,
+ * Plan tab spec (shared with iOS, same cases): the tabs (display → TabLayout), proposals previewed in place (rows,
  * pill), and the typed replies to a proposal. Fixture plan (Sat Nov 14):
  * 10:00 111 · 11:00 109 · 12:00 lunch · 13:00 102 · 15:00 103 · 17:00 105 · 18:15 113 · 19:00 101 · 21:00 104.
  */
@@ -40,80 +40,54 @@ class PlanTabTest {
 
     private val sat = LocalDate.of(2026, 11, 14)
 
-    private fun tabs(vararg keys: String, default: String? = null, legacy: Boolean = false) = EventTabModel.of(
-        DisplayConfig.resolve(
-            rawTabs = keys.toList(), rawDefaultTab = default, rawLocationsStyle = null, rawScheduleStyle = null,
-            mapClustering = null, mapFitAll = null, showLocationImages = null, enableSearch = null, groupByCategory = null,
-            rawSecondaryPane = null, accentColor = null, logoUrl = null, hasFlyer = true,
-        ),
-        legacy,
+    private fun display(vararg keys: String, default: String? = null, flyer: Boolean = true) = DisplayConfig.resolve(
+        rawTabs = keys.toList().takeIf { it.isNotEmpty() }, rawDefaultTab = default, rawLocationsStyle = null, rawScheduleStyle = null,
+        mapClustering = null, mapFitAll = null, showLocationImages = null, enableSearch = null, groupByCategory = null,
+        rawSecondaryPane = null, accentColor = null, logoUrl = null, hasFlyer = flyer,
     )
 
-    // ── Tab model ───────────────────────────────────────────────────────────
+    // ── Tabs: the display wired to iOS's TabLayout (phase 4; no My plan or Explore tab) ──
 
     @Test
-    fun tabs_planFirstThenExploreThenFlyerAndUpdates() {
-        val model = tabs("map", "schedule", "flyer", "notifications")
-        assertEquals(listOf(NavItem.PLAN, NavItem.EXPLORE, NavItem.FLYER, NavItem.UPDATES), model.items)
-        assertEquals(listOf(Tab.MAP, Tab.SCHEDULE), model.exploreViews)
-        assertEquals(NavItem.PLAN, model.initialItem)
-        assertEquals(Tab.MAP, model.initialExploreView)
-        assertTrue(model.hasSwitch)
+    fun tabs_homeFirstThenTheEventsOwnTabs() {
+        val d = display("map", "schedule", "flyer", "notifications", default = "schedule")
+        assertEquals(listOf(EventTab.HOME, EventTab.MAP, EventTab.SCHEDULE, EventTab.FLYER, EventTab.NOTIFICATIONS), d.layout.tabs)
+        assertEquals(EventTab.HOME, d.layout.defaultTab)
+        assertEquals(listOf(Tab.MAP, Tab.SCHEDULE, Tab.FLYER, Tab.NOTIFICATIONS), d.tabs)
+        assertEquals("Home's header holds the gear", EventTab.HOME, d.layout.optionsTab)
     }
 
     @Test
-    fun tabs_oneViewHasNoSwitch_noneHasNoExplore() {
-        val one = tabs("schedule")
-        assertEquals(listOf(NavItem.PLAN, NavItem.EXPLORE), one.items)
-        assertEquals(listOf(Tab.SCHEDULE), one.exploreViews)
-        assertEquals(Tab.SCHEDULE, one.initialExploreView)
-        assertFalse(one.hasSwitch)
-
-        // Nothing listed: the plan only (resolve() itself falls back to the default tabs).
-        val none = EventTabModel.of(emptyList(), null)
-        assertEquals(listOf(NavItem.PLAN), none.items)
-        assertNull(none.initialExploreView)
-        assertEquals(listOf(NavItem.PLAN, NavItem.EXPLORE, NavItem.FLYER, NavItem.UPDATES), tabs().items)
-        assertEquals(listOf(Tab.MAP, Tab.SCHEDULE, Tab.LOCATIONS), tabs().exploreViews)
-        assertEquals(listOf(NavItem.PLAN, NavItem.UPDATES, NavItem.FLYER), tabs("notifications", "flyer").items)
+    fun tabs_rawHomeAndTheFiveTabCut() {
+        // `home` as the server sends it with X-Attnd-Sections; six listed → Flyer cut, never Schedule listed last.
+        val d = display("home", "map", "locations", "flyer", "notifications", "schedule", default = "home")
+        assertEquals(listOf(EventTab.HOME, EventTab.MAP, EventTab.LOCATIONS, EventTab.NOTIFICATIONS, EventTab.SCHEDULE), d.layout.tabs)
+        assertFalse("a cut tab isn't visible", Tab.FLYER in d.tabs)
+        // Defaults with a flyer: Home + five → Flyer goes.
+        assertEquals(listOf(Tab.MAP, Tab.LOCATIONS, Tab.SCHEDULE, Tab.NOTIFICATIONS), display().tabs)
     }
 
     @Test
-    fun tabs_switchOrderIsFixed_defaultView() {
-        val model = tabs("locations", "notifications", "schedule", "map", default = "schedule")
-        assertEquals(listOf(Tab.MAP, Tab.SCHEDULE, Tab.LOCATIONS), model.exploreViews)
-        assertEquals(Tab.SCHEDULE, model.initialExploreView)
-        // My plan stays the default whatever default_tab says.
-        assertEquals(NavItem.PLAN, model.initialItem)
-        // default_tab not an Explore view → the first Explore view display.tabs lists.
-        assertEquals(Tab.LOCATIONS, tabs("locations", "schedule", "notifications", default = "notifications").initialExploreView)
+    fun tabs_screenshotModeKeepsTodaysTabs() {
+        val d = display("home", "map", "locations", "schedule", "notifications", default = "schedule")
+        val legacy = d.tabLayout(screenshotMode = true)
+        assertEquals(listOf(EventTab.MAP, EventTab.LOCATIONS, EventTab.SCHEDULE, EventTab.NOTIFICATIONS), legacy.tabs)
+        assertEquals(EventTab.SCHEDULE, legacy.defaultTab)
+        assertEquals("no Home: the gear is on Updates", EventTab.NOTIFICATIONS, legacy.optionsTab)
+        assertEquals(EventTab.HOME, d.tabLayout(screenshotMode = false).defaultTab)
     }
 
     @Test
-    fun tabs_legacyKeepsTodaysTabs() {
-        val model = tabs("map", "locations", "schedule", "notifications", default = "schedule", legacy = true)
-        assertEquals(listOf(NavItem.MAP, NavItem.LOCATIONS, NavItem.SCHEDULE, NavItem.UPDATES), model.items)
-        assertEquals(NavItem.SCHEDULE, model.initialItem)
-        assertEquals(NavItem.LOCATIONS, model.itemFor(Tab.LOCATIONS))
-        assertEquals(Tab.LOCATIONS, model.contentTab(NavItem.LOCATIONS, null))
-    }
-
-    @Test
-    fun tabs_targetsAndUsageNames() {
-        val model = tabs("map", "schedule", "notifications")
-        assertEquals(NavItem.EXPLORE, model.itemFor(Tab.MAP))
-        assertEquals(NavItem.EXPLORE, model.itemFor(Tab.SCHEDULE))
-        assertNull(model.itemFor(Tab.LOCATIONS))
-        assertNull(model.itemFor(Tab.FLYER))
-        assertEquals(NavItem.UPDATES, model.itemFor(Tab.NOTIFICATIONS))
-        assertEquals(Tab.SCHEDULE, model.contentTab(NavItem.EXPLORE, Tab.SCHEDULE))
-        assertEquals(Tab.MAP, model.contentTab(NavItem.EXPLORE, Tab.LOCATIONS))
-        assertNull(model.contentTab(NavItem.PLAN, Tab.MAP))
-        assertEquals("schedule", EventTabModel.usageName(NavItem.EXPLORE, Tab.SCHEDULE))
-        assertEquals("locations", EventTabModel.usageName(NavItem.EXPLORE, Tab.LOCATIONS))
-        assertEquals("notifications", EventTabModel.usageName(NavItem.UPDATES, null))
-        assertNull(EventTabModel.usageName(NavItem.PLAN, null))
-        assertEquals("Places", EventTabModel.viewLabel(Tab.LOCATIONS))
+    fun tabs_selectionAndUsageNames() {
+        val layout = display("map", "schedule").layout
+        assertEquals(EventTab.SCHEDULE, layout.selected(EventTab.SCHEDULE))
+        assertEquals("a hidden tab falls back to the default", EventTab.HOME, layout.selected(EventTab.LOCATIONS))
+        assertEquals(EventTab.HOME, layout.selected(null))
+        assertTrue(Tab.MAP in layout)
+        assertNull(EventTab.HOME.tab)
+        assertEquals(Tab.NOTIFICATIONS, EventTab.NOTIFICATIONS.tab)
+        assertEquals("home", TabLayout.usageName(EventTab.HOME))
+        assertEquals("notifications", TabLayout.usageName(EventTab.NOTIFICATIONS))
     }
 
     // ── Proposals ───────────────────────────────────────────────────────────

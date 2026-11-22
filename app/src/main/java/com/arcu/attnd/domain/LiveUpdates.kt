@@ -94,12 +94,12 @@ object LiveUpdates {
     }
 
     /**
-     * The offline notice text: "Offline · last updated 2:14 PM" (the time of the last successful
-     * refresh in the device's [zone], with the date when it wasn't today) for a connectivity failure,
-     * otherwise [error] followed by "Last updated …". Without a successful refresh it is just [error].
+     * The refresh pill's text (iOS `LastUpdatedText.badgeTitle`): "Offline · Updated 2:14 PM ·
+     * everything still works" for a connectivity failure, "Can't update · Updated 2:14 PM" for a server
+     * error (the last successful refresh in the device's [zone], with the date when it wasn't today);
+     * just "Offline" / "Can't update" without a successful refresh.
      */
     fun offlineNoticeText(
-        error: String,
         offline: Boolean,
         lastSyncedAt: Long?,
         now: Long,
@@ -107,12 +107,14 @@ object LiveUpdates {
         is24Hour: Boolean,
         locale: Locale = Locale.getDefault(),
     ): String {
-        lastSyncedAt ?: return error
+        val state = if (offline) "Offline" else "Can't update"
+        lastSyncedAt ?: return state
         val synced = Instant.ofEpochMilli(lastSyncedAt).atZone(zone)
         val sameDay = synced.toLocalDate() == Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
         val time = if (is24Hour) "H:mm" else "h:mm a"
         val pattern = if (sameDay) time else "MMM d, $time"
         val text = DateTimeFormatter.ofPattern(pattern, locale).format(synced)
-        return if (offline) "Offline · last updated $text" else "$error Last updated $text."
+        // Reassuring (iOS batch 7): the saved copy keeps everything working.
+        return "$state · Updated $text" + if (offline) " · everything still works" else ""
     }
 }

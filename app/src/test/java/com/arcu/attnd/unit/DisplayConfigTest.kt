@@ -22,7 +22,8 @@ class DisplayConfigTest {
     @Test
     fun defaultTabs_addFlyerOnlyWhenEventHasOne() {
         assertEquals(listOf(Tab.MAP, Tab.LOCATIONS, Tab.SCHEDULE, Tab.NOTIFICATIONS), resolve().tabs)
-        assertEquals(listOf(Tab.MAP, Tab.LOCATIONS, Tab.SCHEDULE, Tab.FLYER, Tab.NOTIFICATIONS), resolve(hasFlyer = true).tabs)
+        // Home + five: the flyer is cut first (iOS TabLayout.withHome).
+        assertEquals(listOf(Tab.MAP, Tab.LOCATIONS, Tab.SCHEDULE, Tab.NOTIFICATIONS), resolve(hasFlyer = true).tabs)
     }
 
     @Test
@@ -40,8 +41,10 @@ class DisplayConfigTest {
     fun tabs_atMostFiveInListedOrder() {
         val all = listOf("notifications", "flyer", "schedule", "locations", "map")
         val config = resolve(tabs = all, hasFlyer = true)
-        assertEquals(DisplayConfig.MAX_TABS, config.tabs.size)
-        assertEquals(listOf(Tab.NOTIFICATIONS, Tab.FLYER, Tab.SCHEDULE, Tab.LOCATIONS, Tab.MAP), config.tabs)
+        // Home takes one of the five: Flyer is cut first, the rest keep the listed order.
+        assertEquals(DisplayConfig.MAX_TABS, config.layout.tabs.size)
+        assertEquals(listOf(Tab.NOTIFICATIONS, Tab.SCHEDULE, Tab.LOCATIONS, Tab.MAP), config.tabs)
+        assertEquals(listOf(Tab.NOTIFICATIONS, Tab.FLYER, Tab.SCHEDULE, Tab.LOCATIONS, Tab.MAP), config.legacyLayout.organizerTabs)
     }
 
     @Test

@@ -41,6 +41,10 @@ enum class SecondaryPane(val key: String) {
 }
 
 data class DisplayConfig(
+    /**
+     * The organizer tabs the navigation shows ([layout]'s, without Home): what "is this tab visible"
+     * checks read. Listed, at most five with Home, Flyer cut first ([TabLayout.withHome]).
+     */
     val tabs: List<Tab>,
     val defaultTab: Tab,
     val locationsStyle: LocationsStyle,
@@ -54,7 +58,14 @@ data class DisplayConfig(
     /** `#RRGGBB`, or null for the default brand colour. */
     val accentColor: String?,
     val logoUrl: String?,
+    /** The navigation (iOS `TabLayout`): Home first and the default, then the event's tabs. */
+    val layout: TabLayout = TabLayout.resolve(null, null, hasFlyer = false),
+    /** Screenshot mode's navigation: the listed tabs without Home (store screenshots keep today's tabs). */
+    val legacyLayout: TabLayout = TabLayout.resolve(null, null, hasFlyer = false, screenshotMode = true),
 ) {
+    /** The navigation for the mode. */
+    fun tabLayout(screenshotMode: Boolean): TabLayout = if (screenshotMode) legacyLayout else layout
+
     companion object {
         val DEFAULT_LOCATIONS_STYLE = LocationsStyle.LIST
         val DEFAULT_SCHEDULE_STYLE = ScheduleStyle.BY_DAY
@@ -96,14 +107,18 @@ data class DisplayConfig(
             logoUrl: String?,
             hasFlyer: Boolean,
         ): DisplayConfig {
-            val parsedTabs = rawTabs?.mapNotNull { Tab.fromKey(it) }?.distinct().orEmpty()
-            // The navigation bar holds only event tabs, never a "more" item: at most MAX_TABS, in the listed order.
-            val tabs = parsedTabs.ifEmpty { defaultTabs(hasFlyer) }.take(MAX_TABS)
+            // `display.tabs` as sent, `home` included (unknown keys dropped; none = the defaults).
+            val listed = rawTabs?.mapNotNull { EventTab.fromKey(it) }?.distinct()?.takeIf { it.isNotEmpty() }
+            val requestedEventTab = EventTab.fromKey(rawDefaultTab)
+            val layout = TabLayout.resolve(listed, requestedEventTab, hasFlyer)
+            val legacyLayout = TabLayout.resolve(listed, requestedEventTab, hasFlyer, screenshotMode = true)
+            // The navigation bar holds only event tabs, never a "more" item: at most MAX_TABS with Home.
+            val tabs = layout.organizerTabs
             val requestedDefault = Tab.fromKey(rawDefaultTab)
             val defaultTab = when {
                 requestedDefault != null && requestedDefault in tabs -> requestedDefault
                 Tab.MAP in tabs -> Tab.MAP
-                else -> tabs.first()
+                else -> tabs.firstOrNull() ?: Tab.MAP
             }
             return DisplayConfig(
                 tabs = tabs,
@@ -118,6 +133,8 @@ data class DisplayConfig(
                 secondaryPane = SecondaryPane.fromKey(rawSecondaryPane) ?: DEFAULT_SECONDARY_PANE,
                 accentColor = accentColor?.takeIf { parseHexColor(it) != null },
                 logoUrl = logoUrl?.takeIf { it.isNotBlank() },
+                layout = layout,
+                legacyLayout = legacyLayout,
             )
         }
 

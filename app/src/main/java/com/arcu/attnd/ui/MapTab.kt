@@ -45,6 +45,7 @@ fun MapTab(state: AppUiState, viewModel: EventViewModel, onSearch: (() -> Unit)?
             recenterRequest = state.recenterRequest,
             onLocationClick = viewModel::focusLocation,
             onSearch = onSearch,
+            searchIsPlan = state.planButton,
             focusLocationId = state.mapFocusLocationId,
             onFocusConsumed = viewModel::consumeMapFocus,
         )

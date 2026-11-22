@@ -11,6 +11,7 @@ import com.arcu.attnd.domain.PerfMetric
 import com.arcu.attnd.live.LiveNotifications
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
+import com.arcu.attnd.domain.InAppBanner
 import kotlinx.coroutines.launch
 
 /**
@@ -93,7 +94,11 @@ class AttndMessagingService : FirebaseMessagingService() {
                     }
                 } else if (title != null || body != null) {
                     val id = serverId ?: (System.currentTimeMillis() % Int.MAX_VALUE).toInt()
-                    PushNotifications.show(this, title ?: "Event update", body.orEmpty(), id, serverId)
+                    // While the app is open the update shows as its own top banner (iOS InAppBannerOverlay);
+                    // the notification is posted silently so the shade still keeps it.
+                    val inApp = foreground && isForCurrentEvent
+                    PushNotifications.show(this, title ?: "Event update", body.orEmpty(), id, serverId, silent = inApp)
+                    if (inApp) graph.inAppBanners.tryEmit(InAppBanner(serverId, title.orEmpty(), body.orEmpty()))
                     AppLog.info(LogCategory.PUSH, LogEvent.PUSH_HANDLED, "Notification shown", mapOf("type" to type, "action" to "shown", "ms" to SystemClock.elapsedRealtime() - received))
                 }
                 if (isForCurrentEvent) graph.appScope.launch { repository.refresh(silent = true) }

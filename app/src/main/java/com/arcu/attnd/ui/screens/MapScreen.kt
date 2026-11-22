@@ -27,6 +27,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Search
@@ -162,6 +163,8 @@ fun EventMap(
     contentPadding: PaddingValues = PaddingValues(0.dp),
     /** Set: the app-wide search FAB is the floating toolbar's FAB (the toolbar + FAB pattern). */
     onSearch: (() -> Unit)? = null,
+    /** The floating button opens My plan (Gemini Nano on the phone) instead of the search sheet. */
+    searchIsPlan: Boolean = false,
     /** One-shot: select this location ("Show on map"). */
     focusLocationId: Int? = null,
     onFocusConsumed: () -> Unit = {},
@@ -453,7 +456,8 @@ fun EventMap(
                         containerColor = FloatingActionButtonDefaults.containerColor,
                         contentColor = contentColorFor(FloatingActionButtonDefaults.containerColor),
                     ) {
-                        Icon(Icons.Filled.Search, contentDescription = "Search")
+                        if (searchIsPlan) Icon(Icons.Filled.AutoAwesome, contentDescription = "My plan")
+                        else Icon(Icons.Filled.Search, contentDescription = "Search")
                     }
                 },
                 modifier = toolbarModifier,

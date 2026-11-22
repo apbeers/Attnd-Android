@@ -76,9 +76,10 @@ object PushNotifications {
     /**
      * Shows an organizer notification. [notificationId] is the local id (unique per notification);
      * [serverNotificationId] is the API's id when the push carried one, passed on for usage counts.
+     * [silent]: the app is open and shows its own banner, so no sound or heads-up (the shade keeps it).
      */
     @SuppressLint("MissingPermission") // checked by hasPermission()
-    fun show(context: Context, title: String, body: String, notificationId: Int, serverNotificationId: Int? = null) {
+    fun show(context: Context, title: String, body: String, notificationId: Int, serverNotificationId: Int? = null, silent: Boolean = false) {
         if (!hasPermission(context)) {
             AppLog.info(LogCategory.PUSH, LogEvent.PUSH_DROPPED, "Not shown: no notification permission", mapOf("type" to "notification", "reason" to "no_permission"))
             return
@@ -90,7 +91,8 @@ object PushNotifications {
             .setContentTitle(title)
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setPriority(if (silent) NotificationCompat.PRIORITY_DEFAULT else NotificationCompat.PRIORITY_HIGH)
+            .setSilent(silent)
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
             .build()

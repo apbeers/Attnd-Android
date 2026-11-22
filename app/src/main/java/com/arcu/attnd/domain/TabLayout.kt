@@ -1,8 +1,8 @@
 package com.arcu.attnd.domain
 
 /**
- * The event's tabs as iOS draws them (a 1:1 port of iOS `TabLayout.swift`; pure, not wired into the
- * navigation yet: phase 4 replaces My plan + Explore with it).
+ * The event's tabs as iOS draws them (a 1:1 port of iOS `TabLayout.swift`): the navigation bar / rail
+ * shows [TabLayout.tabs] (resolved with the bundle's display, [DisplayConfig.layout]).
  *
  * - The tabs `display.tabs` lists, in its order (Map, Places, Schedule, Flyer, Updates; Flyer only when
  *   listed or, by default, when the event has a flyer), at most [DisplayConfig.MAX_TABS], so never a
@@ -20,6 +20,17 @@ enum class EventTab(val key: String, val title: String, val icon: String) {
     SCHEDULE("schedule", "Schedule", "CalendarMonth"),
     FLYER("flyer", "Flyer", "Description"),
     NOTIFICATIONS("notifications", "Updates", "Notifications");
+
+    /** The organizer tab this shows (null for Home). */
+    val tab: Tab?
+        get() = when (this) {
+            HOME -> null
+            MAP -> Tab.MAP
+            LOCATIONS -> Tab.LOCATIONS
+            SCHEDULE -> Tab.SCHEDULE
+            FLYER -> Tab.FLYER
+            NOTIFICATIONS -> Tab.NOTIFICATIONS
+        }
 
     companion object {
         fun fromKey(key: String?): EventTab? = entries.firstOrNull { it.key == key?.trim()?.lowercase() }
@@ -40,6 +51,14 @@ data class TabLayout(
     val defaultTab: EventTab,
 ) {
     operator fun contains(tab: EventTab): Boolean = tab in tabs
+
+    operator fun contains(tab: Tab): Boolean = EventTab.of(tab) in tabs
+
+    /** The organizer tabs shown (everything but Home), in order. */
+    val organizerTabs: List<Tab> get() = tabs.mapNotNull { it.tab }
+
+    /** [requested] when this layout shows it, else the default tab. */
+    fun selected(requested: EventTab?): EventTab = requested?.takeIf { it in tabs } ?: defaultTab
 
     /**
      * Home is always on, first and the default tab, whatever the bundle lists, so a cached or older
@@ -97,6 +116,9 @@ data class TabLayout(
             if (!tabsIn.isNullOrEmpty()) return TabLayout(tabsIn.distinct(), defaultTab).withHome()
             return layout.withHome()
         }
+
+        /** API-005 `tab_view` detail for a visible tab (the server accepts `home` too). */
+        fun usageName(tab: EventTab): String = tab.key
 
         /** The navigation item's (and the tab's) title. */
         fun title(tab: EventTab, screenshotMode: Boolean): String =

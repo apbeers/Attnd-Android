@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -43,7 +44,7 @@ import com.arcu.attnd.ui.components.EmptyState
 import com.arcu.attnd.ui.components.EventInfoCard
 import com.arcu.attnd.ui.components.RemoteImage
 
-/** What the assistant screen's own back stack holds above the conversation: an item's detail. */
+/** What the search sheet's back stack holds: an item's detail. */
 data class SearchEntry(val kind: SearchKind, val id: Int) {
     fun encode(): String = "${kind.name}:$id"
 
@@ -59,23 +60,25 @@ data class SearchEntry(val kind: SearchKind, val id: Int) {
 }
 
 /**
- * The search entry point: a Material 3 Expressive floating action button with a search icon. It
- * opens the event assistant ([com.arcu.attnd.ui.assistant.AssistantScreen]) with the field focused.
+ * The floating button on every tab (iOS `floatingActionButton()`): a search icon that opens the search
+ * sheet ([SearchSheet]) with the field focused, or with [plan] (Gemini Nano available, downloadable or
+ * downloading) the My plan button.
  */
 @Composable
-fun SearchFab(onClick: () -> Unit, modifier: Modifier = Modifier) {
+fun SearchFab(onClick: () -> Unit, modifier: Modifier = Modifier, plan: Boolean = false) {
     FloatingActionButton(onClick = onClick, modifier = modifier) {
-        Icon(Icons.Filled.Search, contentDescription = "Search")
+        if (plan) Icon(Icons.Filled.AutoAwesome, contentDescription = "My plan")
+        else Icon(Icons.Filled.Search, contentDescription = "Search")
     }
 }
 
 /**
- * The event's top app bar on every tab: the event logo (`display.logo_url`) and name, and the
- * Options action (Options never goes into the navigation bar). A wavy progress line shows a
- * pull-to-refresh in progress.
+ * The event's top app bar on the organizer tabs (Home has none): the event logo (`display.logo_url`)
+ * and name, and the Options gear only on the Options tab's root ([onOptions] null elsewhere; iOS
+ * `optionsToolbarItem(for:)`). A wavy progress line shows a pull-to-refresh in progress.
  */
 @Composable
-fun EventTopBar(bundle: EventBundle, isRefreshing: Boolean, onOptions: () -> Unit) {
+fun EventTopBar(bundle: EventBundle, isRefreshing: Boolean, onOptions: (() -> Unit)?) {
     val logoUrl = bundle.display.logoUrl
     Column {
         TopAppBar(
@@ -95,7 +98,7 @@ fun EventTopBar(bundle: EventBundle, isRefreshing: Boolean, onOptions: () -> Uni
                 }
             },
             actions = {
-                IconButton(onClick = onOptions) { Icon(Icons.Filled.Settings, contentDescription = "Options") }
+                if (onOptions != null) IconButton(onClick = onOptions) { Icon(Icons.Filled.Settings, contentDescription = "Options") }
             },
         )
         if (isRefreshing) LinearWavyProgressIndicator(Modifier.fillMaxWidth())
