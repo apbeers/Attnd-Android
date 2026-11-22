@@ -10,8 +10,10 @@ import com.arcu.attnd.domain.LogCategory
 import com.arcu.attnd.domain.LogEvent
 import com.arcu.attnd.domain.LogLevel
 import com.arcu.attnd.domain.MealBreak
+import com.arcu.attnd.domain.MealSlot
 import com.arcu.attnd.domain.PerfMetric
 import com.arcu.attnd.domain.Plan
+import com.arcu.attnd.domain.PlanConstraints
 import com.arcu.attnd.domain.PlanRequest
 import com.arcu.attnd.domain.PlannedItem
 import com.arcu.attnd.domain.Planner
@@ -45,6 +47,8 @@ class PlannerController(
     private val available: () -> Boolean,
     private val modelAvailable: () -> Boolean,
     private val countPerf: () -> Boolean,
+    /** My schedule's timed food places that cover a lunch / dinner break (`ScheduleController.mealsCovered`). */
+    private val mealsCovered: (EventBundle) -> Set<MealSlot> = { emptySet() },
 ) {
     private val _state = MutableStateFlow(PlannerProgress())
     val state: StateFlow<PlannerProgress> = _state.asStateFlow()
@@ -88,7 +92,8 @@ class PlannerController(
                     "liked_tags" to preferences.likedTags.size, "disliked_tags" to preferences.dislikedTags.size, "days" to preferences.days.size,
                 ),
             )
-            val plan = timedPlan { Planner(bundle, preferences, hearts).plan(now, request.trim()) }
+            val covered = PlanConstraints(mealsDone = mealsCovered(bundle))
+            val plan = timedPlan { Planner(bundle, preferences, hearts, covered).plan(now, request.trim()) }
             if (plan.isEmpty) {
                 _state.update { it.copy(error = "Nothing on the schedule fits that. Try another day or fewer limits.") }
                 return plan
@@ -112,7 +117,8 @@ class PlannerController(
         val bundle = bundle() ?: return
         val plan = plans.plan(bundle.event.id) ?: return
         val replanned = timedPlan {
-            Planner(bundle, plan.preferences, hearts.hearts(bundle.event.id), plan.constraints).replan(plan, Instant.now())
+            val constraints = plan.constraints.copy(mealsDone = plan.constraints.mealsDone + mealsCovered(bundle))
+            Planner(bundle, plan.preferences, hearts.hearts(bundle.event.id), constraints).replan(plan, Instant.now())
         }
         if (replanned.isEmpty) {
             _state.update { it.copy(error = "Nothing left on the schedule fits this plan.") }

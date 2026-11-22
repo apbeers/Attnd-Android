@@ -15,6 +15,7 @@ import com.arcu.attnd.data.OnDeviceAssistant
 import com.arcu.attnd.data.PermissionsState
 import com.arcu.attnd.data.PlanStore
 import com.arcu.attnd.data.ScheduleController
+import com.arcu.attnd.data.ScheduleStore
 import com.arcu.attnd.data.UsageReporter
 import com.arcu.attnd.data.UserLocationSource
 import com.arcu.attnd.data.WalkRouter
@@ -170,8 +171,11 @@ class AppGraph(context: Context, val prefs: DevicePrefs, logStore: LogStore, val
         images = images,
     )
 
-    /** Hearted schedule items and locations, per event, on the device (UI and the Live Update). */
-    val hearts = HeartStore(prefs)
+    /** My schedule per event, on the device (migrated once from hearts and the stored plan). */
+    val scheduleStore = ScheduleStore.of(prefs)
+
+    /** Hearted schedule items and locations, per event: My schedule's mirror (UI and the Live Update). */
+    val hearts = HeartStore(scheduleStore)
 
     /** The user's position and the compass heading, only while a screen showing distances / arrows is visible. */
     val userLocation = UserLocationSource(appContext)
@@ -186,8 +190,14 @@ class AppGraph(context: Context, val prefs: DevicePrefs, logStore: LogStore, val
     /** Plans, "Follow on Lock Screen", skipped items, urgent block and reminders, per event (on the device). */
     val plans = PlanStore(prefs)
 
-    /** The attendee's picks (likes for now, My schedule later), shared by the UI and the assistant. */
-    val schedule = ScheduleController(hearts, plans, usage)
+    /** My schedule: adds, removes, times, reminders (API-009 counts), shared by the UI, the assistant and the planner. */
+    val schedule = ScheduleController(
+        store = scheduleStore,
+        bundle = { repository.bundle.value },
+        plan = plans::plan,
+        updatePlan = plans::setPlan,
+        track = { eventId, name, detail -> usage.track(eventId, name, detail) },
+    )
 
     /** What the system allows the app (notifications, location), read on demand. */
     val permissions = PermissionsState(appContext)
@@ -196,6 +206,8 @@ class AppGraph(context: Context, val prefs: DevicePrefs, logStore: LogStore, val
     val liveUpdates = LiveUpdateController(appContext, repository, hearts, plans, appScope, perf)
 
     init {
+        // Every plan version (made, edited, undone) fills My schedule.
+        plans.onApply = { eventId, plan, previous -> schedule.applyPlan(eventId, plan, previous) }
         api.diagSession = { diagnostics.diagCode }
         api.callListener = { call -> perf.onApiCall(call, logSink.isOffline) }
         // Leaves made offline in an earlier run (also retried after every successful refresh).
@@ -204,6 +216,8 @@ class AppGraph(context: Context, val prefs: DevicePrefs, logStore: LogStore, val
         appScope.launch {
             repository.bundle.map { it?.event?.id }.distinctUntilChanged().collect { perf.onEvent(it) }
         }
+        // A new bundle gives My schedule's entries their fingerprints (organizer changes).
+        appScope.launch { repository.bundle.collect { bundle -> bundle?.let(schedule::onBundle) } }
         // The Live Update follows the bundle (joins, refreshes, content_updated pushes), hearts and plans.
         appScope.launch {
             combine(repository.bundle, hearts.version, plans.version) { bundle, _, _ -> bundle?.contentVersion to bundle?.event?.id }

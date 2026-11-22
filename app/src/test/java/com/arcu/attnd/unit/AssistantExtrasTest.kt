@@ -104,8 +104,8 @@ class AssistantExtrasTest {
         assertEquals(mapOf(101 to 1, 103 to 1, 110 to 1, 114 to 3), counts)
         val group = GroupPlan.plan(listOf(listOf(103, 114), listOf(114, 110)), hearts, bundle, musicAndBbq, now)
         assertEquals(listOf("10:00 111", "12:00 106", "13:00 102", "15:00 103", "16:15 110", "18:15 113", "18:45 dinner", "20:00 114"), clock(group))
-        assertEquals("Liked by 3 of you", group.items.single { it.itemId == 114 }.reason)
-        assertEquals("You liked this", group.items.single { it.itemId == 103 }.reason)
+        assertEquals("Picked by 3 of you", group.items.single { it.itemId == 114 }.reason)
+        assertEquals("In your schedule", group.items.single { it.itemId == 103 }.reason)
     }
 
     // ── Why not ─────────────────────────────────────────────────────────────

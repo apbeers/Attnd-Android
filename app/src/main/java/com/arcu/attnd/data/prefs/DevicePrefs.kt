@@ -111,6 +111,11 @@ class DevicePrefs(context: Context) {
         if (value.isEmpty()) remove("$KEY_HEARTS$eventId") else putString("$KEY_HEARTS$eventId", value)
     }
 
+    /** My schedule of an event ([com.arcu.attnd.domain.MySchedule] JSON); null = not migrated yet. Kept after leaving. */
+    fun mySchedule(eventId: Int): String? = prefs.getString("$KEY_MY_SCHEDULE$eventId", null)
+
+    fun setMySchedule(eventId: Int, value: String) = prefs.edit { putString("$KEY_MY_SCHEDULE$eventId", value) }
+
     /** When the Updates tab of an event was last seen (epoch ms); null = never. */
     fun updatesSeenAt(eventId: Int): Long? = prefs.getLong("$KEY_UPDATES_SEEN$eventId", 0L).takeIf { it > 0L }
 
@@ -232,6 +237,7 @@ class DevicePrefs(context: Context) {
         private const val KEY_REFERRER_CHECKED = "install_referrer_checked"
         private const val KEY_PENDING_LEAVES = "pending_leaves"
         private const val KEY_HEARTS = "hearts_"
+        private const val KEY_MY_SCHEDULE = "my_schedule_"
         private const val KEY_UPDATES_SEEN = "updates_seen_"
         private const val KEY_UPDATE_BANNER = "update_banner_dismissed_"
         private const val KEY_PLAN = "plan_"

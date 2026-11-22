@@ -278,6 +278,7 @@ class EventViewModel(
         available = { uiState.value.planner.available },
         modelAvailable = { model.isAvailable },
         countPerf = { !screenshotMode },
+        mealsCovered = schedule::mealsCovered,
     )
 
     val uiState: StateFlow<AppUiState> =
@@ -714,14 +715,12 @@ class EventViewModel(
     fun toggleHeart(kind: SearchKind, id: Int) {
         val eventId = repository.bundle.value?.event?.id ?: return
         val hearted = !schedule.isLiked(eventId, kind, id)
-        setLiked(kind, id, hearted)
         // Assistant spec §6, like clash: a liked item that overlaps the plan → "Add to plan instead of X?".
-        val bundle = repository.bundle.value ?: return
-        if (hearted && kind == SearchKind.SCHEDULE && !screenshotMode) {
-            schedule.likeClash(bundle, id)?.let { chip ->
-                local.update { it.copy(message = chip.label, messageChip = chip) }
-            }
-        }
+        // Checked before the add, which reconciles the plan with My schedule.
+        val bundle = repository.bundle.value
+        val clash = if (bundle != null && hearted && kind == SearchKind.SCHEDULE && !screenshotMode) schedule.likeClash(bundle, id) else null
+        if (!setLiked(kind, id, hearted)) return
+        clash?.let { chip -> local.update { it.copy(message = chip.label, messageChip = chip) } }
     }
 
     private fun setLiked(kind: SearchKind, id: Int, liked: Boolean): Boolean {

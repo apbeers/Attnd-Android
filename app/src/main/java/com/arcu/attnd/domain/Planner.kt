@@ -199,11 +199,12 @@ data class PlanConstraints(
  *    the clipped window end and overlaps no planned item. It suggests a food location (category or a
  *    tag containing "food" after [SearchText.normalize]) nearest the planned item that ended last
  *    before the break (ties: sort order, id), else the first food location by (sort order, id).
- * 11. **Reasons**, first that applies: "Liked by <n> of you" (group plans, rule 20, n ≥ 2); "You liked
- *    this" (hearted); "You added this" (pinned, rule 16); "Because you liked <name>" (S ≥ 0.2 from a
- *    hearted item); "Because you like <tag>" (first liked tag in the item's tag order); "Because you
- *    like <category, lower case>"; "At <location>, which you liked"; "Kid-friendly"; "Like <name>"
- *    (S ≥ 0.2 from a `similarTo` item); "Fits your day". The most similar item: highest S, then lower id.
+ * 11. **Reasons** (iOS My schedule wording), first that applies: "Picked by <n> of you" (group plans,
+ *    rule 20, n ≥ 2); "In your schedule" (hearted = in My schedule); "You added this" (pinned, rule 16);
+ *    "Because <name> is in your schedule" (S ≥ 0.2 from a hearted item); "Because you asked for <tag>"
+ *    (first liked tag in the item's tag order); "Because you asked for <category, lower case>"; "At
+ *    <location>, in your schedule"; "Kid-friendly"; "Similar to <name>" (S ≥ 0.2 from a `similarTo`
+ *    item); "Fits your day". The most similar item: highest S, then lower id.
  * 12. **Swap alternatives** (≤ 3): the item's "or instead" items first, then other candidates of the
  *    day (not planned, not left-out hearted) that fit between the previous and next planned items by
  *    the gap rule, by (score desc, start, id). Swapping ignores the pace cap. Entries that start before
@@ -371,17 +372,17 @@ class Planner(
 
     fun reason(item: ScheduleItem): String {
         val group = constraints.groupLikes[item.id] ?: 0
-        if (group >= 2) return "Liked by $group of you"
-        if (item.id in hearts.scheduleItems) return "You liked this"
+        if (group >= 2) return "Picked by $group of you"
+        if (item.id in hearts.scheduleItems) return MySchedule.IN_SCHEDULE_REASON
         if (item.id in constraints.pinned) return "You added this"
-        bestSimilar(item, heartedLiked)?.takeIf { it.second >= SIMILAR_REASON }?.let { return "Because you liked ${it.first.name}" }
-        item.tags.firstOrNull { it.lowercase() in likedTags }?.let { return "Because you like ${it.lowercase()}" }
+        bestSimilar(item, heartedLiked)?.takeIf { it.second >= SIMILAR_REASON }?.let { return "Because ${it.first.name} is in your schedule" }
+        item.tags.firstOrNull { it.lowercase() in likedTags }?.let { return "Because you asked for ${it.lowercase()}" }
         val category = category(item)
-        if (category != null && category.lowercase() in likedCategories) return "Because you like ${category.lowercase()}"
+        if (category != null && category.lowercase() in likedCategories) return "Because you asked for ${category.lowercase()}"
         val location = bundle.location(item.locationId)
-        if (location != null && location.id in hearts.locations) return "At ${location.name}, which you liked"
+        if (location != null && location.id in hearts.locations) return "At ${location.name}, in your schedule"
         if (kid(item) == 1) return "Kid-friendly"
-        bestSimilar(item, namedLiked)?.takeIf { it.second >= SIMILAR_REASON }?.let { return "Like ${it.first.name}" }
+        bestSimilar(item, namedLiked)?.takeIf { it.second >= SIMILAR_REASON }?.let { return "Similar to ${it.first.name}" }
         return "Fits your day"
     }
 

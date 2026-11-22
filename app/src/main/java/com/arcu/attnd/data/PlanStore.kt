@@ -29,6 +29,14 @@ class PlanStore(private val prefs: DevicePrefs) {
 
     private fun changed() = _version.update { it + 1 }
 
+    /**
+     * Called after every new plan version and every undo with (event, new plan, replaced plan), so My
+     * schedule follows the planner ([ScheduleController.applyPlan], wired in AppGraph). Not for
+     * [setPlan] (in-place changes such as check-offs or the reconcile after a My schedule change).
+     */
+    @Volatile
+    var onApply: ((eventId: Int, plan: Plan?, previous: Plan?) -> Unit)? = null
+
     @Synchronized
     fun plan(eventId: Int): Plan? = plans.getOrPut(eventId) { PlanCodec.decode(prefs.plan(eventId))?.takeIf { it.eventId == eventId } }
 
@@ -49,6 +57,7 @@ class PlanStore(private val prefs: DevicePrefs) {
         val history = if (previous != null && !previous.isEmpty) history(eventId).push(previous) else history(eventId)
         setHistory(eventId, history)
         setPlan(eventId, plan)
+        onApply?.invoke(eventId, plan, previous)
         return history.plans.size
     }
 
@@ -56,8 +65,10 @@ class PlanStore(private val prefs: DevicePrefs) {
     @Synchronized
     fun undoPlan(eventId: Int): Plan? {
         val (restored, rest) = history(eventId).pop() ?: return null
+        val previous = plan(eventId)
         setHistory(eventId, rest)
         setPlan(eventId, restored)
+        onApply?.invoke(eventId, restored, previous)
         return restored
     }
 
