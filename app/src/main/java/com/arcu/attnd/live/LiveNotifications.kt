@@ -82,9 +82,12 @@ object LiveNotifications {
         val eventId = bundle.event.id
         val focus = state.focus
         val urgent = state.urgent
+        val focusItem = focus?.itemId
+        val focusPlace = focus?.locationId?.takeIf { focus.isPlace }
         val tap = when {
             urgent != null -> open(context, eventId, OpenTarget.Notification(urgent.id))
-            focus != null -> open(context, eventId, OpenTarget.ScheduleItem(focus.id))
+            focusItem != null -> open(context, eventId, OpenTarget.ScheduleItem(focusItem))
+            focusPlace != null -> open(context, eventId, OpenTarget.Location(focusPlace))
             else -> open(context, eventId, OpenTarget.MyPlan)
         }
         // API-023: the theme's light primary, else accent_color, else the brand; urgent stays red.
@@ -95,7 +98,7 @@ object LiveNotifications {
             .setColor(if (isUrgent) context.getColor(R.color.live_urgent) else accent)
             .setContentTitle(state.title)
             .setContentText(state.text)
-            .setSubText(bundle.event.name)
+            .setSubText(state.subText)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setSilent(true)
@@ -120,10 +123,11 @@ object LiveNotifications {
             builder.setStyle(progressStyle(context, state, accent))
         }
 
-        state.next?.takeIf { state.mode != LiveMode.URGENT }?.let { next ->
-            builder.addAction(0, context.getString(R.string.live_action_skip), action(context, LiveUpdateReceiver.ACTION_SKIP, eventId, next.id))
+        // API-027 `live_activity.buttons`: Skip (Next's item) and Map (Next's, else Now's, place).
+        state.skipItemId?.let { next ->
+            builder.addAction(0, context.getString(R.string.live_action_skip), action(context, LiveUpdateReceiver.ACTION_SKIP, eventId, next))
         }
-        val place = bundle.location(focus?.locationId)?.takeIf { it.coordinate != null }
+        val place = bundle.location(state.mapLocationId)?.takeIf { it.coordinate != null }
         if (place != null && Tab.MAP in bundle.display.tabs) {
             builder.addAction(0, context.getString(R.string.live_action_map), open(context, eventId, OpenTarget.MapLocation(place.id)))
         }
@@ -146,12 +150,17 @@ object LiveNotifications {
     fun canPromote(context: Context): Boolean =
         NotificationManagerCompat.from(context).canPostPromotedNotifications()
 
+    /** Whether this app's Live Update is on screen now (kept up to date after a swipe or a reboot). */
+    fun isShowing(context: Context): Boolean =
+        context.getSystemService(NotificationManager::class.java)?.activeNotifications?.any { it.id == LIVE_NOTIFICATION_ID } == true
+
     fun cancelLive(context: Context) {
         NotificationManagerCompat.from(context).cancel(LIVE_NOTIFICATION_ID)
     }
 
     @SuppressLint("MissingPermission") // checked by PushNotifications.hasPermission()
-    fun showReminder(context: Context, eventId: Int, itemId: Int, title: String, text: String) {
+    /** A reminder; [key] = the item id, or −location id for a timed place ([target] opens it). */
+    fun showReminder(context: Context, eventId: Int, key: Int, target: OpenTarget, title: String, text: String) {
         if (!PushNotifications.hasPermission(context)) return
         val notification = NotificationCompat.Builder(context, CHANNEL_REMINDERS)
             .setSmallIcon(R.drawable.ic_stat_attnd)
@@ -162,10 +171,11 @@ object LiveNotifications {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true)
             .setTimeoutAfter(REMINDER_TIMEOUT_MS)
-            .setContentIntent(open(context, eventId, OpenTarget.ScheduleItem(itemId)))
+            .setContentIntent(open(context, eventId, target))
             .build()
-        NotificationManagerCompat.from(context).notify(REMINDER_ID_BASE + itemId, notification)
-        AppLog.info(LogCategory.LIVE, LogEvent.LIVE_REMINDER_SHOWN, "Reminder shown", mapOf("item_id" to itemId))
+        NotificationManagerCompat.from(context).notify(REMINDER_ID_BASE + key, notification)
+        // A timed place's reminder logs item_id 0 (LOG_EVENTS.md lists item_id only).
+        AppLog.info(LogCategory.LIVE, LogEvent.LIVE_REMINDER_SHOWN, "Reminder shown", mapOf("item_id" to key.coerceAtLeast(0)))
     }
 
     /**

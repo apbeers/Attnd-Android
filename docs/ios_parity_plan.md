@@ -630,7 +630,7 @@ Phase 0 (toolchain and dependencies, minSdk 36) runs elsewhere. When it lands, p
   `live/LiveNotifications.kt` (colour).
 - **Tests:** theme decoding / derivation cases from iOS.
 
-**Phase 8 — Live Update + reminders (M)**
+**Phase 8 — Live Update + reminders (M)** — ✅ done (Nov 22, 2026)
 - **Scope:**
   - port `LiveActivityPlanner` (follow day with timed places, Now / Next always filled with event fallbacks, free
     until, gates, empty hint, no user position, relative countdowns > 1 h);
@@ -640,6 +640,12 @@ Phase 0 (toolchain and dependencies, minSdk 36) runs elsewhere. When it lands, p
   - `ReminderPlanner` (if not done in 3b).
 - **Files:** A`domain/LiveFollow.kt`, A`live/LiveUpdateController.kt`, `LiveNotifications.kt`, `LiveUpdateReceiver.kt`.
 - **Tests:** `LiveFollowTest` re-synced to the iOS 26 cases.
+- **Built:** `domain/LiveFollow.kt` rewritten as iOS's `LiveActivityPlanner` (`followDay` with `FollowPlace`, `inputs`
+  for `live_activity.follows`, `decision`, `content`, `decorate` (buttons, stale text, empty hint, Leave now), `staleAt`,
+  `urgent`, `endedToday`) + `render` (the notification texts) + `nextWake` + per-entry `reminders`; the controller
+  follows My schedule (`ScheduleController`), posts at once in the foreground, uses no position for the content;
+  `PlanStore.follows` defaults on. `LiveFollowTest`: 24 tests (iOS cases that apply + Android's texts). Not drawn:
+  `stale_text` (see CLAUDE.md, divergences).
 
 **Phase 9 — Preview phones + jitter, API-026 (S–M)** — ✅ done (Nov 22, 2026)
 - **Scope:**

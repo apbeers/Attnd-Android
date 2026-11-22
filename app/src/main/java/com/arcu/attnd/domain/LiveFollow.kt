@@ -3,10 +3,11 @@ package com.arcu.attnd.domain
 import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
-/** Where the Live Update's items come from (shared spec §8): the plan, else hearts, else the event's own day. */
+/** What the Live Update follows on its day (shared spec §8): the plan, else My schedule ("hearts"), else the event's own day. */
 enum class LiveSource { PLAN, HEARTS, EVENT }
 
 /** API-011: an urgent organizer announcement shown front and centre for up to 12 h or until dismissed. */
@@ -15,253 +16,594 @@ data class UrgentBlock(val id: Int, val title: String, val body: String, val sen
         id != dismissedId && now.isBefore(sentAt.plus(LiveFollow.URGENT_FOR)) && !now.isBefore(sentAt.minus(LiveFollow.CLOCK_SKEW))
 }
 
+/** A place of My schedule at a time ("Dinner at Taco Row, 7:00 PM"; iOS `FollowPlace`). */
+data class FollowPlace(val locationId: Int, val name: String, val start: Instant, val end: Instant)
+
+/** The day the Live Update follows (iOS `FollowDay`). */
+data class FollowDay(
+    /** The day in the event's time zone, and its start. */
+    val date: LocalDate,
+    val dayStart: Instant,
+    /** True: My schedule's items (and timed places); false: the plan's or the event's own day. */
+    val followsHearts: Boolean,
+    /** The followed items of the day (by start, then id), including ones already over. */
+    val items: List<ScheduleItem>,
+    /** The event's own start when it falls on this day ("gates open"). */
+    val gatesOpen: Instant?,
+    /** When the Live Update should appear: 2 h before the first followed entry or the gates. */
+    val startAt: Instant,
+    /** When the last followed entry ends. */
+    val endAt: Instant,
+    /** True: the plan's items (spec §6), which win over My schedule. */
+    val followsPlan: Boolean = false,
+    /** My schedule's places with a time on this day (only while following "mine"). */
+    val places: List<FollowPlace> = emptyList(),
+    /** Every timed item of the day: what's on at the event when My schedule has nothing on. */
+    val eventItems: List<ScheduleItem> = emptyList(),
+) {
+    val followsMine: Boolean get() = followsPlan || followsHearts
+    val source: LiveSource get() = when {
+        followsPlan -> LiveSource.PLAN
+        followsHearts -> LiveSource.HEARTS
+        else -> LiveSource.EVENT
+    }
+}
+
+/** What [LiveFollow.followDay] gets under the organizer's `live_activity.follows` (API-027; iOS `FollowInputs`). */
+data class FollowInputs(
+    val schedule: List<ScheduleItem>,
+    val hearted: Set<Int>,
+    val planned: Set<Int>,
+    val places: List<FollowPlace>,
+)
+
+/** iOS `LiveActivityPlanner.Decision`. */
+sealed interface LiveDecision {
+    /** Nothing to follow (or too far ahead for iOS's scheduled start). */
+    data object Nothing : LiveDecision
+
+    data object StartNow : LiveDecision
+
+    /** Starts at this instant (Android: a wake-up then; the foreground posts at once anyway). */
+    data class Schedule(val at: Instant) : LiveDecision
+}
+
+/** One row of the Live Update: a schedule item or a timed place of My schedule (iOS `Slot`). */
+data class LiveSlot(
+    val itemId: Int?,
+    val name: String,
+    val location: String,
+    val locationId: Int?,
+    val start: Instant,
+    val end: Instant,
+    val hearted: Boolean,
+    val isPlace: Boolean = false,
+)
+
+/**
+ * The Live Update's content (iOS `EventActivityAttributes.ContentState`): Now / Next / after (always filled
+ * while anything is on, from the event when My schedule has nothing), the gates, the end-of-day summary,
+ * the urgent block, the organizer's buttons and stale text (API-027), the empty hint and "Leave now".
+ * No direction or distance from the user's position (iOS batch 7).
+ */
+data class LiveContent(
+    val current: LiveSlot? = null,
+    val next: LiveSlot? = null,
+    val after: LiveSlot? = null,
+    val walkMinutesToNext: Int? = null,
+    val urgent: UrgentBlock? = null,
+    /** The gates while they haven't opened yet today. */
+    val opensAt: Instant? = null,
+    val followsHearts: Boolean = false,
+    val followsPlan: Boolean = false,
+    val dayComplete: Boolean = false,
+    val completedCount: Int? = null,
+    /** "schedule" (mine) or "event" ("At the event"). */
+    val nowSource: String? = null,
+    val nextSource: String? = null,
+    /** Next's start while My schedule has a gap ("Free until 3:00"). */
+    val freeUntil: Instant? = null,
+    /** [LiveFollow.EMPTY_HINT] while nothing is in My schedule or the plan. */
+    val hint: String? = null,
+    /** API-027 `live_activity.buttons` this app draws (Skip / Map). */
+    val buttons: List<String> = LiveActivitySettings.DEFAULTS.liveButtons,
+    /** API-027 `stale_text` (iOS shows it when the content is out of date; see [LiveFollow.staleAt]). */
+    val staleText: String? = null,
+    /** Running late for the next planned item (assistant spec §6). */
+    val leaveBy: Instant? = null,
+    val lateState: LateState? = null,
+    val lateText: String? = null,
+) {
+    val nowIsFromEvent: Boolean get() = nowSource == "event"
+
+    fun showsButton(name: String): Boolean = name in buttons
+}
+
 enum class LiveMode {
-    /** Nothing has started yet today: "Gates open in …" (the event's start) or "Up next …". */
+    /** Nothing has started yet: "Gates open 10:00 · First: X" or Next. */
     BEFORE,
 
-    /** An item is in progress and/or another is coming. */
+    /** Something is on and/or coming. */
     ACTIVE,
 
-    /** Nothing left today: the day's summary, until the window closes. */
+    /** Nothing left today: the day's summary, for half an hour. */
     END_OF_DAY,
 
     /** [LiveState.urgent] replaces everything else. */
     URGENT,
 }
 
-/** A part of the day's progress bar: an item or a gap between items, in whole minutes (≥ 1). */
+/** A part of the day's progress bar: an entry or a gap between entries, in whole minutes (≥ 1). */
 data class LiveSegment(val minutes: Int, val isItem: Boolean)
 
-/**
- * What the Live Update shows (shared spec §8; all fields optional in spirit so an urgent-only update
- * works). Times are instants; the notification formats them in the event's zone.
- */
+/** The notification drawn from [LiveContent] ([LiveFollow.render]); times are instants. */
 data class LiveState(
     val mode: LiveMode,
     val source: LiveSource,
-    val current: ScheduleItem?,
-    val next: ScheduleItem?,
-    val after: ScheduleItem?,
-    /** Straight-line walk estimate from the current item's location (else the user) to the next one's. */
-    val walkMinutesToNext: Int?,
-    /** The event's start when [mode] is BEFORE and it opens later today ("Gates open in …"). */
-    val gatesOpen: Instant?,
+    val content: LiveContent,
     val title: String,
     val text: String,
-    /** The status-bar chip (`setShortCriticalText`): a short clock time like "7:30", or "Urgent". */
+    /** The header line: the empty hint, else the event's name. */
+    val subText: String,
+    /** The status-bar chip (`setShortCriticalText`): "7:30", "Leave" or "Urgent". */
     val chip: String?,
-    /** What the chronometer counts down to (the next start or the gates), when there is one. */
+    /** What the chronometer counts down to (Next's start or the gates). */
     val countdownTo: Instant?,
     val segments: List<LiveSegment>,
     /** Minutes since the first segment started, 0…sum of segments. */
     val progress: Int,
-    /** Minutes into the day's span at which each item starts (progress points). */
+    /** Minutes into the day's span at which each entry starts. */
     val points: List<Int>,
-    val urgent: UrgentBlock?,
-    /** The item a tap, Heart or Show on map acts on: current, else next. */
-    val focus: ScheduleItem?,
-    val itemsToday: Int,
-)
+    /** The entry a tap acts on: current, else next. */
+    val focus: LiveSlot?,
+    /** Skip: Next's item when it is one and the organizer kept the button. */
+    val skipItemId: Int?,
+    /** Map: Next's (else Now's) place when the organizer kept the button. */
+    val mapLocationId: Int?,
+) {
+    val urgent: UrgentBlock? get() = content.urgent.takeIf { mode == LiveMode.URGENT }
+}
+
+/** A reminder before an entry of My schedule (iOS `PlannedReminder`). */
+data class PlannedReminder(
+    /** "attnd.reminder.<event>.<item>" or ".p<place>". */
+    val id: String,
+    /** 0 for a place. */
+    val itemId: Int,
+    val fireAt: Instant,
+    val title: String,
+    val body: String,
+    val locationId: Int? = null,
+    /** The entry's start (Android: a reminder shown late is still useful until then). */
+    val start: Instant,
+) {
+    /** The key stored once shown: the item id, or −location id for a place. */
+    val shownKey: Int get() = locationId?.let { -it } ?: itemId
+}
 
 /**
- * Device-driven Live Update rules (shared spec §8). Pure; `live/` posts the notification and schedules
- * wake-ups from these values.
- *
- * - **Items of a day**: the plan's items on that day (event-zone date), else the hearted schedule items
- *   starting that day, else every schedule item starting that day; minus items the user skipped. Sorted
- *   by (start, end, id).
- * - **Window**: from 2 h before the first relevant start (the plan's/hearts' first item; with the event
- *   source, the earlier of the first item and the event's start when that is the same day) to 30 min
- *   after the last relevant end. Outside it there is no Live Update (unless an urgent block is active).
- * - **Current** = the earliest-starting relevant item in progress (ties: end, id); **next** = the first
- *   relevant item starting after now; **after** = the one following next.
+ * The Live Update and reminders (shared spec §8; a port of iOS `LiveActivityPlanner` / `ReminderPlanner`
+ * in `LiveFollowLogic.swift`, same rules and test cases). Pure; `live/` posts the notification and
+ * schedules wake-ups from these values.
  */
 object LiveFollow {
 
+    /** The Live Update appears this long before the day's first followed entry or the gates. */
     val LEAD: Duration = Duration.ofHours(2)
-    val TAIL: Duration = Duration.ofMinutes(30)
+
+    /** iOS starts scheduled activities only this far ahead. */
+    val MAX_SCHEDULE_AHEAD: Duration = Duration.ofHours(36)
+
+    /** The end-of-day summary stays this long. */
+    val SUMMARY_LINGER: Duration = Duration.ofMinutes(30)
+
+    val DEFAULT_STALE: Duration = Duration.ofHours(1)
+    val STALE_GRACE: Duration = Duration.ofMinutes(1)
     val URGENT_FOR: Duration = Duration.ofHours(12)
     val CLOCK_SKEW: Duration = Duration.ofMinutes(10)
 
-    /** Reminders fire this long before a hearted / planned item, plus the walk there. */
-    val REMINDER_LEAD: Duration = Duration.ofMinutes(15)
-    private val MAX_REMINDER_LEAD: Duration = Duration.ofMinutes(45)
+    /** A position older than this isn't used. */
+    val MAX_POSITION_AGE: Duration = Duration.ofMinutes(30)
 
-    /** Wake at least this often while a Live Update is up (progress bar and texts). */
+    /** Wake at least this often while the Live Update is up (progress bar and texts). */
     val REFRESH_EVERY: Duration = Duration.ofMinutes(15)
 
-    fun source(plan: Plan?, hearts: Hearts, day: LocalDate): LiveSource = when {
-        plan != null && plan.days.any { it.date == day && it.items.isNotEmpty() } -> LiveSource.PLAN
-        hearts.scheduleItems.isNotEmpty() -> LiveSource.HEARTS
-        else -> LiveSource.EVENT
-    }
+    /** Reminders: this long before an entry unless it has its own lead (0 = none). */
+    const val REMINDER_LEAD_MINUTES = 15
+    const val MAX_REMINDERS = 40
+    const val REMINDER_ID_PREFIX = "attnd.reminder."
 
-    fun items(bundle: EventBundle, plan: Plan?, hearts: Hearts, day: LocalDate, skipped: Set<Int>): Pair<LiveSource, List<ScheduleItem>> {
-        val zone = bundle.event.zone
-        fun onDay(item: ScheduleItem) = item.startTime?.let { EventTime.localDate(it, zone) } == day
-        val planIds = plan?.days?.filter { it.date == day }?.flatMap { it.items }?.map { it.itemId }.orEmpty()
-        val planItems = planIds.mapNotNull { bundle.scheduleItem(it) }.filter { it.startTime != null }
-        val heartedItems = bundle.schedule.filter { it.id in hearts.scheduleItems && onDay(it) }
-        val (source, list) = when {
-            planItems.isNotEmpty() -> LiveSource.PLAN to planItems
-            heartedItems.isNotEmpty() -> LiveSource.HEARTS to heartedItems
-            else -> LiveSource.EVENT to bundle.schedule.filter { onDay(it) }
+    /** The header while nothing is in My schedule (the Live Update starts on join). */
+    const val EMPTY_HINT = "Tap ♥ on anything and it shows here"
+
+    // ── The followed day ────────────────────────────────────────────────────
+
+    /** My schedule's timed places, resolved against the bundle (unknown places dropped). */
+    fun places(mySchedule: MySchedule, bundle: EventBundle): List<FollowPlace> =
+        mySchedule.entries.filter { it.kind == ScheduleEntryKind.PLACE && it.at != null }.mapNotNull { entry ->
+            val location = bundle.location(entry.id) ?: return@mapNotNull null
+            val start = entry.at!!
+            FollowPlace(location.id, location.name, start, start.plus(Duration.ofMinutes((entry.minutes ?: MySchedule.DEFAULT_MINUTES).toLong())))
         }
-        return source to list.filter { it.id !in skipped }.sortedWith(Planner.ITEM_ORDER)
-    }
 
-    /** The Live Update window of [day], or null when the day has no relevant items. */
-    fun window(bundle: EventBundle, plan: Plan?, hearts: Hearts, day: LocalDate, skipped: Set<Int> = emptySet()): Pair<Instant, Instant>? {
-        val (source, items) = items(bundle, plan, hearts, day, skipped)
-        if (items.isEmpty()) return null
-        var first = items.minOf { it.startTime!!.toInstant() }
-        val eventStart = bundle.event.startTime
-        if (source == LiveSource.EVENT && eventStart != null && EventTime.localDate(eventStart, bundle.event.zone) == day) {
-            first = minOf(first, eventStart.toInstant())
+    /**
+     * API-027 `live_activity.follows`: `my_schedule` today's rule; `everything` every item of the day (no
+     * hearts, plan or places); `location` only the items at that place (an unknown place → My schedule's).
+     */
+    fun inputs(settings: LiveActivitySettings?, bundle: EventBundle, hearted: Set<Int>, planned: Set<Int>, places: List<FollowPlace>): FollowInputs {
+        val s = settings ?: LiveActivitySettings.DEFAULTS
+        s.followedLocation(bundle)?.let { location ->
+            return FollowInputs(bundle.schedule.filter { it.locationId == location }, emptySet(), emptySet(), emptyList())
         }
-        val last = items.maxOf { TimeMatcher.effectiveEnd(it)!! }
-        return first.minus(LEAD) to last.plus(TAIL)
-    }
-
-    /** The first window (today or a later event day) that hasn't ended at [now]. */
-    fun nextWindow(bundle: EventBundle, plan: Plan?, hearts: Hearts, now: Instant, skipped: Set<Int> = emptySet()): Pair<Instant, Instant>? {
-        val today = now.atZone(bundle.event.zone).toLocalDate()
-        return TimeMatcher.eventDays(bundle, now)
-            .filter { !it.isBefore(today.minusDays(1)) }
-            .firstNotNullOfOrNull { day ->
-                window(bundle, plan, hearts, day, if (day == today) skipped else emptySet())?.takeIf { it.second.isAfter(now) }
-            }
+        if (s.follows == LiveActivitySettings.Follows.EVERYTHING) return FollowInputs(bundle.schedule, emptySet(), emptySet(), emptyList())
+        return FollowInputs(bundle.schedule, hearted, planned, places)
     }
 
     /**
-     * The Live Update at [now], or null when there should be none (outside every window and no active
-     * urgent block). [user] gives the walk to the next item when nothing is in progress.
+     * The day to follow: today while one of its items (or timed places) hasn't ended, else the next day
+     * with items. The plan's items when some of that day's haven't ended, else My schedule's items and
+     * places when one of them hasn't ended, else every item of the day. Items still running from an
+     * earlier day count for today. Null: nothing left.
      */
-    fun state(
-        bundle: EventBundle,
-        plan: Plan?,
-        hearts: Hearts,
+    fun followDay(
+        schedule: List<ScheduleItem>,
+        hearted: Set<Int>,
+        planned: Set<Int> = emptySet(),
+        places: List<FollowPlace> = emptyList(),
+        eventStart: Instant?,
         now: Instant,
-        skipped: Set<Int> = emptySet(),
-        urgent: UrgentBlock? = null,
-        dismissedUrgentId: Int? = null,
-        user: GeoPoint? = null,
-        locale: Locale = Locale.getDefault(),
-    ): LiveState? {
-        val zone = bundle.event.zone
-        val activeUrgent = urgent?.takeIf { it.isActive(now, dismissedUrgentId) }
-        // The window that contains now (it may have started the evening before for a late item).
-        val window = nextWindow(bundle, plan, hearts, now, skipped)?.takeIf { !it.first.isAfter(now) }
-        if (window == null && activeUrgent == null) return null
-        // The day whose items make the window: the one its first item starts on (else today).
-        val day = (window?.first?.plus(LEAD) ?: now).atZone(zone).toLocalDate()
-        val (source, items) = items(bundle, plan, hearts, day, skipped)
-        val inProgress = items.filter { ScheduleGrouping.isHappeningNow(it, now) }
-        val current = inProgress.firstOrNull()
-        val upcoming = items.filter { it.startTime!!.toInstant().isAfter(now) }
-        val next = upcoming.firstOrNull()
-        val after = upcoming.getOrNull(1)
-        val walk = next?.let { n ->
-            val to = bundle.location(n.locationId)?.coordinate
-            val from = bundle.location(current?.locationId)?.coordinate ?: user
-            if (current != null && current.locationId != null && current.locationId == n.locationId) 0
-            else if (to != null && from != null && Walking.isNearby(from, to)) {
-                Walking.minutes(Walking.estimateSeconds(Geo.distanceMeters(from, to))).toInt()
-            } else null
+        zone: ZoneId,
+    ): FollowDay? {
+        val today = now.atZone(zone).toLocalDate()
+        val timed = schedule.filter { it.startTime != null }.sortedWith(compareBy({ it.startTime!!.toInstant() }, { it.id }))
+        val days = sortedMapOf<LocalDate, MutableList<ScheduleItem>>()
+        for (item in timed) {
+            var day = item.startTime!!.toInstant().atZone(zone).toLocalDate()
+            if (day < today && ScheduleGrouping.isHappeningNow(item, now)) day = today
+            days.getOrPut(day) { mutableListOf() } += item
         }
-        val eventStart = bundle.event.startTime?.toInstant()
-        val gates = eventStart?.takeIf { source == LiveSource.EVENT && it.isAfter(now) && it.atZone(zone).toLocalDate() == day && current == null }
-        val anyStarted = items.any { !it.startTime!!.toInstant().isAfter(now) }
+        val placeDays = sortedMapOf<LocalDate, MutableList<FollowPlace>>()
+        for (place in places.sortedWith(compareBy({ it.start }, { it.locationId }))) {
+            var day = place.start.atZone(zone).toLocalDate()
+            if (day < today && !place.start.isAfter(now) && place.end.isAfter(now)) day = today
+            placeDays.getOrPut(day) { mutableListOf() } += place
+        }
+        for (day in (days.keys + placeDays.keys).toSortedSet()) {
+            if (day < today) continue
+            val all = days[day].orEmpty()
+            val open = all.filter { !ScheduleGrouping.hasEnded(it, now) }
+            val dayPlaces = placeDays[day].orEmpty()
+            val openPlaces = dayPlaces.filter { it.end.isAfter(now) }
+            if (open.isEmpty() && openPlaces.isEmpty()) continue
+            val followsPlan = open.any { it.id in planned }
+            val followsHearts = !followsPlan && (open.any { it.id in hearted } || openPlaces.isNotEmpty())
+            val mine = followsPlan || followsHearts
+            val items = when {
+                followsPlan -> all.filter { it.id in planned }
+                followsHearts -> all.filter { it.id in hearted }
+                else -> all
+            }
+            val followedPlaces = if (mine) dayPlaces else emptyList()
+            val gates = eventStart?.takeIf { it.atZone(zone).toLocalDate() == day }
+            val starts = items.map { it.startTime!!.toInstant() } + followedPlaces.map { it.start }
+            val dayStart = day.atStartOfDay(zone).toInstant()
+            val first = starts.minOrNull() ?: dayStart
+            val startAt = minOf(first, gates ?: first).minus(LEAD)
+            val ends = items.mapNotNull { TimeMatcher.effectiveEnd(it) } + followedPlaces.map { it.end }
+            return FollowDay(
+                date = day,
+                dayStart = dayStart,
+                followsHearts = followsHearts,
+                items = items,
+                gatesOpen = gates,
+                startAt = startAt,
+                endAt = ends.maxOrNull() ?: first,
+                followsPlan = followsPlan,
+                places = followedPlaces,
+                eventItems = all,
+            )
+        }
+        return null
+    }
 
-        val (segments, progress, points) = timeline(items, now)
-        val clock = DateTimeFormatter.ofPattern("h:mm", locale)
-        val longClock = DateTimeFormatter.ofPattern("h:mm a", locale)
-        fun place(item: ScheduleItem) = bundle.location(item.locationId)?.name ?: item.locationName
+    fun followDay(inputs: FollowInputs, eventStart: Instant?, now: Instant, zone: ZoneId): FollowDay? =
+        followDay(inputs.schedule, inputs.hearted, inputs.planned, inputs.places, eventStart, now, zone)
 
-        if (activeUrgent != null) {
-            return LiveState(
-                mode = LiveMode.URGENT, source = source, current = current, next = next, after = after,
-                walkMinutesToNext = walk, gatesOpen = null,
-                title = activeUrgent.title.ifBlank { "Urgent update" },
-                text = activeUrgent.body,
-                chip = "Urgent", countdownTo = null,
-                segments = segments, progress = progress, points = points,
-                urgent = activeUrgent, focus = current ?: next, itemsToday = items.size,
+    /** [forced]: the user asked to follow now, so the 2 h lead doesn't apply when the day is today. */
+    fun decision(day: FollowDay?, now: Instant, zone: ZoneId, forced: Boolean = false): LiveDecision {
+        if (day == null || !now.isBefore(day.endAt)) return LiveDecision.Nothing
+        val isToday = day.date == now.atZone(zone).toLocalDate()
+        if (!now.isBefore(day.startAt) || (forced && isToday)) return LiveDecision.StartNow
+        if (Duration.between(now, day.startAt) > MAX_SCHEDULE_AHEAD) return LiveDecision.Nothing
+        return LiveDecision.Schedule(day.startAt)
+    }
+
+    // ── Content ─────────────────────────────────────────────────────────────
+
+    private data class Entry(val item: ScheduleItem?, val place: FollowPlace?, val start: Instant, val end: Instant, val locationId: Int?) {
+        val itemId: Int? get() = item?.id
+    }
+
+    private val ENTRY_ORDER = Comparator<Entry> { a, b ->
+        when {
+            a.start != b.start -> a.start.compareTo(b.start)
+            (a.item == null) != (b.item == null) -> if (a.item != null) -1 else 1
+            else -> (a.itemId ?: a.locationId ?: 0).compareTo(b.itemId ?: b.locationId ?: 0)
+        }
+    }
+
+    private fun itemEntry(item: ScheduleItem): Entry? {
+        val start = item.startTime?.toInstant() ?: return null
+        val end = TimeMatcher.effectiveEnd(item) ?: return null
+        return Entry(item, null, start, end, item.locationId)
+    }
+
+    /** The day's followed entries (mine: items + places; else the day's items), by start. */
+    private fun followedEntries(day: FollowDay): List<Entry> =
+        (day.items.mapNotNull(::itemEntry) + day.places.map { Entry(null, it, it.start, it.end, it.locationId) }).sortedWith(ENTRY_ORDER)
+
+    /**
+     * The content for [day] at [now] (iOS `content`):
+     * - current: My schedule's entry in progress (the one that started last; ties lowest id), else what's
+     *   on at the event (`nowSource` "event"): the item in progress nearest to [user], else the earliest
+     *   started;
+     * - next / after: My schedule's next two entries not started yet (minus [skipped]), else the event's
+     *   own; `freeUntil` = Next's start while My schedule has a gap;
+     * - walk minutes to Next from [user] (≤ 30 min old by [userAt], within walking range);
+     * - `opensAt` while the gates haven't opened; `dayComplete` once nothing is left.
+     */
+    fun content(
+        day: FollowDay,
+        locations: List<EventLocation>,
+        hearted: Set<Int>,
+        skipped: Set<Int>,
+        user: GeoPoint?,
+        userAt: Instant? = null,
+        urgent: UrgentBlock?,
+        now: Instant,
+    ): LiveContent {
+        val byId = locations.associateBy { it.id }
+        val position = user?.takeIf { userAt == null || Duration.between(userAt, now) <= MAX_POSITION_AGE }
+        val mineEntries = if (day.followsMine) followedEntries(day) else emptyList()
+        val eventEntries = day.eventItems.ifEmpty { day.items }.mapNotNull(::itemEntry).sortedWith(ENTRY_ORDER)
+        fun happening(e: Entry) = !e.start.isAfter(now) && now.isBefore(e.end)
+        fun distance(e: Entry): Double {
+            val c = e.locationId?.let { byId[it]?.coordinate } ?: return Double.POSITIVE_INFINITY
+            return position?.let { Geo.distanceMeters(it, c) } ?: Double.POSITIVE_INFINITY
+        }
+
+        var current = mineEntries.filter(::happening)
+            .minWithOrNull(compareByDescending<Entry> { it.start }.thenBy { it.itemId ?: 0 })
+        var nowSource = current?.let { "schedule" }
+        if (current == null) {
+            current = eventEntries.filter(::happening)
+                .minWithOrNull(compareBy<Entry> { distance(it) }.thenBy { it.start }.thenBy { it.itemId ?: 0 })
+            if (current != null) nowSource = "event"
+        }
+        val currentId = current?.itemId
+        fun upcoming(list: List<Entry>) = list.filter { e ->
+            val id = e.itemId
+            e.start.isAfter(now) && (id == null || (id !in skipped && id != currentId))
+        }
+        val mineNext = upcoming(mineEntries)
+        val useMine = mineNext.isNotEmpty()
+        val nextList = if (useMine) mineNext else upcoming(eventEntries)
+        val next = nextList.firstOrNull()
+        val after = nextList.getOrNull(1)
+        val freeUntil = if (useMine && mineEntries.none(::happening)) next?.start else null
+
+        fun slot(entry: Entry?): LiveSlot? {
+            entry ?: return null
+            entry.place?.let { return LiveSlot(null, it.name, it.name, it.locationId, it.start, it.end, hearted = true, isPlace = true) }
+            val item = entry.item ?: return null
+            val location = item.locationId?.let { byId[it] }
+            return LiveSlot(
+                itemId = item.id,
+                name = item.name,
+                location = location?.name ?: item.locationName ?: ScheduleGrouping.GENERAL_TITLE,
+                locationId = location?.id ?: item.locationId,
+                start = entry.start,
+                end = entry.end,
+                hearted = item.id in hearted,
             )
         }
 
-        val mode = when {
-            current == null && next == null -> LiveMode.END_OF_DAY
-            current == null && !anyStarted -> LiveMode.BEFORE
-            else -> LiveMode.ACTIVE
+        val target = next?.locationId?.let { byId[it]?.coordinate }
+        val walk = if (position != null && target != null) {
+            val meters = Geo.distanceMeters(position, target)
+            if (Walking.isNearby(meters)) Walking.minutes(Walking.estimateSeconds(meters)).toInt() else null
+        } else null
+        val complete = current == null && next == null
+        val completed = day.items.count { ScheduleGrouping.hasEnded(it, now) } + day.places.count { !it.end.isAfter(now) }
+        return LiveContent(
+            current = slot(current),
+            next = slot(next),
+            after = slot(after),
+            walkMinutesToNext = walk,
+            urgent = urgent,
+            opensAt = day.gatesOpen?.takeIf { it.isAfter(now) },
+            followsHearts = day.followsHearts,
+            followsPlan = day.followsPlan,
+            dayComplete = complete,
+            completedCount = if (complete) completed else null,
+            nowSource = nowSource,
+            nextSource = next?.let { if (useMine) "schedule" else "event" },
+            freeUntil = freeUntil,
+        )
+    }
+
+    /**
+     * The organizer's buttons and stale text (API-027), the empty hint (nothing in My schedule or the plan)
+     * and "Leave now" for the next planned item ([late], only while following the plan and when it is Next).
+     */
+    fun decorate(content: LiveContent, day: FollowDay?, settings: LiveActivitySettings?, hasMine: Boolean, late: RunningLate?): LiveContent {
+        val s = settings ?: LiveActivitySettings.DEFAULTS
+        var result = content.copy(
+            buttons = s.liveButtons,
+            staleText = s.staleText,
+            hint = if (!hasMine && !content.dayComplete) EMPTY_HINT else null,
+        )
+        if (late != null && day?.followsPlan == true && content.next?.itemId == late.itemId) {
+            result = result.copy(leaveBy = late.leaveBy, lateState = late.state, lateText = late.text, walkMinutesToNext = late.walkMinutes)
         }
+        return result
+    }
+
+    /** When the content goes out of date: just after the next change (current ends, next starts, gates open), else an hour on. */
+    fun staleAt(content: LiveContent, now: Instant): Instant {
+        val first = listOfNotNull(content.current?.end, content.next?.start, content.opensAt).filter { it.isAfter(now) }.minOrNull()
+            ?: return now.plus(DEFAULT_STALE)
+        return first.plus(STALE_GRACE)
+    }
+
+    /**
+     * The urgent block: the bundle's newest urgent announcement sent within 12 h and not dismissed, else
+     * the pushed one (a push before the bundle) while it is within 12 h and not dismissed.
+     */
+    fun urgent(notifications: List<EventNotification>, dismissed: Set<Int>, pushed: UrgentBlock?, now: Instant): UrgentBlock? {
+        val newest = notifications.asSequence()
+            .filter { it.isUrgent && it.sendTime != null && it.id !in dismissed }
+            .map { UrgentBlock(it.id, it.title, it.body, it.sendTime!!.toInstant()) }
+            .filter { it.isActive(now, null) }
+            .maxByOrNull { it.sentAt }
+        return newest ?: pushed?.takeIf { it.id !in dismissed && it.isActive(now, null) }
+    }
+
+    /**
+     * The day that ended within the last [SUMMARY_LINGER] today (the end-of-day summary), when [current]
+     * (the day followed now) isn't today any more.
+     */
+    fun endedToday(inputs: FollowInputs, eventStart: Instant?, now: Instant, zone: ZoneId, current: FollowDay?): FollowDay? {
+        val today = now.atZone(zone).toLocalDate()
+        if (current?.date == today) return null
+        return followDay(inputs, eventStart, now.minus(SUMMARY_LINGER), zone)
+            ?.takeIf { it.date == today && !it.endAt.isAfter(now) && now.isBefore(it.endAt.plus(SUMMARY_LINGER)) }
+    }
+
+    // ── The notification ────────────────────────────────────────────────────
+
+    /**
+     * The Android notification for [content] (iOS's Lock Screen view in a promoted ongoing notification):
+     * urgent → its title and body; the summary → "That's a wrap for today"; running late → "Leave now for
+     * X"; before the gates → "Gates open 10:00 · First: X"; Now → "Now: X · Place" / "At the event: X ·
+     * Place" with "Next 8:00 PM: Y · Place" or "Free until 7:00 · Next: Y at Place"; else "Y at 7:00 PM".
+     * Absolute times only: the chronometer counts down to Next (or the gates).
+     */
+    fun render(content: LiveContent, day: FollowDay?, eventName: String, zone: ZoneId, now: Instant, locale: Locale = Locale.getDefault()): LiveState {
+        val clock = DateTimeFormatter.ofPattern("h:mm", locale)
+        val longClock = DateTimeFormatter.ofPattern("h:mm a", locale)
+        fun short(t: Instant) = t.atZone(zone).format(clock)
+        fun long(t: Instant) = t.atZone(zone).format(longClock)
+        val source = day?.source ?: LiveSource.EVENT
+        val spans = day?.let { d -> if (d.followsMine) followedEntries(d) else d.items.mapNotNull(::itemEntry) }.orEmpty().map { it.start to it.end }
+        val (segments, progress, points) = timeline(spans, now)
+        val current = content.current
+        val next = content.next
+        val urgent = content.urgent
+        val gates = content.opensAt
+
+        val mode: LiveMode
         val title: String
         val text: String
         val chip: String?
         val countdown: Instant?
         when {
-            mode == LiveMode.END_OF_DAY -> {
+            urgent != null -> {
+                mode = LiveMode.URGENT
+                title = urgent.title.ifBlank { "Urgent update" }
+                text = urgent.body
+                chip = "Urgent"
+                countdown = null
+            }
+            content.dayComplete -> {
+                mode = LiveMode.END_OF_DAY
+                val count = content.completedCount ?: 0
+                val items = if (count == 1) "item" else "items"
                 title = "That's a wrap for today"
                 text = when (source) {
-                    LiveSource.PLAN -> "${items.size} ${if (items.size == 1) "item" else "items"} in your plan today"
-                    LiveSource.HEARTS -> "${items.size} liked ${if (items.size == 1) "item" else "items"} today"
-                    LiveSource.EVENT -> bundle.event.name
+                    LiveSource.PLAN -> "$count $items in your plan today"
+                    LiveSource.HEARTS -> "$count $items in your schedule today"
+                    LiveSource.EVENT -> eventName
                 }
                 chip = null
                 countdown = null
             }
-            gates != null && mode == LiveMode.BEFORE -> {
-                // Absolute times: the chronometer counts down, so the text never goes stale between updates.
-                title = "Gates open at ${gates.atZone(zone).format(longClock)}"
-                text = next?.let { "First up: ${it.name}" + (place(it)?.let { p -> " · $p" } ?: "") } ?: bundle.event.name
-                chip = gates.atZone(zone).format(clock)
+            content.lateState != null && next != null -> {
+                mode = LiveMode.ACTIVE
+                title = content.lateText ?: "Leave now for ${next.name}"
+                text = "${long(next.start)} · ${next.location}"
+                chip = if (content.lateState == LateState.LEAVE_NOW) "Leave" else short(next.start)
+                countdown = next.start
+            }
+            gates != null && current == null -> {
+                mode = LiveMode.BEFORE
+                title = "Gates open ${short(gates)}" + (next?.let { " · First: ${it.name}" } ?: "")
+                text = next?.let { "${it.location} · ${long(it.start)}" } ?: eventName
+                chip = short(gates)
                 countdown = gates
             }
             current != null -> {
-                val ends = TimeMatcher.effectiveEnd(current)!!
-                title = "Now: ${current.name}" + (place(current)?.let { " · $it" } ?: "")
-                text = next?.let { n ->
-                    buildString {
-                        append("Up next ${n.startTime!!.toInstant().atZone(zone).format(longClock)}: ${n.name}")
-                        place(n)?.takeIf { it != place(current) }?.let { append(" · $it") }
-                        walk?.takeIf { it > 0 }?.let { append(" · $it min walk") }
-                    }
-                } ?: "Ends ${ends.atZone(zone).format(longClock)}"
-                chip = next?.startTime?.toInstant()?.atZone(zone)?.format(clock) ?: ends.atZone(zone).format(clock)
-                countdown = next?.startTime?.toInstant()
+                mode = LiveMode.ACTIVE
+                title = (if (content.nowIsFromEvent) "At the event: " else "Now: ") + current.name + " · " + current.location
+                val walk = content.walkMinutesToNext?.takeIf { it > 0 }?.let { " · $it min walk" }.orEmpty()
+                val free = content.freeUntil
+                text = when {
+                    next == null -> "Ends ${long(current.end)}"
+                    free != null -> "Free until ${short(free)} · Next: ${next.name} at ${next.location}$walk"
+                    else -> "Next ${long(next.start)}: ${next.name}" + (if (next.location != current.location) " · ${next.location}" else "") + walk
+                }
+                chip = short(next?.start ?: current.end)
+                countdown = next?.start
+            }
+            next != null -> {
+                mode = LiveMode.BEFORE
+                title = "${next.name} at ${long(next.start)}"
+                text = buildString {
+                    append(next.location)
+                    content.walkMinutesToNext?.let { append(if (it == 0) " · ${Walking.YOURE_HERE}" else " · $it min walk") }
+                    content.after?.let { append(" · then ${it.name}") }
+                }
+                chip = short(next.start)
+                countdown = next.start
             }
             else -> {
-                val n = next!!
-                val start = n.startTime!!.toInstant()
-                title = "${n.name} at ${start.atZone(zone).format(longClock)}"
-                text = buildString {
-                    append(place(n) ?: ScheduleGrouping.GENERAL_TITLE)
-                    walk?.let { append(if (it == 0) " · You're here" else " · $it min walk") }
-                    after?.let { append(" · then ${it.name}") }
-                }
-                chip = start.atZone(zone).format(clock)
-                countdown = start
+                mode = LiveMode.END_OF_DAY
+                title = eventName
+                text = ""
+                chip = null
+                countdown = null
             }
         }
+        val drawsButtons = mode != LiveMode.URGENT
         return LiveState(
-            mode = mode, source = source, current = current, next = next, after = after,
-            walkMinutesToNext = walk, gatesOpen = gates, title = title, text = text, chip = chip,
-            countdownTo = countdown, segments = segments, progress = progress, points = points,
-            urgent = null, focus = current ?: next, itemsToday = items.size,
+            mode = mode,
+            source = source,
+            content = content,
+            title = title,
+            text = text,
+            subText = content.hint ?: eventName,
+            chip = chip,
+            countdownTo = countdown,
+            segments = if (drawsButtons) segments else emptyList(),
+            progress = progress,
+            points = points,
+            focus = current ?: next,
+            skipItemId = next?.itemId?.takeIf { drawsButtons && content.showsButton("skip") },
+            mapLocationId = (next?.locationId ?: current?.locationId)?.takeIf { drawsButtons && content.showsButton("map") },
         )
     }
 
     /**
-     * The day's progress bar: from the first item's start to the last item's end, one segment per item
-     * (overlapping items merge) and per gap, in whole minutes (≥ 1); progress = minutes elapsed,
-     * clamped; points = each item's start offset (distinct, > 0, < total).
+     * The day's progress bar: from the first entry's start to the last one's end, one segment per entry
+     * (overlapping ones merge) and per gap, in whole minutes (≥ 1); progress = minutes elapsed, clamped;
+     * points = each entry's start offset (distinct, > 0, < total).
      */
-    fun timeline(items: List<ScheduleItem>, now: Instant): Triple<List<LiveSegment>, Int, List<Int>> {
-        if (items.isEmpty()) return Triple(emptyList(), 0, emptyList())
-        val spanStart = items.minOf { it.startTime!!.toInstant() }
-        val intervals = items.map { it.startTime!!.toInstant() to TimeMatcher.effectiveEnd(it)!! }.sortedBy { it.first }
+    fun timeline(spans: List<Pair<Instant, Instant>>, now: Instant): Triple<List<LiveSegment>, Int, List<Int>> {
+        if (spans.isEmpty()) return Triple(emptyList(), 0, emptyList())
+        val sorted = spans.sortedBy { it.first }
+        val spanStart = sorted.first().first
         val merged = mutableListOf<Pair<Instant, Instant>>()
-        intervals.forEach { (s, e) ->
+        sorted.forEach { (s, e) ->
             val last = merged.lastOrNull()
             if (last != null && !s.isAfter(last.second)) merged[merged.lastIndex] = last.first to maxOf(last.second, e)
             else merged += s to e
@@ -276,39 +618,31 @@ object LiveFollow {
         }
         val total = segments.sumOf { it.minutes }
         val progress = minutes(spanStart, now).coerceIn(0, total)
-        val points = items.map { minutes(spanStart, it.startTime!!.toInstant()) }.filter { it in 1 until total }.distinct().sorted()
+        val points = sorted.map { minutes(spanStart, it.first) }.filter { it in 1 until total }.distinct().sorted()
         return Triple(segments, progress, points)
     }
 
     /**
-     * When to wake next while following: the next item start/end, window start/end, reminder or urgent
-     * expiry after [now], but at least every [REFRESH_EVERY] while a Live Update is up. Null = nothing
-     * left to do for this event.
+     * When to wake next: the day's start and end (and the summary's end), every entry's start and end
+     * (mine and the event's, since Now falls back to the event), the gates, the urgent block's expiry and
+     * [extra] times (reminders, "leave by"), and at least every [REFRESH_EVERY] while [showing]. Null:
+     * nothing left.
      */
-    fun nextWake(
-        bundle: EventBundle,
-        plan: Plan?,
-        hearts: Hearts,
-        now: Instant,
-        skipped: Set<Int> = emptySet(),
-        urgent: UrgentBlock? = null,
-        dismissedUrgentId: Int? = null,
-        reminders: List<Pair<Int, Instant>> = emptyList(),
-    ): Instant? {
-        val window = nextWindow(bundle, plan, hearts, now, skipped)
+    fun nextWake(day: FollowDay?, now: Instant, showing: Boolean, urgent: UrgentBlock? = null, extra: List<Instant> = emptyList()): Instant? {
         val candidates = mutableListOf<Instant>()
-        val showing = (window != null && !window.first.isAfter(now)) || urgent?.isActive(now, dismissedUrgentId) == true
-        if (window != null) {
-            candidates += window.first
-            candidates += window.second
-            val day = window.first.plus(LEAD).atZone(bundle.event.zone).toLocalDate()
-            items(bundle, plan, hearts, day, skipped).second.forEach {
-                candidates += it.startTime!!.toInstant()
-                candidates += TimeMatcher.effectiveEnd(it)!!
+        if (day != null) {
+            candidates += day.startAt
+            candidates += day.endAt
+            candidates += day.endAt.plus(SUMMARY_LINGER)
+            day.gatesOpen?.let { candidates += it }
+            (day.items + day.eventItems).forEach { item ->
+                item.startTime?.toInstant()?.let { candidates += it }
+                TimeMatcher.effectiveEnd(item)?.let { candidates += it }
             }
+            day.places.forEach { candidates += it.start; candidates += it.end }
         }
-        urgent?.takeIf { it.isActive(now, dismissedUrgentId) }?.let { candidates += it.sentAt.plus(URGENT_FOR) }
-        reminders.forEach { candidates += it.second }
+        urgent?.let { candidates += it.sentAt.plus(URGENT_FOR) }
+        candidates += extra
         if (showing) candidates += now.plus(REFRESH_EVERY)
         return candidates.filter { it.isAfter(now) }.minOrNull()
     }
@@ -316,39 +650,70 @@ object LiveFollow {
     // ── Reminders ───────────────────────────────────────────────────────────
 
     /**
-     * Local reminders for hearted and planned items starting after [now] (not skipped), each at start −
-     * ([REMINDER_LEAD] + the walk from [user] when within walking range), the lead capped at 45 min.
-     * Sorted by time, then item id.
+     * One reminder per schedule item in [hearted] whose reminder time is still ahead, `leadMinutes[id]`
+     * before (default 15, 0 = none), and one per timed place entry of [places]: "Prairie Lights in 15
+     * min · 8 min walk" (walk from [user] when within walking range and 20 m or more away), body "Main
+     * Stage · 7:30 PM"; places "Taco Row in 15 min · 3 min walk", "In your schedule · 7:00 PM". Soonest
+     * first, at most [MAX_REMINDERS].
      */
-    fun reminders(bundle: EventBundle, plan: Plan?, hearts: Hearts, now: Instant, user: GeoPoint?, skipped: Set<Int> = emptySet()): List<Pair<Int, Instant>> {
-        val ids = (hearts.scheduleItems + plan?.itemIds.orEmpty()).toSet() - skipped
-        return bundle.schedule.filter { it.id in ids && it.startTime?.toInstant()?.isAfter(now) == true }
-            .map { item ->
-                val start = item.startTime!!.toInstant()
-                val walk = walkSeconds(bundle, item, user)?.let { Duration.ofMinutes(Walking.minutes(it)) } ?: Duration.ZERO
-                val lead = minOf(REMINDER_LEAD.plus(walk), MAX_REMINDER_LEAD)
-                item.id to start.minus(lead)
-            }
-            .sortedWith(compareBy<Pair<Int, Instant>> { it.second }.thenBy { it.first })
-    }
-
-    private fun walkSeconds(bundle: EventBundle, item: ScheduleItem, user: GeoPoint?): Long? {
-        val to = bundle.location(item.locationId)?.coordinate ?: return null
-        val from = user ?: return null
-        val meters = Geo.distanceMeters(from, to)
-        return if (Walking.isNearby(meters) && meters >= Geo.HERE_METERS) Walking.estimateSeconds(meters) else null
-    }
-
-    /** "Prairie Lights in 15 min · 8 min walk" (title) and "Main Stage · 7:30 – 8:30 PM" (text). */
-    fun reminderText(bundle: EventBundle, item: ScheduleItem, now: Instant, user: GeoPoint?, locale: Locale = Locale.getDefault()): Pair<String, String> {
-        val zone = bundle.event.zone
-        val start = item.startTime!!.toInstant()
-        val title = buildString {
-            append(item.name).append(' ')
-            append(RelativeTime.relativeStart(start, TimeMatcher.effectiveEnd(item), now, zone, locale))
-            walkSeconds(bundle, item, user)?.let { append(" · ").append(Walking.walkText(it)) }
+    fun reminders(
+        eventId: Int,
+        schedule: List<ScheduleItem>,
+        hearted: Set<Int>,
+        locations: List<EventLocation>,
+        user: GeoPoint?,
+        now: Instant,
+        zone: ZoneId,
+        locale: Locale = Locale.getDefault(),
+        leadMinutes: Map<Int, Int> = emptyMap(),
+        places: List<ScheduleEntry> = emptyList(),
+    ): List<PlannedReminder> {
+        val byId = locations.associateBy { it.id }
+        val clock = DateTimeFormatter.ofPattern("h:mm a", locale)
+        fun time(t: Instant) = t.atZone(zone).format(clock)
+        fun walk(location: EventLocation?): String? {
+            val from = user ?: return null
+            val to = location?.coordinate ?: return null
+            val meters = Geo.distanceMeters(from, to)
+            if (meters < Geo.HERE_METERS || !Walking.isNearby(meters)) return null
+            return Walking.walkText(Walking.estimateSeconds(meters))
         }
-        val place = bundle.location(item.locationId)?.name ?: item.locationName ?: ScheduleGrouping.GENERAL_TITLE
-        return title to "$place · ${EventTime.formatTimeRange(item.startTime, item.endTime, zone, locale)}"
+        val items = schedule.filter { it.id in hearted }.mapNotNull { item ->
+            val minutes = leadMinutes[item.id] ?: REMINDER_LEAD_MINUTES
+            val start = item.startTime?.toInstant() ?: return@mapNotNull null
+            if (minutes <= 0) return@mapNotNull null
+            val fire = start.minus(Duration.ofMinutes(minutes.toLong()))
+            if (!fire.isAfter(now)) return@mapNotNull null
+            val location = item.locationId?.let { byId[it] }
+            val place = location?.name ?: item.locationName
+            PlannedReminder(
+                id = "$REMINDER_ID_PREFIX$eventId.${item.id}",
+                itemId = item.id,
+                fireAt = fire,
+                title = "${item.name} in $minutes min" + (walk(location)?.let { " · $it" } ?: ""),
+                body = place?.let { "$it · ${time(start)}" } ?: time(start),
+                start = start,
+            )
+        }
+        val timedPlaces = places.mapNotNull { entry ->
+            val location = byId[entry.id] ?: return@mapNotNull null
+            val start = entry.at ?: return@mapNotNull null
+            val minutes = entry.reminderMinutes
+            if (entry.kind != ScheduleEntryKind.PLACE || minutes <= 0) return@mapNotNull null
+            val fire = start.minus(Duration.ofMinutes(minutes.toLong()))
+            if (!fire.isAfter(now)) return@mapNotNull null
+            PlannedReminder(
+                id = "$REMINDER_ID_PREFIX$eventId.p${location.id}",
+                itemId = 0,
+                fireAt = fire,
+                title = "${location.name} in $minutes min" + (walk(location)?.let { " · $it" } ?: ""),
+                body = "In your schedule · ${time(start)}",
+                locationId = location.id,
+                start = start,
+            )
+        }
+        return (items + timedPlaces)
+            .sortedWith(compareBy({ it.fireAt }, { it.itemId }, { it.locationId ?: 0 }))
+            .take(MAX_REMINDERS)
     }
 }

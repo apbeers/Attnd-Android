@@ -208,7 +208,7 @@ class AppGraph(context: Context, val prefs: DevicePrefs, logStore: LogStore, val
     val inAppBanners = MutableSharedFlow<InAppBanner>(extraBufferCapacity = 4)
 
     /** The device-driven Live Update and reminders (shared spec §8). */
-    val liveUpdates = LiveUpdateController(appContext, repository, hearts, plans, appScope, perf)
+    val liveUpdates = LiveUpdateController(appContext, repository, hearts, plans, schedule, appScope, perf, foreground = { logSink.isForeground })
 
     init {
         // Every plan version (made, edited, undone) fills My schedule.

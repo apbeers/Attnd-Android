@@ -8,17 +8,17 @@ import android.content.Intent
 import com.arcu.attnd.data.EventRepository
 import com.arcu.attnd.data.HeartStore
 import com.arcu.attnd.data.PlanStore
+import com.arcu.attnd.data.ScheduleController
 import com.arcu.attnd.data.hasLocationPermission
 import com.arcu.attnd.data.log.PerfRecorder
 import com.arcu.attnd.domain.AppLog
 import com.arcu.attnd.domain.EventBundle
-import com.arcu.attnd.domain.EventTime
 import com.arcu.attnd.domain.Geo
 import com.arcu.attnd.domain.GeoPoint
-import com.arcu.attnd.domain.LateState
 import com.arcu.attnd.domain.LiveAssist
 import com.arcu.attnd.domain.LiveFollow
-import com.arcu.attnd.domain.LiveMode
+import com.arcu.attnd.domain.LiveContent
+import com.arcu.attnd.domain.LiveDecision
 import com.arcu.attnd.domain.LiveState
 import com.arcu.attnd.domain.Plan
 import com.arcu.attnd.domain.Planner
@@ -29,6 +29,8 @@ import com.arcu.attnd.domain.LogEvent
 import com.arcu.attnd.domain.LogJson
 import com.arcu.attnd.domain.LogLevel
 import com.arcu.attnd.domain.PerfMetric
+import com.arcu.attnd.domain.OpenTarget
+import com.arcu.attnd.domain.ScheduleEntryKind
 import com.arcu.attnd.domain.UrgentBlock
 import com.google.android.gms.location.LocationServices
 import kotlinx.coroutines.CancellationException
@@ -43,13 +45,17 @@ import java.time.Instant
 
 /**
  * Drives the Live Update and reminders from the device, with no server
- * (shared spec §8): [refresh] recomputes [LiveFollow.state] from the saved bundle, plan and hearts,
+ * (shared spec §8, iOS's Follow on Lock Screen): [refresh] follows the day ([LiveFollow.followDay]: the
+ * plan's items, else My schedule's items and timed places, else the event's; `live_activity.follows`),
+ * builds its content ([LiveFollow.content]: Now / Next always filled) from the saved bundle,
  * posts or cancels the notification, shows due reminders and schedules the next wake-up as an inexact
  * [AlarmManager.setWindow] alarm (no exact-alarm permission). It runs after every bundle / hearts / plan
  * change (AppGraph), on each alarm, on a `content_updated` push (the bundle changes), on boot, on the
  * notification actions.
  *
- * The Live Update only while "Follow on Lock Screen" is on for the joined event ([PlanStore.follows]),
+ * In the foreground the Live Update posts at once, even when the day is ahead (iOS batch 7, "starts on
+ * join"); in the background it appears 2 h before the day's first entry and keeps updating once up.
+ * The Live Update only while "Follow on Lock Screen" is on for the joined event ([PlanStore.follows], on by default),
  * reminders while they are on ([PlanStore.reminders], default: the same); never in screenshot mode
  * ([suspended]). With a plan and the user's position, the next item's departure time switches the
  * Live Update to "Leave now" (assistant spec §6, [LiveAssist.runningLate]).
@@ -59,8 +65,11 @@ class LiveUpdateController(
     private val repository: EventRepository,
     private val hearts: HeartStore,
     private val plans: PlanStore,
+    private val mySchedules: ScheduleController,
     private val scope: CoroutineScope,
     private val perf: PerfRecorder? = null,
+    /** Whether an activity of the app is started (the Live Update then posts at once, iOS "starts on join"). */
+    private val foreground: () -> Boolean = { false },
 ) {
     private val appContext = context.applicationContext
 
@@ -110,88 +119,111 @@ class LiveUpdateController(
         val zone = bundle.event.zone
         val today = now.atZone(zone).toLocalDate()
         val skipped = plans.skipped(eventId, today)
-        val urgent = urgentBlock(bundle, eventId)
-        val dismissedUrgent = plans.dismissedUrgent(eventId)
         val user = lastLocation()
+        val mine = mySchedules.schedule(eventId)
+        val planned = plan?.itemIds.orEmpty().toSet()
 
-        // Reminders for hearted / planned items (shown once each).
+        // Reminders per entry of My schedule (its own lead, default 15 min; timed places too), shown once each.
         val shown = plans.remindersShown(eventId)
-        val reminders = if (!remindersOn) emptyList() else LiveFollow.reminders(bundle, plan, heartsNow, now, user, skipped).filter { it.first !in shown }
-        val (due, later) = reminders.partition { !it.second.isAfter(now.plus(REMINDER_EARLY)) }
-        due.forEach { (itemId, _) ->
-            val item = bundle.scheduleItem(itemId) ?: return@forEach
-            val (title, text) = LiveFollow.reminderText(bundle, item, now, user)
-            LiveNotifications.showReminder(appContext, eventId, itemId, title, text)
-            plans.markReminderShown(eventId, itemId)
+        val reminders = if (!remindersOn) emptyList() else LiveFollow.reminders(
+            eventId = eventId,
+            schedule = bundle.schedule,
+            hearted = heartsNow.scheduleItems + planned - skipped,
+            locations = bundle.locations,
+            user = user,
+            // Alarms are inexact: a reminder whose time passed a little ago is still shown before its start.
+            now = now.minus(REMINDER_LATE),
+            zone = zone,
+            leadMinutes = mine.entries.filter { it.kind == ScheduleEntryKind.ITEM }.associate { it.id to it.reminderMinutes },
+            places = mine.entries.filter { it.kind == ScheduleEntryKind.PLACE && it.at != null },
+        ).filter { it.start.isAfter(now) && it.shownKey !in shown }
+        val (due, later) = reminders.partition { !it.fireAt.isAfter(now.plus(REMINDER_EARLY)) }
+        due.forEach { reminder ->
+            val target = reminder.locationId?.let { OpenTarget.Location(it) } ?: OpenTarget.ScheduleItem(reminder.itemId)
+            LiveNotifications.showReminder(appContext, eventId, reminder.shownKey, target, reminder.title, reminder.body)
+            plans.markReminderShown(eventId, reminder.shownKey)
         }
 
-        // The Live Update itself; not reposted on a day the user swiped it away (unless urgent changed).
+        // The Live Update (iOS's Follow on Lock Screen): what the organizer chose it follows (API-027).
+        val inputs = LiveFollow.inputs(bundle.liveActivity, bundle, heartsNow.scheduleItems, planned, LiveFollow.places(mine, bundle))
+        val eventStart = bundle.event.startTime?.toInstant()
+        val day = if (follows) LiveFollow.followDay(inputs, eventStart, now, zone) else null
+        val summaryDay = if (follows) LiveFollow.endedToday(inputs, eventStart, now, zone, day) else null
+        val urgent = LiveFollow.urgent(bundle.notifications, setOfNotNull(plans.dismissedUrgent(eventId)), plans.urgent(eventId), now)
+            ?.takeIf { follows }
+        val showing = LiveNotifications.isShowing(appContext)
+        val decision = LiveFollow.decision(day, now, zone)
+        // Starts on join (iOS batch 7): in the foreground it posts at once, even for a day ahead; in the
+        // background it starts 2 h before the day's first entry and keeps updating once up.
+        val dayShown = day != null && now.isBefore(day.endAt) && (decision == LiveDecision.StartNow || foreground() || showing)
+        val shownDay = if (dayShown) day else summaryDay?.takeIf { showing }
+        val late = if (shownDay?.followsPlan == true && plan != null && !plan.isEmpty) LiveAssist.runningLate(plan, bundle, now, user, skipped) else null
+        val state = when {
+            shownDay != null -> {
+                // No direction, distance or walk from the user's position (iOS batch 7): user = null.
+                val content = LiveFollow.content(shownDay, bundle.locations, heartsNow.scheduleItems, skipped, user = null, urgent = urgent, now = now)
+                val hasMine = !heartsNow.isEmpty || plan?.isEmpty == false
+                LiveFollow.render(LiveFollow.decorate(content, shownDay, bundle.liveActivity, hasMine, late), shownDay, bundle.event.name, zone, now)
+            }
+            // An urgent block shows even outside the day.
+            urgent != null -> LiveFollow.render(LiveContent(urgent = urgent), null, bundle.event.name, zone, now)
+            else -> null
+        }
+        state?.content?.lateState?.let { logRunningLate(late!!, bundle) }
+
+        // Not reposted on a day the user swiped it away.
         val dismissedToday = plans.liveDismissedOn(eventId) == today.toString()
-        val late = if (follows && plan != null) LiveAssist.runningLate(plan, bundle, now, user, skipped) else null
-        val state = if (!follows) null else LiveFollow.state(bundle, plan, heartsNow, now, skipped, urgent, dismissedUrgent, user)
-            ?.let { withRunningLate(it, late, bundle) }
-        if (state != null && !dismissedToday) {
-            var failure: Pair<String, Throwable?>? = null
-            val posted = try {
-                LiveNotifications.showLive(appContext, bundle, state).also { if (!it) failure = PerfMetric.LIVE_DENIED to null }
-            } catch (e: RuntimeException) {
-                failure = PerfMetric.LIVE_ERROR to e
-                false
-            }
-            // Posted, but the user turned Live Updates (promoted notifications) off for the app.
-            if (posted && !LiveNotifications.canPromote(appContext)) failure = PerfMetric.LIVE_DISABLED to null
-            failure?.let { (reason, error) ->
-                if (!failCounted) {
-                    failCounted = true
-                    perf?.record(PerfMetric.LIVE_START_FAIL, reason)
-                    AppLog.warning(
-                        LogCategory.LIVE, LogEvent.LIVE_START_FAILED, "Live Update can't start ($reason)",
-                        mapOf("reason" to reason, "domain" to error?.javaClass?.simpleName),
-                    )
-                }
-            }
-            val fields = mapOf("mode" to state.mode, "source" to state.source, "items" to state.segments.count { it.isItem })
-            when {
-                !posted -> liveShown = false
-                !liveShown -> AppLog.notice(LogCategory.LIVE, LogEvent.LIVE_START, "Live Update started (${state.mode})", fields)
-                else -> AppLog.debug(LogCategory.LIVE, LogEvent.LIVE_UPDATE, "Live Update (${state.mode})", mapOf("mode" to state.mode))
-            }
-            if (posted) {
-                liveShown = true
-                if (failure == null) failCounted = false
-            }
-        } else {
-            cancelLive(if (dismissedToday) "user" else "day_over")
-        }
+        if (state != null && !dismissedToday) post(bundle, state) else cancelLive(if (dismissedToday) "user" else "day_over")
 
-        val wake = if (!follows) later.minOfOrNull { it.second.minus(REMINDER_EARLY) }
-        else LiveFollow.nextWake(bundle, plan, heartsNow, now, skipped, urgent, dismissedUrgent, later)
+        val reminderWakes = later.map { it.fireAt.minus(REMINDER_EARLY) }
+        val wake = if (!follows) reminderWakes.minOrNull()
+        else LiveFollow.nextWake(day ?: summaryDay, now, showing = state != null && !dismissedToday, urgent = urgent, extra = reminderWakes)
         // Assistant spec §6: also wake at the next planned item's departure time (running late).
-        val leaveBy = if (follows && plan != null && late == null) nextLeaveBy(plan, bundle, now, user, skipped) else null
+        val leaveBy = if (day?.followsPlan == true && plan != null && late == null) nextLeaveBy(plan, bundle, now, user, skipped) else null
         schedule(listOfNotNull(wake, leaveBy).minOrNull())
     }
 
-    /**
-     * "Leave now" in the Live Update (assistant spec §6): from the next planned item's departure time,
-     * the title says to leave (LEAVE_NOW) or that it can't be made in time; the chip reads "Leave".
-     * Urgent mode is never replaced.
-     */
-    private fun withRunningLate(state: LiveState, late: RunningLate?, bundle: EventBundle): LiveState {
-        if (late == null || state.mode == LiveMode.URGENT) return state
-        val item = bundle.scheduleItem(late.itemId) ?: return state
-        if (lateShownFor != late.itemId) {
-            lateShownFor = late.itemId
-            val left = Duration.between(Instant.now(), item.startTime!!.toInstant()).toMinutes()
-            AppLog.notice(
-                LogCategory.LIVE, LogEvent.LIVE_RUNNING_LATE, "Running late: ${late.state}",
-                mapOf("item_id" to late.itemId, "minutes_left" to left, "walk_min" to late.walkMinutes, "action" to "shown"),
-            )
+    private fun post(bundle: EventBundle, state: LiveState) {
+        var failure: Pair<String, Throwable?>? = null
+        val posted = try {
+            LiveNotifications.showLive(appContext, bundle, state).also { if (!it) failure = PerfMetric.LIVE_DENIED to null }
+        } catch (e: RuntimeException) {
+            failure = PerfMetric.LIVE_ERROR to e
+            false
         }
-        return state.copy(
-            title = late.text,
-            text = listOfNotNull(EventTime.formatTimeRange(item.startTime, item.endTime, bundle.event.zone), bundle.location(item.locationId)?.name).joinToString(" · "),
-            chip = if (late.state == LateState.LEAVE_NOW) "Leave" else state.chip,
-            focus = item,
+        // Posted, but the user turned Live Updates (promoted notifications) off for the app.
+        if (posted && !LiveNotifications.canPromote(appContext)) failure = PerfMetric.LIVE_DISABLED to null
+        failure?.let { (reason, error) ->
+            if (!failCounted) {
+                failCounted = true
+                perf?.record(PerfMetric.LIVE_START_FAIL, reason)
+                AppLog.warning(
+                    LogCategory.LIVE, LogEvent.LIVE_START_FAILED, "Live Update can't start ($reason)",
+                    mapOf("reason" to reason, "domain" to error?.javaClass?.simpleName),
+                )
+            }
+        }
+        val fields = mapOf("mode" to state.mode, "source" to state.source, "items" to state.segments.count { it.isItem })
+        when {
+            !posted -> liveShown = false
+            !liveShown -> AppLog.notice(LogCategory.LIVE, LogEvent.LIVE_START, "Live Update started (${state.mode})", fields)
+            else -> AppLog.debug(LogCategory.LIVE, LogEvent.LIVE_UPDATE, "Live Update (${state.mode})", mapOf("mode" to state.mode))
+        }
+        if (posted) {
+            liveShown = true
+            if (failure == null) failCounted = false
+        }
+    }
+
+    /** "Leave now" (assistant spec §6, [LiveFollow.decorate]): logged once per item. */
+    private fun logRunningLate(late: RunningLate, bundle: EventBundle) {
+        if (lateShownFor == late.itemId) return
+        lateShownFor = late.itemId
+        val item = bundle.scheduleItem(late.itemId) ?: return
+        val left = item.startTime?.let { Duration.between(Instant.now(), it.toInstant()).toMinutes() }
+        AppLog.notice(
+            LogCategory.LIVE, LogEvent.LIVE_RUNNING_LATE, "Running late: ${late.state}",
+            mapOf("item_id" to late.itemId, "minutes_left" to left, "walk_min" to late.walkMinutes, "action" to "shown"),
         )
     }
 
@@ -207,15 +239,6 @@ class LiveUpdateController(
         if (meters <= LiveAssist.THERE_METERS || !Walking.isNearby(meters)) return null
         val walk = Walking.minutes(Walking.estimateSeconds(meters))
         return next.startTime!!.toInstant().minus(Duration.ofMinutes(walk + Planner.BUFFER_MINUTES)).takeIf { it.isAfter(now) }
-    }
-
-    /** The urgent block: the newest of the last urgent push and the bundle's urgent updates. */
-    private fun urgentBlock(bundle: EventBundle, eventId: Int): UrgentBlock? {
-        val fromBundle = bundle.notifications.filter { it.isUrgent && it.sendTime != null }
-            .maxByOrNull { it.sendTime!! }
-            ?.let { UrgentBlock(it.id, it.title, it.body, it.sendTime!!.toInstant()) }
-        val fromPush = plans.urgent(eventId)
-        return listOfNotNull(fromBundle, fromPush).maxByOrNull { it.sentAt }
     }
 
     private fun cancelLive(reason: String) {
@@ -304,5 +327,8 @@ class LiveUpdateController(
 
         /** A reminder is shown when its time is at most this far ahead (alarms are inexact). */
         val REMINDER_EARLY: Duration = Duration.ofMinutes(5)
+
+        /** …or passed at most this long ago (a late alarm), while its entry hasn't started. */
+        val REMINDER_LATE: Duration = Duration.ofMinutes(15)
     }
 }

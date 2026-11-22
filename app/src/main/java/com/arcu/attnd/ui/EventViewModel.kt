@@ -680,6 +680,8 @@ class EventViewModel(
      */
     suspend fun foregroundSync() {
         startJob.join()
+        // In the foreground the Live Update posts at once, even for a day ahead (iOS "starts on join").
+        liveUpdates.requestRefresh()
         if (pendingAppOpen) {
             pendingAppOpen = false
             track(UsageMetric.APP_OPEN)
