@@ -144,7 +144,7 @@ class LiveUpdateController(
                 failure = PerfMetric.LIVE_ERROR to e
                 false
             }
-            // Android 16+: posted, but the user turned Live Updates (promoted notifications) off for the app.
+            // Posted, but the user turned Live Updates (promoted notifications) off for the app.
             if (posted && !LiveNotifications.canPromote(appContext)) failure = PerfMetric.LIVE_DISABLED to null
             failure?.let { (reason, error) ->
                 if (!failCounted) {

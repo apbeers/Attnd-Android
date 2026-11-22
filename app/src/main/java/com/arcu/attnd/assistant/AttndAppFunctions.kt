@@ -2,7 +2,6 @@ package com.arcu.attnd.assistant
 
 import android.app.PendingIntent
 import android.content.Context
-import androidx.annotation.RequiresApi
 import androidx.appfunctions.AppFunctionDeclaration
 import androidx.appfunctions.AppFunctionElementNotFoundException
 import androidx.appfunctions.AppFunctionInvalidArgumentException
@@ -67,14 +66,13 @@ data class AttndEventItem(
 )
 
 /**
- * AppFunctions (Android 16+) that let assistants such as Gemini answer questions about the event the
+ * AppFunctions that let assistants such as Gemini answer questions about the event the
  * user joined in Attnd, from the copy stored on the phone (works offline; nothing is sent to Attnd's
  * servers). The KSP compiler generates `AttndAppFunctionService` and `assets/attnd_app_functions.xml`.
  *
  * All times are in the event's own time zone. Each result has an `openInApp` intent that opens that
  * item in the app.
  */
-@RequiresApi(36)
 @AppFunctionServiceEntryPoint(
     serviceName = "AttndAppFunctionService",
     appFunctionXmlFileName = "attnd_app_functions",

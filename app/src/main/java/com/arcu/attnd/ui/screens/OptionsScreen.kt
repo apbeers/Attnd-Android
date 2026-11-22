@@ -5,7 +5,6 @@ package com.arcu.attnd.ui.screens
 import android.Manifest
 import android.content.ClipData
 import android.content.Intent
-import android.os.Build
 import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -129,9 +128,8 @@ fun OptionsScreen(
         if (granted) onFollowLiveChange(true)
     }
     val liveOn = followLive && PushNotifications.hasPermission(context)
-    // Android 16+: the user can turn Live Updates (promoted notifications) off for the app.
-    val promotedOff = Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA &&
-        !NotificationManagerCompat.from(context).canPostPromotedNotifications()
+    // The user can turn Live Updates (promoted notifications) off for the app.
+    val promotedOff = !NotificationManagerCompat.from(context).canPostPromotedNotifications()
 
     // The switch reflects both the preference and the system permission (which can be revoked).
     val pushOn = notificationsEnabled && PushNotifications.hasPermission(context)
@@ -206,7 +204,6 @@ fun OptionsScreen(
                                 }
                             )
                             if (liveOn && promotedOff) {
-                                // promotedOff implies Android 16+ (lint follows the SDK_INT check).
                                 TextButton(onClick = {
                                     context.startActivity(
                                         Intent(Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS)

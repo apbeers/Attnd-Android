@@ -6,7 +6,6 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.arcu.attnd.R
@@ -30,9 +29,7 @@ import com.arcu.attnd.push.PushNotifications
  * The Live Update is an Android 16 **promoted ongoing notification** ("Live Update"): ongoing, a content
  * title, `ProgressStyle` (or `BigTextStyle` in urgent mode), `setRequestPromotedOngoing(true)` and the
  * status-bar chip text via `setShortCriticalText`, on a channel that isn't IMPORTANCE_MIN, never
- * colorized or custom, with `POST_PROMOTED_NOTIFICATIONS` in the manifest. Below Android 16,
- * NotificationCompat posts the same notification as a normal ongoing one (progress bar, no chip).
- * The user can turn promotion off in system settings (`canPostPromotedNotifications()`); it then shows
+ * colorized or custom, with `POST_PROMOTED_NOTIFICATIONS` in the manifest. The user can turn promotion off in system settings (`canPostPromotedNotifications()`); it then shows
  * as a normal ongoing notification.
  */
 object LiveNotifications {
@@ -152,9 +149,9 @@ object LiveNotifications {
         return style
     }
 
-    /** Live Updates may be promoted (Android 16+ lets the user turn that off per app). */
+    /** Live Updates may be promoted (the user can turn that off per app). */
     fun canPromote(context: Context): Boolean =
-        Build.VERSION.SDK_INT < Build.VERSION_CODES.BAKLAVA || NotificationManagerCompat.from(context).canPostPromotedNotifications()
+        NotificationManagerCompat.from(context).canPostPromotedNotifications()
 
     fun cancelLive(context: Context) {
         NotificationManagerCompat.from(context).cancel(LIVE_NOTIFICATION_ID)

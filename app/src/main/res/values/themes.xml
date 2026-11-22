@@ -1,5 +1,5 @@
 <resources>
-    <!-- Window theme only; all UI is Compose (see ui/theme). Edge-to-edge is always on (API 35+). -->
+    <!-- Window theme only; all UI is Compose (see ui/theme). Edge-to-edge is always on (API 35+, minSdk 36). -->
     <style name="Theme.Attnd" parent="android:Theme.Material.Light.NoActionBar" />
 
     <style name="Theme.App.Starting" parent="Theme.SplashScreen">
