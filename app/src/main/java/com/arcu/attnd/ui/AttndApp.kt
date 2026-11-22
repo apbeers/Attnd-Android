@@ -32,8 +32,11 @@ import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import com.arcu.attnd.domain.SecondaryPane
+import com.arcu.attnd.ui.components.PaneSnackbarHost
+import com.arcu.attnd.ui.components.TouchTracker
+import com.arcu.attnd.ui.components.trackTouches
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
@@ -257,6 +260,8 @@ private val EventTab.navIcon: ImageVector
 private fun EventShell(state: AppUiState, bundle: EventBundle, viewModel: EventViewModel) {
     val tabs = state.tabs
     val snackbar = remember { SnackbarHostState() }
+    // The Undo toast stays in the pane that was tapped (unfolded foldables, iOS `UndoToastPane`).
+    val touches = remember { TouchTracker() }
     val tabStates = rememberSaveableStateHolder()
 
     // Undo for a change made with one tap (Home's urgent card swiped away).
@@ -379,7 +384,11 @@ private fun EventShell(state: AppUiState, bundle: EventBundle, viewModel: EventV
                     )
                 }
             },
-            snackbarHost = { SnackbarHost(snackbar) },
+            snackbarHost = {
+                // The map trails its pane on the Map tab, so it is the primary pane there.
+                val mapTrails = selected == EventTab.MAP && bundle.display.secondaryPane != SecondaryPane.NONE
+                PaneSnackbarHost(snackbar, touches, primaryIsTrailing = mapTrails)
+            },
             floatingActionButton = { if (fabInScaffold) SearchFab(onClick = onFab, plan = planButton) },
             contentWindowInsets = contentInsets,
         ) { padding ->
@@ -387,7 +396,8 @@ private fun EventShell(state: AppUiState, bundle: EventBundle, viewModel: EventV
                 Modifier
                     .fillMaxSize()
                     .padding(padding)
-                    .consumeWindowInsets(padding),
+                    .consumeWindowInsets(padding)
+                    .trackTouches(touches),
             ) {
                 // Running late (assistant spec §6) on every tab.
                 assistantState.live.runningLate?.takeIf { !state.isScreenshot }?.let { late ->

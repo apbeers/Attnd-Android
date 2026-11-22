@@ -707,7 +707,7 @@ Phase 0 (toolchain and dependencies, minSdk 36) runs elsewhere. When it lands, p
   `preview=` / `preview_token=`. Tests: `PreviewPhoneTest` (iOS's `testPreviewPoll` / `testPreviewToken_LinksAndJoinBody`
   cases + Android's).
 
-**Phase 10a — Foldables: continuity + layouts (M)**
+**Phase 10a — Foldables: continuity + layouts (M)** — ✅ done (Nov 22, 2026)
 - **Scope:**
   - `configChanges`;
   - one map instance; pane leads, map trails;
@@ -720,6 +720,22 @@ Phase 0 (toolchain and dependencies, minSdk 36) runs elsewhere. When it lands, p
 - **Files:** manifest, `ui/MapTab.kt`, `MapScreen.kt`, `HomeScreen.kt`, the detail screens,
   `ui/components/FoldAwareSplit.kt`, `domain/FoldRules.kt`.
 - **Tests:** `FoldRules`, `HomeColumnWidths`, `DetailColumns`, `TabletopSplit` (from 5a), `splitAt`.
+- **Built:** `configChanges` on `MainActivity` (no size qualifiers exist; noted in `CLAUDE.md`); `MapTab` as one
+  custom `Layout` with the optional pane in slot 1 and `EventMap` always in slot 2 (pane leads, map trails, on the
+  hinge via `MapPaneLayout`; tabletop map top / pane bottom via `FoldSplit`), so one `GoogleMap` survives every
+  posture. The **stable-slot layout was chosen over `movableContentOf`**: it needs no special API, and with
+  `configChanges` the composition itself survives a fold; neither could be checked on a hinge here. `MapUiState`
+  (saveable: selected pin, category, Liked; a pane tap selects and centres the pin). `FoldAwareBox` (window hinges
+  → the container's `FoldPosture`); Home's columns meet at the reported vertical hinge, the tabletop glance on the
+  top half (`TabletopGlanceView`, `TabletopGlance`: event, clock, urgent, Now + progress, Next + live countdown) and
+  the rest below; Home's top section kept by key across one column / two columns / tabletop. Detail columns on the
+  hinge (24 dp each side), one readable ≤ 680 dp column otherwise. `PaneSnackbarHost` + `trackTouches`: the Undo
+  toast in the tapped pane (else the primary: the map on the Map tab). Pure: `FoldPosture`, `FoldSplit`
+  (`FoldAwareSplit.splitAt` moved), `MapPaneLayout` in `FoldRules.kt`; `UndoToastPane`, `TabletopGlance` in
+  `FoldFeatures.kt` (phase 10b extends it). Tests: `FoldRulesTest` (iOS `testFoldPosture`,
+  `testUndoToastStaysInOnePane`, the two tabletop glance tests, + Android hinge / split / pane cases).
+  **Deferred to 10b:** At the Event mode + offer card, linked panes (schedule pane → pin), and everything else
+  listed there; the schedule pane's taps still open the item's detail.
 
 **Phase 10b — Foldables: differentiated features (L)**
 - **Scope:**

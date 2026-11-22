@@ -5,18 +5,20 @@ package com.arcu.attnd.ui.screens
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -41,6 +43,7 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -50,6 +53,8 @@ import com.arcu.attnd.AttndApplication
 import com.arcu.attnd.domain.AboutText
 import com.arcu.attnd.domain.ContextFacts
 import com.arcu.attnd.domain.DetailColumns
+import com.arcu.attnd.domain.FoldPosture
+import com.arcu.attnd.domain.HomeColumnWidths
 import com.arcu.attnd.domain.EventBundle
 import com.arcu.attnd.domain.EventLocation
 import com.arcu.attnd.domain.EventTime
@@ -69,6 +74,7 @@ import com.arcu.attnd.domain.Walking
 import com.arcu.attnd.ui.assistant.AssistantIntents
 import com.arcu.attnd.ui.assistant.MiniMap
 import com.arcu.attnd.ui.assistant.MiniPin
+import com.arcu.attnd.ui.components.FoldAwareBox
 import com.arcu.attnd.ui.components.DistanceArrow
 import com.arcu.attnd.ui.components.HeartButton
 import com.arcu.attnd.ui.components.LiveDot
@@ -124,21 +130,35 @@ fun LocationDetail(
     }
 }
 
-/** A detail screen's sections in one scrolling column, or two from a 700 dp container (iOS `DetailColumns`). */
+/**
+ * A detail screen's sections (iOS `DetailColumns`): from a 700 dp container with enough to fill them, two columns
+ * from the same top with equal margins that meet at the reported vertical hinge (24 dp each side of it, else
+ * 48 dp apart in the middle; [HomeColumnWidths]); otherwise one readable column, centred and at most 680 dp wide
+ * on a wide window. Each column scrolls on its own; this container and its fold decide, never the device.
+ */
 @Composable
 fun DetailSections(sections: List<LayoutSection>, screen: LayoutScreen, section: @Composable (LayoutSection) -> Unit) {
-    BoxWithConstraints(Modifier.fillMaxSize()) {
-        val split = DetailColumns.split(sections, screen, maxWidth.value.toDouble())
+    FoldAwareBox(Modifier.fillMaxSize()) { fold ->
+        val width = maxWidth.value.toDouble()
+        val split = DetailColumns.split(sections, screen, width)
         if (split == null) {
             Column(
-                Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 88.dp),
+                Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .wrapContentWidth(Alignment.CenterHorizontally)
+                    .widthIn(max = if (width >= DetailColumns.MIN_WIDTH) READABLE_WIDTH else Dp.Unspecified)
+                    .padding(bottom = 88.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) { sections.forEach { section(it) } }
         } else {
-            Row(Modifier.fillMaxSize().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(32.dp)) {
-                listOf(split.leading, split.trailing).forEach { column ->
+            val book = fold as? FoldPosture.Book
+            val widths = HomeColumnWidths.of(width, margin = 8.0, gutter = 24.0, foldMinX = book?.foldMinX, foldMaxX = book?.foldMaxX)
+            Row(Modifier.fillMaxSize().padding(horizontal = 8.dp)) {
+                listOf(split.leading to widths.leading, split.trailing to widths.trailing).forEachIndexed { index, (column, columnWidth) ->
+                    if (index == 1) Spacer(Modifier.width(widths.gap.dp))
                     Column(
-                        Modifier.weight(1f).fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 88.dp),
+                        Modifier.width(columnWidth.dp).fillMaxHeight().verticalScroll(rememberScrollState()).padding(bottom = 88.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) { column.forEach { section(it) } }
                 }
@@ -146,6 +166,9 @@ fun DetailSections(sections: List<LayoutSection>, screen: LayoutScreen, section:
         }
     }
 }
+
+/** One readable column on a wide window (iOS 680 pt). */
+private val READABLE_WIDTH = 680.dp
 
 private val SectionPadding = Modifier.padding(horizontal = 16.dp)
 

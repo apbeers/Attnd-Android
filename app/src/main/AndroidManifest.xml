@@ -40,9 +40,14 @@
             android:name="com.google.firebase.messaging.default_notification_color"
             android:resource="@color/attnd_primary" />
 
-        <!-- No orientation lock: the app resizes freely (folded, unfolded, tabletop, rotated). -->
+        <!-- No orientation lock: the app resizes freely (folded, unfolded, tabletop, rotated).
+             configChanges: a fold / unfold / rotation is a resize handled by Compose, not a new activity, so
+             the map (one MapView), scroll positions, sheets and selections survive it (phase 10a). There are
+             no size or orientation resource qualifiers (only values-night); uiMode stays out so a dark-mode
+             switch still recreates and reloads resources. A future values-w600dp would NOT apply on resize. -->
         <activity
             android:name=".MainActivity"
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|density|keyboardHidden"
             android:exported="true"
             android:launchMode="singleTask"
             android:theme="@style/Theme.App.Starting">

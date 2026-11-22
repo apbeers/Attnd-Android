@@ -83,7 +83,9 @@ import com.arcu.attnd.domain.LogLevel
 import com.arcu.attnd.domain.NowPlaying
 import com.arcu.attnd.domain.LayoutScreen
 import com.arcu.attnd.domain.ScreenFacts
+import com.arcu.attnd.ui.MapUiState
 import com.arcu.attnd.ui.components.rememberSections
+import com.arcu.attnd.ui.rememberMapUiState
 import com.arcu.attnd.domain.PerfMetric
 import com.arcu.attnd.domain.SearchKind
 import com.arcu.attnd.domain.WalkRoute
@@ -171,6 +173,8 @@ fun EventMap(
     /** One-shot: select this location ("Show on map"). */
     focusLocationId: Int? = null,
     onFocusConsumed: () -> Unit = {},
+    /** The selection and chips (owned by the Map tab so they outlive a fold / unfold). */
+    ui: MapUiState = rememberMapUiState(),
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
@@ -182,9 +186,10 @@ fun EventMap(
     // Store screenshots: plain pins, no Now playing strip (and no location tracking, see LocalScreenshotMode).
     val glance = !LocalScreenshotMode.current
 
-    var selectedCategory by rememberSaveable { mutableStateOf<String?>(null) }
-    var heartedOnly by rememberSaveable { mutableStateOf(false) }
-    var selectedId by rememberSaveable { mutableStateOf<Int?>(null) }
+    // Hoisted (MapUiState): the selection and chips outlive a fold / unfold and the pane can pick the pin.
+    var selectedCategory by ui::selectedCategory
+    var heartedOnly by ui::heartedOnly
+    var selectedId by ui::selectedLocationId
     val categories = remember(bundle.locations, bundle.categories) {
         LocationGrouping.availableCategories(bundle.locations, bundle.categories)
     }
