@@ -55,6 +55,18 @@ class DevicePrefs(context: Context) {
         get() = prefs.getBoolean(KEY_SHOW_LOCATION, false)
         set(value) = prefs.edit { putBoolean(KEY_SHOW_LOCATION, value) }
 
+    /**
+     * Events left while `POST leave/` couldn't be sent (offline, server down). Kept until the server
+     * accepted it (it only detaches the device from that event, so a late leave never affects a newer
+     * join); rejoining the event drops it.
+     */
+    var pendingLeaves: Set<Int>
+        get() = prefs.getString(KEY_PENDING_LEAVES, null).orEmpty()
+            .split(',').mapNotNullTo(LinkedHashSet()) { it.trim().toIntOrNull() }
+        set(value) = prefs.edit {
+            if (value.isEmpty()) remove(KEY_PENDING_LEAVES) else putString(KEY_PENDING_LEAVES, value.joinToString(","))
+        }
+
     /** Whether the Play install referrer has been checked (only done once per install). */
     var installReferrerChecked: Boolean
         get() = prefs.getBoolean(KEY_REFERRER_CHECKED, false)
@@ -183,6 +195,7 @@ class DevicePrefs(context: Context) {
         private const val KEY_NOTIFICATIONS = "notifications_enabled"
         private const val KEY_SHOW_LOCATION = "show_user_location"
         private const val KEY_REFERRER_CHECKED = "install_referrer_checked"
+        private const val KEY_PENDING_LEAVES = "pending_leaves"
         private const val KEY_HEARTS = "hearts_"
         private const val KEY_UPDATES_SEEN = "updates_seen_"
         private const val KEY_UPDATE_BANNER = "update_banner_dismissed_"

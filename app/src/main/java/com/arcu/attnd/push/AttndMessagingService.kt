@@ -4,6 +4,7 @@ import android.os.SystemClock
 import com.arcu.attnd.AttndApplication
 import com.arcu.attnd.data.RefreshResult
 import com.arcu.attnd.domain.AppLog
+import com.arcu.attnd.domain.LiveUpdates
 import com.arcu.attnd.domain.LogCategory
 import com.arcu.attnd.domain.LogEvent
 import com.arcu.attnd.domain.PerfMetric
@@ -66,7 +67,7 @@ class AttndMessagingService : FirebaseMessagingService() {
                 val version = data[PushNotifications.KEY_CONTENT_VERSION]?.trim()?.toIntOrNull()
                 if (isForCurrentEvent) {
                     graph.appScope.launch {
-                        val result = repository.onContentUpdated(version)
+                        val result = repository.onContentUpdated(version, LiveUpdates.pushJitterMs(data[PushNotifications.KEY_JITTER_MS]))
                         // API-014: how long a content change took to reach the screen from the push.
                         if (result == RefreshResult.Updated) {
                             graph.perf.record(PerfMetric.PUSH_REFRESH_DELAY, PerfMetric.pushDelayBucket(SystemClock.elapsedRealtime() - received))

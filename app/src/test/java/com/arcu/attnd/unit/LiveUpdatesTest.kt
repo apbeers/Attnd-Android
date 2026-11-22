@@ -20,6 +20,67 @@ class LiveUpdatesTest {
     }
 
     @Test
+    fun pollInterval_fifteenSecondsAfterAFailedRefresh() {
+        // iOS LiveRefreshPolicy: 15 s while the last refresh failed, with or without push.
+        assertEquals(15_000L, LiveUpdates.pollIntervalMs(hasPushToken = true, lastRefreshFailed = true))
+        assertEquals(15_000L, LiveUpdates.pollIntervalMs(hasPushToken = false, lastRefreshFailed = true))
+        assertEquals(5 * 60_000L, LiveUpdates.pollIntervalMs(hasPushToken = true, lastRefreshFailed = false))
+    }
+
+    @Test
+    fun appStatus_oncePerLaunchThenAtMostHourly() {
+        val now = 10_000_000L
+        assertTrue(LiveUpdates.shouldCheckAppStatus(lastCheckedAt = null, now = now))
+        assertFalse(LiveUpdates.shouldCheckAppStatus(lastCheckedAt = now - 73_000L, now = now))
+        assertFalse(LiveUpdates.shouldCheckAppStatus(lastCheckedAt = now - 3_599_999L, now = now))
+        assertTrue(LiveUpdates.shouldCheckAppStatus(lastCheckedAt = now - 3_600_000L, now = now))
+        assertTrue("a clock set back asks again", LiveUpdates.shouldCheckAppStatus(lastCheckedAt = now + 60_000L, now = now))
+    }
+
+    @Test
+    fun recentFetch_skipsForegroundAndPollsOnly() {
+        val now = 1_000_000L
+        assertTrue(LiveUpdates.skipsRecentFetch("foreground", lastFetchAt = now - 14_999L, now = now))
+        assertTrue(LiveUpdates.skipsRecentFetch("poll", lastFetchAt = now - 1_000L, now = now))
+        assertFalse(LiveUpdates.skipsRecentFetch("poll", lastFetchAt = now - 15_000L, now = now))
+        assertFalse(LiveUpdates.skipsRecentFetch("foreground", lastFetchAt = null, now = now))
+        for (source in listOf("push", "pull", "join")) {
+            assertFalse(source, LiveUpdates.skipsRecentFetch(source, lastFetchAt = now - 1_000L, now = now))
+        }
+    }
+
+    @Test
+    fun deviceRegistration_onlyWhenSomethingChanged() {
+        val key = LiveUpdates.deviceRegistrationKey("ff00", subscribed = true, eventId = 4)
+        assertEquals(key, LiveUpdates.deviceRegistrationKey("ff00", subscribed = true, eventId = 4))
+        assertFalse(LiveUpdates.shouldRegisterDevice(key, lastAccepted = key))
+        assertTrue("never accepted, or the last one failed", LiveUpdates.shouldRegisterDevice(key, lastAccepted = null))
+        assertTrue(LiveUpdates.shouldRegisterDevice(LiveUpdates.deviceRegistrationKey("ee11", true, 4), key))
+        assertTrue(LiveUpdates.shouldRegisterDevice(LiveUpdates.deviceRegistrationKey("ff00", false, 4), key))
+        assertTrue(LiveUpdates.shouldRegisterDevice(LiveUpdates.deviceRegistrationKey("ff00", true, null), key))
+        // No token and a blank token are the same request (the key is left out, never sent empty).
+        assertEquals(LiveUpdates.deviceRegistrationKey(null, false, null), LiveUpdates.deviceRegistrationKey(" ", false, null))
+    }
+
+    @Test
+    fun contentUpdatedJitter() {
+        // API-026, iOS testContentUpdatedJitter: FCM data values are strings.
+        assertEquals(1_000L, LiveUpdates.pushJitterMs("1000"))
+        assertEquals(0L, LiveUpdates.pushJitterMs("0"))
+        assertEquals(60_000L, LiveUpdates.pushJitterMs("999999"))
+        assertEquals(0L, LiveUpdates.pushJitterMs("-5"))
+        assertEquals(null, LiveUpdates.pushJitterMs(null))
+        assertEquals(null, LiveUpdates.pushJitterMs("soon"))
+        assertEquals(0L, LiveUpdates.pushRefreshDelayMs(maxMs = 0L))
+        val random = Random(3)
+        repeat(500) {
+            assertTrue(LiveUpdates.pushRefreshDelayMs(maxMs = 1_000L, random = random) in 0L..1_000L)
+            assertTrue(LiveUpdates.pushRefreshDelayMs(maxMs = null, random = random) in 0L..10_000L)
+            assertTrue(LiveUpdates.pushRefreshDelayMs(maxMs = 999_999L, random = random) in 0L..60_000L)
+        }
+    }
+
+    @Test
     fun offlineNotice_afterFirstFailedPoll_atTheseIntervals() {
         assertEquals(1, LiveUpdates.failuresBeforeOfflineNotice(LiveUpdates.pollIntervalMs(true)))
         assertEquals(1, LiveUpdates.failuresBeforeOfflineNotice(LiveUpdates.pollIntervalMs(false)))
@@ -39,7 +100,7 @@ class LiveUpdatesTest {
     fun pushRefreshDelay_isZeroToTenSeconds() {
         val random = Random(7)
         repeat(1_000) {
-            assertTrue(LiveUpdates.pushRefreshDelayMs(random) in 0L..10_000L)
+            assertTrue(LiveUpdates.pushRefreshDelayMs(random = random) in 0L..10_000L)
         }
     }
 

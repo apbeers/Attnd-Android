@@ -622,7 +622,7 @@ class EventViewModel(
      * Runs while the activity is resumed: refresh now (the app came to the foreground), then poll
      * while an event is joined. API-007: live updates come from `content_updated` pushes, so the poll
      * is a safety net every 5 minutes, or every 60 s when the server has no push token for this
-     * device ([LiveUpdates.pollIntervalMs]). Polls are conditional GETs (usually `304`) and silent
+     * device, every 15 s while the last refresh failed ([LiveUpdates.pollIntervalMs]). Polls are conditional GETs (usually `304`) and silent
      * (no spinner); at these intervals one failed poll shows the offline notice
      * ([LiveUpdates.failuresBeforeOfflineNotice]). Cancelled automatically when the activity pauses.
      */
@@ -637,7 +637,7 @@ class EventViewModel(
         if (lastSync == null || System.currentTimeMillis() - lastSync > RESUME_DEBOUNCE_MS) repository.refresh()
         var lastInterval = 0L
         while (true) {
-            val interval = LiveUpdates.pollIntervalMs(repository.hasPushToken)
+            val interval = LiveUpdates.pollIntervalMs(repository.hasPushToken, repository.lastRefreshFailed)
             if (interval != lastInterval) {
                 lastInterval = interval
                 AppLog.trace(LogCategory.NET, LogEvent.POLL_SCHEDULED, "Safety poll every ${interval / 1000} s", mapOf("interval_s" to interval / 1000, "has_push_token" to repository.hasPushToken))

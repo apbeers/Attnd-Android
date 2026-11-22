@@ -93,7 +93,29 @@ class EventRepository(
     private val refreshMutex = Mutex()
 
     /** Failed refreshes since the last successful one; lets silent polls ride out a blip. */
+    @Volatile
     private var consecutiveFailures = 0
+
+    /** The last refresh failed (offline, server error): the foreground poll retries every 15 s. */
+    val lastRefreshFailed: Boolean get() = consecutiveFailures > 0
+
+    /** Event id and time of the last successful bundle fetch (200 or 304), for [LiveUpdates.skipsRecentFetch]. */
+    @Volatile
+    private var lastFetch: Pair<Int, Long>? = null
+
+    /** When `app-status/` was last asked this launch ([LiveUpdates.shouldCheckAppStatus]). */
+    @Volatile
+    private var lastAppStatusAt: Long? = null
+
+    /** [LiveUpdates.deviceRegistrationKey] of the last `POST devices/` the server accepted this launch; null after a failure. */
+    @Volatile
+    private var lastRegistrationKey: String? = null
+
+    /** The last `POST devices/` failed: sent again after the next successful refresh. */
+    @Volatile
+    private var deviceRegistrationPending = false
+
+    private val leaveMutex = Mutex()
 
     /**
      * The push token the server last accepted (`POST devices/` or join), or null. API-007: while it
@@ -119,8 +141,16 @@ class EventRepository(
         if (retired) update.copy(level = UpdateLevel.REQUIRED) else update
     }
 
-    /** Asks the server whether this build should update. Failures keep the last answer. */
+    /**
+     * Asks the server whether this build should update: once per launch, then at most hourly
+     * ([LiveUpdates.shouldCheckAppStatus]; a retired API version is caught by every call's 410
+     * anyway). Failures keep the last answer.
+     */
     suspend fun checkForUpdate() {
+        val now = System.currentTimeMillis()
+        if (!LiveUpdates.shouldCheckAppStatus(lastAppStatusAt, now)) return
+        lastAppStatusAt = now
+        val started = System.nanoTime()
         val status = withContext(io) {
             try {
                 api.appStatus(appVersion)
@@ -131,6 +161,10 @@ class EventRepository(
                 null
             }
         } ?: return
+        AppLog.debug(
+            LogCategory.NET, LogEvent.APP_STATUS, "app-status: ${status.update ?: "none"}",
+            mapOf("status" to (status.update ?: "none"), "ms" to (System.nanoTime() - started) / 1_000_000),
+        )
         val update = ApiMapper.appUpdate(status)
         if (update != _appUpdate.value) {
             AppLog.notice(
@@ -184,11 +218,14 @@ class EventRepository(
      */
     suspend fun join(event: Event, via: String = "search"): RefreshResult = withContext(io) {
         val previous = prefs.eventId
+        // Rejoining an event cancels a leave of it that is still queued.
+        prefs.pendingLeaves = prefs.pendingLeaves - event.id
         if (previous != null && previous != event.id) {
             usage?.flushNow()
             AppLog.notice(LogCategory.LIFECYCLE, LogEvent.EVENT_LEFT, "Left event $previous for another", mapOf("event_id" to previous, "reason" to "switch"))
-            // Leave the old event gracefully; failure must not block joining the new one.
-            runSuspendCatching { api.leave(previous, LeaveRequest(deviceId)) }
+            // Leave the old event gracefully: queued and sent once the new one is joined (later
+            // when offline); a failure never blocks joining the new one.
+            prefs.pendingLeaves = prefs.pendingLeaves + previous
         }
         val token = pushToken()
         api.join(event.id, JoinRequest(deviceId = deviceId, pushToken = token, appVersion = appVersion))
@@ -196,6 +233,7 @@ class EventRepository(
         if (previous != event.id) {
             clearLocal()
             prefs.eventId = event.id
+            sendPendingLeaves()
         }
         prefs.eventCode = event.eventCode
         AppLog.notice(
@@ -205,18 +243,56 @@ class EventRepository(
         refresh(source = "join")
     }
 
-    /** Leaves the current event. Local state is cleared even if the network call fails. */
+    /**
+     * Leaves the current event. Local state is cleared even if the network call fails: the
+     * `POST leave/` is queued ([DevicePrefs.pendingLeaves]) and sent now, then again at launch and
+     * after a successful refresh until the server has it, so a leave made offline still stops the
+     * event's pushes.
+     */
     suspend fun leave() {
         withContext(io) {
             val eventId = prefs.eventId
             if (eventId != null) usage?.flushNow()
             if (eventId != null) AppLog.notice(LogCategory.LIFECYCLE, LogEvent.EVENT_LEFT, "Left event $eventId", mapOf("event_id" to eventId, "reason" to "user"))
+            if (eventId != null) prefs.pendingLeaves = prefs.pendingLeaves + eventId
             clearLocal()
-            if (eventId != null) {
-                runSuspendCatching { api.leave(eventId, LeaveRequest(deviceId)) }
-            }
-            Unit
+            sendPendingLeaves()
         }
+    }
+
+    /**
+     * Sends the queued `POST leave/`s (never for the joined event). Each one the server
+     * accepted, or answered 404 / 400 (the event is gone or refuses it), is dropped; the first other
+     * failure (offline) stops the round and keeps the rest for the next one.
+     */
+    suspend fun sendPendingLeaves() {
+        withContext(io) {
+            if (!leaveMutex.tryLock()) return@withContext
+            try {
+                for (eventId in prefs.pendingLeaves) {
+                    if (eventId == prefs.eventId) continue
+                    val outcome = runSuspendCatching { api.leave(eventId, LeaveRequest(deviceId)) }
+                    val code = (outcome.exceptionOrNull() as? ApiException)?.code
+                    if (outcome.isSuccess || code == 404 || code == 400) {
+                        prefs.pendingLeaves = prefs.pendingLeaves - eventId
+                    } else {
+                        outcome.exceptionOrNull()?.let { AppLog.caught(LogCategory.NET, "leave", it, LogLevel.NOTICE, mapOf("pending" to prefs.pendingLeaves.size)) }
+                        break
+                    }
+                }
+            } finally {
+                leaveMutex.unlock()
+            }
+        }
+    }
+
+    /**
+     * Server work that failed offline, sent once the server answers again (after a successful
+     * bundle refresh): queued leaves and a device registration that didn't go through.
+     */
+    private suspend fun retryPendingServerWork() {
+        if (prefs.pendingLeaves.isNotEmpty()) sendPendingLeaves()
+        if (deviceRegistrationPending) registerDevice()
     }
 
     /**
@@ -228,7 +304,13 @@ class EventRepository(
      */
     suspend fun refresh(silent: Boolean = false, failuresBeforeError: Int = 1, source: String = "foreground"): RefreshResult = withContext(io) {
         val eventId = prefs.eventId ?: return@withContext RefreshResult.NoEvent
-        refreshMutex.withLock {
+        // Right after a fetch (a join's, say) a foreground or poll refresh adds nothing; pushes,
+        // pull to refresh and joins always go.
+        if (LiveUpdates.skipsRecentFetch(source, lastFetch?.takeIf { it.first == eventId }?.second, System.currentTimeMillis())) {
+            return@withContext RefreshResult.NotModified
+        }
+        val fetchedBefore = lastFetch
+        val outcome = refreshMutex.withLock {
             if (prefs.eventId != eventId) return@withLock RefreshResult.NotModified
             if (!silent) _sync.update { it.copy(isRefreshing = true) }
             val result = try {
@@ -246,15 +328,19 @@ class EventRepository(
             }
             result
         }
+        // The server answered (200 or 304): send what failed while it didn't.
+        if (lastFetch !== fetchedBefore && lastFetch?.first == eventId) retryPendingServerWork()
+        outcome
     }
 
     /**
      * API-007: a `content_updated` push for the joined event. Refreshes silently, after a random
-     * 0–10 s delay (every device in the event gets the push at once), unless the bundle is already
+     * delay (every device in the event gets the push at once: 0…[jitterMs] when the push sent
+     * API-026 `jitter_ms`, else 0–10 s), unless the bundle is already
      * at [pushVersion] or newer. Works with the app in the background too: restores the saved
      * bundle first when the push started the process.
      */
-    suspend fun onContentUpdated(pushVersion: Int?): RefreshResult? {
+    suspend fun onContentUpdated(pushVersion: Int?, jitterMs: Long? = null): RefreshResult? {
         val started = System.nanoTime()
         restore()
         val shown = _bundle.value?.contentVersion
@@ -265,7 +351,7 @@ class EventRepository(
             )
             return null
         }
-        val wait = LiveUpdates.pushRefreshDelayMs()
+        val wait = LiveUpdates.pushRefreshDelayMs(jitterMs)
         AppLog.info(
             LogCategory.BACKGROUND, LogEvent.REFRESH_STARTED, "Refreshing for content_updated $pushVersion in $wait ms",
             mapOf("task" to "bundle", "reason" to "silent_push"),
@@ -302,6 +388,10 @@ class EventRepository(
      */
     suspend fun registerDevice(): Boolean = withContext(io) {
         val token = pushToken()
+        // Only when something changed since the last registration the server accepted this launch
+        // (or it failed): iOS's network tidy-ups.
+        val key = LiveUpdates.deviceRegistrationKey(token, prefs.notificationsEnabled, prefs.eventId)
+        if (!LiveUpdates.shouldRegisterDevice(key, lastRegistrationKey)) return@withContext true
         val request = DeviceRequest(
             deviceId = deviceId,
             pushToken = token,
@@ -324,6 +414,8 @@ class EventRepository(
             // The server still has the old token, which FCM has replaced: don't count on pushes.
             token != registeredToken -> registeredToken = null
         }
+        lastRegistrationKey = key.takeIf { ok }
+        deviceRegistrationPending = !ok
         ok
     }
 
@@ -353,7 +445,7 @@ class EventRepository(
                     LogCategory.NET, LogEvent.BUNDLE_NOT_MODIFIED, "Bundle unchanged",
                     mapOf("content_version" to _bundle.value?.contentVersion, "source" to source),
                 )
-                markSynced()
+                markSynced(eventId)
                 // Retries images an earlier pass couldn't get (a no-op once they're all on disk).
                 _bundle.value?.let { prefetchImages(it) }
                 RefreshResult.NotModified
@@ -376,7 +468,7 @@ class EventRepository(
                                 "locations" to parsed.locations.size, "items" to parsed.schedule.size, "notifications" to parsed.notifications.size,
                             ),
                         )
-                        markSynced()
+                        markSynced(eventId)
                         prefetchImages(parsed)
                         RefreshResult.Updated
                     }
@@ -392,9 +484,10 @@ class EventRepository(
         }
     }
 
-    private fun markSynced() {
+    private fun markSynced(eventId: Int) {
         if (_sync.value.error != null) AppLog.notice(LogCategory.NET, LogEvent.OFFLINE_NOTICE, "Back online", mapOf("shown" to false, "failures" to consecutiveFailures))
         val now = System.currentTimeMillis()
+        lastFetch = eventId to now
         prefs.lastSyncedAt = now
         consecutiveFailures = 0
         _sync.update { it.copy(lastSyncedAt = now, error = null, offline = false) }
@@ -419,6 +512,7 @@ class EventRepository(
         images?.clear()
         _bundle.value = null
         consecutiveFailures = 0
+        lastFetch = null
         _sync.value = SyncState()
     }
 

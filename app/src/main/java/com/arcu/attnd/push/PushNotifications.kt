@@ -36,6 +36,8 @@ object PushNotifications {
     const val KEY_EVENT_ID = "event_id"
     const val KEY_NOTIFICATION_ID = "notification_id"
     const val KEY_CONTENT_VERSION = "content_version"
+    /** API-026: the longest random wait before refetching, in ms (0 on a preview phone). */
+    const val KEY_JITTER_MS = "jitter_ms"
     const val KEY_PRIORITY = "priority"
     const val KEY_TITLE = "title"
     const val KEY_BODY = "body"

@@ -19,11 +19,55 @@ object LiveUpdates {
     /** Poll while resumed when there is no registered push token (no Firebase, no Play services, token fetch failed). */
     const val NO_PUSH_POLL_INTERVAL_MS = 60 * 1000L
 
+    /** Poll while resumed after a failed refresh (offline, server down), whatever the push state. */
+    const val AFTER_FAILURE_POLL_INTERVAL_MS = 15 * 1000L
+
     /** Pushes reach every device in the event at about the same time; spread the refreshes over this window. */
     const val MAX_PUSH_REFRESH_JITTER_MS = 10_000L
 
-    fun pollIntervalMs(hasPushToken: Boolean): Long =
-        if (hasPushToken) SAFETY_POLL_INTERVAL_MS else NO_PUSH_POLL_INTERVAL_MS
+    /** API-026: the largest `jitter_ms` a push may ask for. */
+    const val MAX_PUSH_JITTER_CAP_MS = 60_000L
+
+    /** `GET app-status/` once per launch, then at most this often on foreground (iOS network tidy-ups). */
+    const val APP_STATUS_INTERVAL_MS = 60 * 60 * 1000L
+
+    /** A foreground or poll refresh this soon after a successful fetch adds nothing and is skipped. */
+    const val RECENT_FETCH_SKIP_MS = 15 * 1000L
+
+    /** The refresh sources that skip within [RECENT_FETCH_SKIP_MS]; pushes, pull to refresh and joins always go. */
+    val SKIPPABLE_SOURCES: Set<String> = setOf("foreground", "poll")
+
+    /**
+     * 5 min with a registered push token, 60 s without; [AFTER_FAILURE_POLL_INTERVAL_MS] while the
+     * last refresh failed, so the app notices quickly when the server answers again.
+     */
+    fun pollIntervalMs(hasPushToken: Boolean, lastRefreshFailed: Boolean = false): Long = when {
+        lastRefreshFailed -> AFTER_FAILURE_POLL_INTERVAL_MS
+        hasPushToken -> SAFETY_POLL_INTERVAL_MS
+        else -> NO_PUSH_POLL_INTERVAL_MS
+    }
+
+    /** Whether to ask `app-status/` now: never asked this launch, or [APP_STATUS_INTERVAL_MS] since the last time. */
+    fun shouldCheckAppStatus(lastCheckedAt: Long?, now: Long): Boolean =
+        lastCheckedAt == null || now - lastCheckedAt !in 0 until APP_STATUS_INTERVAL_MS
+
+    /**
+     * Whether a bundle refresh from [source] can be skipped: a foreground or poll refresh within
+     * [RECENT_FETCH_SKIP_MS] of a successful fetch (200 or 304) of the same event.
+     */
+    fun skipsRecentFetch(source: String, lastFetchAt: Long?, now: Long): Boolean =
+        source in SKIPPABLE_SOURCES && lastFetchAt != null && now - lastFetchAt in 0 until RECENT_FETCH_SKIP_MS
+
+    /** What `POST devices/` tells the server; it is only sent again when this changes (or the last one failed). */
+    fun deviceRegistrationKey(pushToken: String?, subscribed: Boolean, eventId: Int?): String =
+        "${pushToken?.takeIf { it.isNotBlank() } ?: "-"}|$subscribed|${eventId ?: 0}"
+
+    /** [lastAccepted] = the key of the last registration the server accepted this launch (null: none, or it failed). */
+    fun shouldRegisterDevice(key: String, lastAccepted: String?): Boolean = key != lastAccepted
+
+    /** API-026 `jitter_ms` from a `content_updated` push (FCM data values are strings), clamped to 0–60 s; null when missing or not a number. */
+    fun pushJitterMs(raw: String?): Long? =
+        raw?.trim()?.toLongOrNull()?.coerceIn(0L, MAX_PUSH_JITTER_CAP_MS)
 
     /**
      * Failed polls in a row before the offline notice shows. Fast polls (under a minute) may ride
@@ -39,8 +83,15 @@ object LiveUpdates {
     fun shouldRefreshForPush(pushVersion: Int?, currentVersion: Int?): Boolean =
         pushVersion == null || currentVersion == null || pushVersion > currentVersion
 
-    /** Random delay of 0–10 s before a push-triggered refresh, so the event's devices don't hit the server at once. */
-    fun pushRefreshDelayMs(random: Random = Random.Default): Long = random.nextLong(MAX_PUSH_REFRESH_JITTER_MS + 1)
+    /**
+     * Random delay before a push-triggered refresh, so the event's devices don't hit the server at
+     * once: 0…[maxMs] when the push sent `jitter_ms` (API-026: the server scales it to the event,
+     * 0 = at once, e.g. a preview phone), else 0–10 s.
+     */
+    fun pushRefreshDelayMs(maxMs: Long? = null, random: Random = Random.Default): Long {
+        val limit = maxMs?.coerceIn(0L, MAX_PUSH_JITTER_CAP_MS) ?: MAX_PUSH_REFRESH_JITTER_MS
+        return if (limit == 0L) 0L else random.nextLong(limit + 1)
+    }
 
     /**
      * The offline notice text: "Offline · last updated 2:14 PM" (the time of the last successful
