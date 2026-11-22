@@ -12,6 +12,15 @@ if (file('google-services.json').exists()) {
 
 android {
     namespace = 'com.arcu.attnd'
+    // The assistant eval's runner and grader (unit tests: router mode; androidTest: model mode on a phone),
+    // with the catalogue and DEMO bundle from src/test/resources.
+    sourceSets {
+        test { kotlin.srcDir 'src/evalShared/java' }
+        androidTest {
+            kotlin.srcDir 'src/evalShared/java'
+            resources.srcDirs += 'src/test/resources'
+        }
+    }
     // Android 17 QPR2 (platform 37.2, the newest stable SDK in Nov 2026).
     compileSdk {
         version = release(37) {
@@ -23,6 +32,8 @@ android {
         applicationId = "com.arcu.attnd"
         minSdk = 36
         targetSdk = 37
+        // Only the opt-in assistant eval in model mode (androidTest/AssistantEvalModelTest, a phone with Gemini Nano).
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         def versionPropsFile = rootProject.file('version.properties')
         def versionProps = new Properties()
@@ -267,6 +278,10 @@ dependencies {
     implementation libs.mlkit.barcode.scanning
 
     testImplementation libs.junit
+    // The assistant eval's model mode on a phone (opt-in, never in CI): AndroidX Test only.
+    androidTestImplementation libs.junit
+    androidTestImplementation libs.androidx.test.runner
+    androidTestImplementation libs.androidx.test.ext.junit
     testImplementation libs.kotlinx.coroutines.test
     debugImplementation libs.compose.ui.tooling
 }

@@ -7,7 +7,8 @@ import org.junit.Test
 import java.io.File
 
 /**
- * The assistant eval in router mode (attnd-web docs/assistant_eval/README.md; iOS `AssistantEvalTests`).
+ * The assistant eval in router mode (attnd-web docs/assistant_eval/README.md; iOS `AssistantEvalTests`); the runner is in
+ * src/evalShared, model mode is androidTest's `AssistantEvalModelTest` (a phone with Gemini Nano).
  * - [catalogueMatchesTheFixture] (always): the catalogue is well formed and every entity it names is in the DEMO bundle.
  * - [criticalQuestionsRouter] (always, fast): the `critical` questions (safety, injection, invented facts, core finding)
  *   pass on the rule-based router.

@@ -22,6 +22,8 @@ import com.arcu.attnd.domain.AssistantFlow
 import com.arcu.attnd.domain.AssistantIntent
 import com.arcu.attnd.domain.AssistantModel
 import com.arcu.attnd.domain.AssistantRouter
+import com.arcu.attnd.domain.AssistantTools
+import com.arcu.attnd.domain.ChatTranscript
 import com.arcu.attnd.domain.AssistantTurn
 import com.arcu.attnd.domain.BlockValidator
 import com.arcu.attnd.domain.Chip
@@ -130,9 +132,11 @@ data class AssistantTurnUi(
     val undone: Boolean = false,
     /** Indexes of `confirm` blocks already answered. */
     val answered: Set<Int> = emptySet(),
-    /** The model is still writing this turn (blocks appear as they complete). */
+    /** The model is still working on this turn (the working line shows under its bubble). */
     val streaming: Boolean = false,
     val shared: SharedOffer? = null,
+    /** The done line ("Added Taco Row", "Found 4 results"; [AssistantFlow.doneLine]). */
+    val status: String? = null,
 )
 
 data class AssistantState(
@@ -140,8 +144,8 @@ data class AssistantState(
     val turns: List<AssistantTurnUi> = emptyList(),
     /** The path of the turn being worked on (busy indicator). */
     val busy: TurnPath? = null,
-    /** The input bar's chosen path (null = automatic). */
-    val forced: TurnPath? = null,
+    /** The working line's text while a turn runs ("Searching…", "Adding Taco Row…"). */
+    val stage: String? = null,
     val live: LiveHints = LiveHints(),
     /** The plan has a change to undo. */
     val canUndo: Boolean = false,
@@ -149,26 +153,33 @@ data class AssistantState(
     val wantsLocation: Boolean = false,
     /** Incremented when a turn is added (the screen scrolls to it). */
     val serial: Int = 0,
-    /** A plan edit previewed in the My plan timeline, not applied yet (plan tab spec). */
+    /** A change to My schedule waiting for Apply / Cancel: the proposal card under the last turn. */
     val proposal: PlanProposal? = null,
     /** "There are only 3 options." after a reply that names a missing option. */
     val proposalNote: String? = null,
-    /** The "Undo" pill shown for ~8 s after a proposal was applied (or a plan was made). */
+    /** The Undo card after an applied proposal, until the next turn. */
     val undoOffer: UndoOffer? = null,
 ) {
-    /** The answer card: the last non-edit turn (never a transcript). */
-    val answer: AssistantTurnUi? get() = turns.lastOrNull()
+    /** The follow-up chips above the composer: the last turn's chips. */
+    val followUps: List<Chip> get() = turns.lastOrNull()?.takeIf { !it.streaming }?.blocks?.lastOrNull { it is AssistantBlock.Chips }
+        ?.let { (it as AssistantBlock.Chips).chips }.orEmpty()
+
+    /** The last turn's last component (the wide layout's second pane), not text or chips. */
+    val lastComponent: AssistantBlock? get() = turns.asReversed().firstNotNullOfOrNull { turn ->
+        turn.blocks.lastOrNull { it !is AssistantBlock.Text && it !is AssistantBlock.Chips && it !is AssistantBlock.Confirm }
+    }
 }
 
-/** The Undo pill: [label] ("Schedule updated") until [serial] changes or it times out. */
+/** The Undo card: [label] ("Schedule updated") until the next turn. */
 data class UndoOffer(val label: String, val serial: Int)
 
 /**
- * The event assistant on Android (assistant spec §1–8, plan tab spec): the last turn only (the answer
- * card) plus the model's context history; plan edits are previewed in place ([PlanProposal]) and
- * applied on a tap or a typed "do it". Every turn goes
- * through the rule-based [AssistantRouter] or, when Gemini Nano is available and [AssistantFlow.path]
- * says so, the model ([AssistantModel], streamed, router fallback). Writes go through
+ * The event assistant on Android (assistant spec §1–8; iOS `AssistantController`, phase 6b): Ask Attnd is
+ * one continuous chat per event (≤ [ChatTranscript.MAX_TURNS] turns, stored in [PlanStore] files), each
+ * turn the typed text, a working line, then its done line and components; changes to My schedule wait as
+ * a proposal card ([PlanProposal]) for Apply / Cancel (or a typed "do it" / "no"), then an Undo card. Every
+ * turn goes through the rule-based [AssistantRouter] or, when Gemini Nano is available and
+ * [AssistantFlow.path] says so, the model's JSON tool loop ([AssistantTools.run], router fallback). Writes go through
  * [ActionDispatcher] (validation, confirm blocks, Undo) to this [ActionExecutor]. One list (Nov 22,
  * 2026): every plan change (a new plan, an edit, a version, a swap, a sequence, a shared plan) is a
  * proposal over My schedule's day view ([ScheduleController.dayPlan]); Apply turns it into My schedule
@@ -194,6 +205,9 @@ class AssistantController(
     private val dispatcher = ActionDispatcher(this)
     private var nextId = 1L
     private var modelJob: Job? = null
+    private var planJob: Job? = null
+    /** A plan request is running (the working line stays up while other turns finish). */
+    private var planning = false
     private val samples = ArrayDeque<LocationSample>()
     private val dismissedSkips = HashSet<Int>()
     private var lateLoggedFor: Int? = null
@@ -213,26 +227,34 @@ class AssistantController(
         modelJob?.cancel()
         samples.clear()
         dismissedSkips.clear()
-        // The answer card starts empty for every event (only the model's context history is kept).
-        _state.value = AssistantState(eventId = eventId, canUndo = eventId?.let { schedule.history(it).canUndo } == true)
+        val restored = eventId?.let { plans.chat(it).entries }.orEmpty().map { e ->
+            AssistantTurnUi(
+                e.id.toLong(), e.input, e.blocks, if (e.fromModel) TurnSource.MODEL else TurnSource.RULES, status = e.status,
+                // A stored confirm can't be answered again.
+                answered = e.blocks.indices.filter { e.blocks[it] is AssistantBlock.Confirm }.toSet(),
+            )
+        }
+        nextId = (restored.maxOfOrNull { it.id } ?: 0L) + 1
+        _state.value = AssistantState(eventId = eventId, turns = restored, canUndo = eventId?.let { schedule.history(it).canUndo } == true)
         refreshLive()
     }
 
     fun clearConversation() {
         val eventId = _state.value.eventId ?: return
         modelJob?.cancel()
-        plans.setTranscript(eventId, emptyList())
+        plans.setChat(eventId, ChatTranscript())
         plans.setConversation(eventId, AssistantConversation())
-        _state.update { it.copy(turns = emptyList(), busy = null, proposal = null, proposalNote = null) }
+        _state.update { it.copy(turns = emptyList(), busy = null, stage = null, proposal = null, proposalNote = null, undoOffer = null) }
         AppLog.debug(LogCategory.UI, LogEvent.UI_ACTION, "Assistant conversation cleared", mapOf("name" to "assistant_clear"))
     }
 
-    fun setForced(path: TurnPath?) = _state.update { it.copy(forced = path) }
-
-    /** The answer card swiped down / the user typed again. */
-    fun dismissAnswer() {
-        if (_state.value.turns.any { it.streaming }) return
-        _state.update { it.copy(turns = emptyList(), proposalNote = null) }
+    /** Stores the chat (finished turns only). */
+    private fun persist() {
+        val s = _state.value
+        val eventId = s.eventId ?: return
+        plans.setChat(eventId, ChatTranscript(s.turns.filter { !it.streaming }.map { t ->
+            ChatTranscript.Entry(t.id.toInt(), t.input, t.blocks, t.source == TurnSource.MODEL, t.status)
+        }))
     }
 
     fun context(now: Instant = Instant.now()): AssistantContext? {
@@ -255,25 +277,29 @@ class AssistantController(
         )
     }
 
-    /** The input bar's intent chip for [text] (debounced by the screen). */
-    fun predict(text: String): TurnPath {
-        val ctx = context() ?: return TurnPath.SEARCH
-        if (text.isBlank()) return _state.value.forced ?: TurnPath.SEARCH
-        val routed = AssistantRouter.route(text, ctx)
-        return AssistantFlow.path(routed.intent, text, ctx.modelAvailable, _state.value.forced)
-    }
-
-    /** Enter / send: runs the full turn. */
-    fun submit(input: String, forced: TurnPath? = _state.value.forced) {
+    /** Return / Send: runs the full turn (nothing happens while typing). [forced] = an onboarding question (ASK). */
+    fun submit(input: String, forced: TurnPath? = null) {
         val text = input.trim()
         val ctx = context() ?: return
+        if (_state.value.turns.any { it.streaming }) return
+        _state.update { it.copy(undoOffer = null) }
         // A reply to the previewed edit: "do it", "the second one", "option 3", "no".
         _state.value.proposal?.let { proposal ->
             when (val reply = ProposalReply.parse(text, proposal.options.size)) {
-                is ProposalReply.Apply -> return applyProposal(reply.index).let { }
-                ProposalReply.Cancel -> return cancelProposal()
-                is ProposalReply.Invalid -> return _state.update { it.copy(proposalNote = reply.text) }
-                ProposalReply.None -> clearProposal()
+                is ProposalReply.Apply -> {
+                    append(text, emptyList())
+                    applyProposal(reply.index)
+                    return
+                }
+                ProposalReply.Cancel -> {
+                    append(text, emptyList())
+                    return cancelProposal()
+                }
+                is ProposalReply.Invalid -> {
+                    append(text, listOf(AssistantBlock.Text(reply.text)))
+                    return _state.update { it.copy(proposalNote = reply.text) }
+                }
+                ProposalReply.None -> settleProposal("Not applied")
             }
         }
         if (text.isEmpty()) {
@@ -291,40 +317,45 @@ class AssistantController(
         }
     }
 
-    /** The model path: streamed blocks, then the validated turn (or the router's on invalid output). */
+    /**
+     * The model path (phase 6b): the user's bubble and the working line at once, then Gemini Nano's JSON tool
+     * loop ([AssistantTools.run], non-streaming rounds; the stage follows its calls). Any failure (no JSON,
+     * a model error, nothing to show) → the router answers, logged as a fallback.
+     */
     private fun ask(text: String, ctx: AssistantContext, started: Long) {
         modelJob?.cancel()
         val eventId = ctx.bundle.event.id
         val id = nextId++
         _state.update {
-            it.copy(turns = listOf(AssistantTurnUi(id, text, emptyList(), TurnSource.MODEL, streaming = true)), busy = TurnPath.ASK, serial = it.serial + 1)
+            it.copy(
+                turns = (it.turns + AssistantTurnUi(id, text, emptyList(), TurnSource.MODEL, streaming = true)).takeLast(ChatTranscript.MAX_TURNS),
+                busy = TurnPath.ASK, stage = THINKING, serial = it.serial + 1,
+            )
         }
         modelJob = scope.launch {
-            var raw: String? = null
-            try {
-                val retrieved = AssistantModel.retrieve(text, ctx)
-                val prompt = AssistantModel.prompt(text, ctx, plans.conversation(eventId), retrieved)
-                model.turn(prompt).collect { partial ->
-                    raw = partial
-                    val shown = AssistantModel.completeBlocks(partial, ctx).filter { it !is AssistantBlock.Chips }
-                    _state.update { s -> s.copy(turns = s.turns.map { t -> if (t.id == id) t.copy(blocks = shown) else t }) }
-                }
+            val outcome = try {
+                AssistantTools.run(text, ctx, plans.conversation(eventId), model::toolRound) { stage -> _state.update { it.copy(stage = stage) } }
             } catch (e: CancellationException) {
-                _state.update { s -> s.copy(turns = s.turns.filter { it.id != id }, busy = null) }
+                _state.update { s -> s.copy(turns = s.turns.filter { it.id != id }, busy = null, stage = null) }
                 throw e
-            } catch (e: Exception) {
-                AppLog.warning(
-                    LogCategory.ASSISTANT, LogEvent.ASSISTANT_ERROR, "Assistant turn failed (${e.javaClass.simpleName})",
-                    mapOf("kind" to "turn", "error" to AppLog.errorKind(e), "domain" to e.javaClass.simpleName),
-                )
-                raw = null
             }
-            val resolved = AssistantModel.resolve(text, raw, ctx)
-            _state.update { s -> s.copy(turns = s.turns.filter { it.id != id }) }
-            finish(
-                text, resolved.turn, resolved.source, resolved.routed?.intent ?: AssistantIntent.QUESTION, started, ctx,
-                fallback = resolved.source == TurnSource.RULES, modelTried = true,
-            )
+            if (outcome.trimmed.isNotEmpty()) {
+                AppLog.info(LogCategory.ASSISTANT, LogEvent.ASSISTANT_REQUEST, "Prompt trimmed to its budget", mapOf("trimmed" to outcome.trimmed.joinToString(","), "tokens" to outcome.promptTokens))
+            }
+            val turn = outcome.turn
+            if (turn != null) {
+                finish(text, turn, TurnSource.MODEL, AssistantIntent.QUESTION, started, ctx, modelTried = true, stage = outcome.stage, pendingId = id, toolCalls = outcome.calls)
+            } else {
+                AppLog.warning(
+                    LogCategory.ASSISTANT, LogEvent.ASSISTANT_ERROR, "Assistant tool loop failed (${outcome.failure})",
+                    mapOf("kind" to "tool_loop", "error" to outcome.failure.orEmpty().substringBefore(':'), "domain" to outcome.failure?.substringAfter(": ", "")),
+                )
+                val resolved = AssistantModel.resolve(text, null, context() ?: ctx)
+                finish(
+                    text, resolved.turn, TurnSource.RULES, resolved.routed?.intent ?: AssistantIntent.QUESTION, started, ctx,
+                    fallback = true, modelTried = true, pendingId = id, toolCalls = outcome.calls,
+                )
+            }
         }
     }
 
@@ -338,23 +369,28 @@ class AssistantController(
         ctx: AssistantContext,
         fallback: Boolean = false,
         modelTried: Boolean = false,
+        stage: String? = null,
+        pendingId: Long? = null,
+        toolCalls: Int? = null,
     ) {
         val actionSource = if (source == TurnSource.MODEL) ActionSource.MODEL else ActionSource.RULES
         val ms0 = (System.nanoTime() - started) / 1_000_000
-        // A plan edit (router, model or a "Which one?" pick of adds / replaces) previews in place.
+        val toolField = toolCalls?.let { mapOf("tool_calls" to it) }.orEmpty()
+        // A change to My schedule (router, model or a "Which one?" pick of adds / replaces) waits as a proposal card.
         PlanProposals.fromTurn(turn, ctx)?.let { proposal ->
+            append(input, emptyList(), source, replace = pendingId)
             propose(proposal)
             AppLog.info(
                 LogCategory.ASSISTANT, LogEvent.ASSISTANT_TURN, "Assistant turn (${if (source == TurnSource.MODEL) "model" else "rules"})",
                 mapOf("path" to if (source == TurnSource.MODEL) "model" else "rules", "intent" to intent.name.lowercase(), "ms" to ms0, "blocks" to 0, "fallback" to (modelTried && fallback)) +
-                    (input?.let { Redact.textFields("query", it, AppLog.allowText) } ?: emptyMap()),
+                    toolField + (input?.let { Redact.textFields("query", it, AppLog.allowText) } ?: emptyMap()),
             )
             remember(ctx.bundle.event.id, input, AssistantTurn(listOf(AssistantBlock.Text(proposal.summary))))
             return
         }
         var blocks = turn.blocks
         var applied: AssistantAction? = null
-        // Plans are made in place (the timeline shows the progress), not answered with a card.
+        // Plans are made in the background and come back as a proposal card.
         if (turn.actions.any { it.name == ActionName.PLAN_MAKE }) blocks = emptyList()
         for (action in turn.actions) {
             val result = runQuietly(action, actionSource)
@@ -367,7 +403,10 @@ class AssistantController(
             if (result.blocks.isEmpty() && result.message != null && source == TurnSource.MODEL) blocks = blocks + AssistantBlock.Text(result.message)
         }
         val validated = context()?.let { BlockValidator.validate(blocks, it.blockContext) } ?: blocks
-        append(input, validated, source, applied)
+        // A plan request's proposal comes later: no done line yet.
+        val done = if (turn.actions.any { it.name == ActionName.PLAN_MAKE }) null
+        else AssistantFlow.doneLine(stage ?: AssistantFlow.stageFor(intent, turn.actions, ctx.bundle), validated)
+        append(input, validated, source, applied, status = done, replace = pendingId)
         val ms = (System.nanoTime() - started) / 1_000_000
         AppLog.info(
             LogCategory.ASSISTANT, LogEvent.ASSISTANT_TURN, "Assistant turn (${if (source == TurnSource.MODEL) "model" else "rules"})",
@@ -377,28 +416,44 @@ class AssistantController(
                 "ms" to ms,
                 "blocks" to validated.size,
                 "fallback" to (modelTried && fallback),
-            ) + (input?.let { Redact.textFields("query", it, AppLog.allowText) } ?: emptyMap()),
+            ) + toolField + (input?.let { Redact.textFields("query", it, AppLog.allowText) } ?: emptyMap()),
         )
         remember(ctx.bundle.event.id, input, AssistantTurn(validated))
     }
 
-    private fun append(input: String?, blocks: List<AssistantBlock>, source: TurnSource = TurnSource.RULES, applied: AssistantAction? = null, shared: SharedOffer? = null) {
+    /**
+     * Adds a turn to the chat (≤ [ChatTranscript.MAX_TURNS]), or replaces the pending one [replace]; a turn
+     * needs a bubble ([input]) or blocks. Stores the chat.
+     */
+    private fun append(
+        input: String?,
+        blocks: List<AssistantBlock>,
+        source: TurnSource = TurnSource.RULES,
+        applied: AssistantAction? = null,
+        shared: SharedOffer? = null,
+        status: String? = null,
+        replace: Long? = null,
+    ) {
         val eventId = _state.value.eventId
-        if (blocks.isEmpty() && shared == null) {
-            _state.update { it.copy(busy = null) }
+        if (blocks.isEmpty() && shared == null && input == null) {
+            _state.update { s -> s.copy(busy = if (planning) TurnPath.PLAN else null, stage = if (planning) PLANNING else null, turns = s.turns.filter { it.id != replace }) }
             return
         }
         blocks.forEach { block ->
             AppLog.debug(LogCategory.ASSISTANT, LogEvent.ASSISTANT_BLOCK, "Block ${block.type}", mapOf("type" to block.type, "ids" to AssistantFlow.refs(block).size))
         }
         _state.update {
+            val turn = AssistantTurnUi(replace ?: nextId++, input, blocks, source, applied = applied, shared = shared, status = status)
+            val turns = if (replace != null && it.turns.any { t -> t.id == replace }) it.turns.map { t -> if (t.id == replace) turn else t } else it.turns + turn
             it.copy(
-                turns = listOf(AssistantTurnUi(nextId++, input, blocks, source, applied = applied, shared = shared)),
-                busy = null,
+                turns = turns.takeLast(ChatTranscript.MAX_TURNS),
+                busy = if (planning) TurnPath.PLAN else null,
+                stage = if (planning) PLANNING else null,
                 serial = it.serial + 1,
                 canUndo = eventId?.let { id -> schedule.history(id).canUndo } == true,
             )
         }
+        persist()
     }
 
     /** The model's conversation: the user's text and what the assistant answered (text only). */
@@ -452,9 +507,10 @@ class AssistantController(
      */
     fun run(action: AssistantAction, label: String?, source: ActionSource = ActionSource.RULES, confirmed: Boolean = false): String? {
         val ctx = context() ?: return null
-        // Plan edits from chips, hints and buttons preview in place first (plan tab spec).
+        // Plan edits from chips, hints and buttons wait as a proposal card first.
         if (PlanProposals.isEdit(action)) {
             PlanProposals.fromAction(action, ctx)?.let { proposal ->
+                if (label != null) append(label, emptyList())
                 propose(proposal)
                 return null
             }
@@ -501,17 +557,23 @@ class AssistantController(
     // ── Proposals (plan tab spec) ───────────────────────────────────────────
 
     private fun propose(proposal: PlanProposal) {
-        _state.update { it.copy(proposal = proposal, proposalNote = null, turns = emptyList(), busy = null, undoOffer = null, serial = it.serial + 1) }
+        settleProposal("Not applied")
+        _state.update { it.copy(proposal = proposal, proposalNote = null, busy = null, stage = null, undoOffer = null, serial = it.serial + 1) }
         host.onProposal()
     }
 
-    private fun clearProposal() = _state.update { it.copy(proposal = null, proposalNote = null) }
+    /** A pending proposal ends without Apply ([line] = what the chat keeps of it: "Cancelled", "Not applied"). */
+    private fun settleProposal(line: String) {
+        val proposal = _state.value.proposal ?: return
+        _state.update { it.copy(proposal = null, proposalNote = null) }
+        append(null, listOf(AssistantBlock.Text("${proposal.summary} · $line")))
+    }
 
-    /** "no" / "cancel" / Esc / Cancel on the pill: nothing changes. */
+    /** "no" / "cancel" / Back / Cancel on the card: nothing changes. */
     fun cancelProposal() {
         val proposal = _state.value.proposal ?: return
         proposal.first.action?.let { logAction(it, "declined", ConfirmKind.CHIP) }
-        clearProposal()
+        settleProposal("Cancelled")
     }
 
     /**
@@ -558,17 +620,18 @@ class AssistantController(
             }
             if (failure != null) {
                 logAction(action, "failed")
-                clearProposal()
+                _state.update { it.copy(proposal = null, proposalNote = null) }
                 append(null, listOf(AssistantBlock.Text(failure)))
                 return failure
             }
             logAction(action, "applied", ConfirmKind.CHIP)
         }
+        _state.update { it.copy(proposal = null, proposalNote = null) }
+        append(null, listOf(AssistantBlock.Text(proposal.summary)), status = if (proposal.kind == ProposalKind.SHARED) "Added the shared plan" else "Updated your schedule")
         _state.update {
             it.copy(
-                proposal = null, proposalNote = null,
                 undoOffer = UndoOffer(if (proposal.kind == ProposalKind.SHARED) "Shared plan added" else "Schedule updated", it.serial + 1),
-                serial = it.serial + 1, canUndo = schedule.history(eventId).canUndo,
+                canUndo = schedule.history(eventId).canUndo,
             )
         }
         refreshLive()
@@ -578,13 +641,15 @@ class AssistantController(
     /** The Undo pill (or "undo" typed): My schedule as it was before the last change (one Undo history). */
     fun undoLast() {
         val ctx = context() ?: return
-        dispatcher.dispatch(AssistantAction(ActionName.PLAN_UNDO), actionContext(ctx), ActionSource.MANUAL)
+        val result = dispatcher.dispatch(AssistantAction(ActionName.PLAN_UNDO), actionContext(ctx), ActionSource.MANUAL)
         logAction(AssistantAction(ActionName.PLAN_UNDO), "applied")
         _state.update { it.copy(undoOffer = null, canUndo = schedule.history(ctx.bundle.event.id).canUndo) }
+        val message = ((result as? Dispatch.Executed)?.outcome as? ActionOutcome.Done)?.message ?: "There's nothing to undo."
+        append(null, listOf(AssistantBlock.Text(message)))
         refreshLive()
     }
 
-    /** The Undo pill timed out ([serial] = the offer that was shown) or was dismissed. */
+    /** The Undo card was dismissed ([serial] = the offer that was shown). */
     fun dismissUndo(serial: Int? = null) = _state.update { if (serial == null || it.undoOffer?.serial == serial) it.copy(undoOffer = null) else it }
 
     fun chip(chip: Chip) {
@@ -596,7 +661,7 @@ class AssistantController(
         val turn = _state.value.turns.firstOrNull { it.id == turnId } ?: return
         val confirm = turn.blocks.getOrNull(index) as? AssistantBlock.Confirm ?: return
         if (index in turn.answered) return
-        _state.update { s -> s.copy(turns = s.turns.map { if (it.id == turnId) it.copy(answered = it.answered + index) else it }) }
+        _state.update { s -> s.copy(undoOffer = null, turns = s.turns.map { if (it.id == turnId) it.copy(answered = it.answered + index) else it }) }
         if (yes) {
             run(confirm.action, null, ActionSource.RULES, confirmed = true)
         } else {
@@ -848,9 +913,18 @@ class AssistantController(
      */
     fun planRequest(request: String, source: String = "assistant") {
         if (request.isBlank()) return
-        _state.update { it.copy(busy = TurnPath.PLAN) }
-        scope.launch {
-            val plan = host.makePlan(request, source)
+        // An onboarding example is the person's own request: its bubble first.
+        if (source == "example") append(request, emptyList())
+        planJob?.cancel()
+        planning = true
+        _state.update { it.copy(busy = TurnPath.PLAN, stage = PLANNING) }
+        planJob = scope.launch {
+            val plan = try {
+                host.makePlan(request, source)
+            } finally {
+                planning = false
+                _state.update { it.copy(busy = null, stage = null) }
+            }
             val bundle = repository.bundle.value
             if (plan == null || plan.isEmpty || bundle == null) {
                 append(null, listOf(AssistantBlock.Text(host.planError() ?: "Nothing on the schedule fits that. Try another day or fewer limits.")))
@@ -967,6 +1041,9 @@ class AssistantController(
     }
 
     private companion object {
+        const val THINKING = "Thinking…"
+        const val PLANNING = "Planning your day…"
+
         /** The reason of entries a shared plan added (one list §1). */
         const val SHARED_REASON = "In a shared plan"
         val SAMPLE_WINDOW: Duration = Duration.ofHours(3)

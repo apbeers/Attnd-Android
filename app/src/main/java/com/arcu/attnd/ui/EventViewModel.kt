@@ -340,8 +340,9 @@ class EventViewModel(
             val hearts = eventId?.let(heartStore::hearts) ?: Hearts.NONE
             // My schedule's day view (one list: derived, never stored).
             val plan = if (eventId != null && screenshot == null) schedule.dayPlan(eventId, bundle) else null
-            // The planner runs without on-device AI too (likes + the plain-rule reading); never in screenshot mode.
-            val plannerAvailable = screenshot == null
+            // The planner and Ask Attnd exist on phones that can run Gemini Nano (owner, phase 6b; iOS: only with
+            // the model): AVAILABLE, or still to download (the router and plain rules answer meanwhile).
+            val plannerAvailable = screenshot == null && inputs.model.availability in PLAN_BUTTON_STATES
             val tabs = display?.tabLayout(screenshotMode = screenshot != null) ?: TabLayout.resolve(null, null, hasFlyer = false)
             val selectedEventTab = tabs.selected(navState.selectedTab)
             val instantUpdates = PreviewPoll.showsCapsule(previewEventId, eventId, screenshot != null)
