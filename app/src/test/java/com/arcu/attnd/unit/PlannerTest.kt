@@ -218,4 +218,18 @@ class PlannerTest {
         assertEquals(42, extra?.eventId)
         assertTrue(extra!!.isEmpty)
     }
+
+    @Test
+    fun dayViewLaysOutChosenItemsWithoutInventingMeals() {
+        // One list: My schedule's items of a day, laid out by the planner's rules (walks, alternatives),
+        // the given meals kept verbatim, no new meal breaks.
+        val day = LocalDate.of(2026, 11, 14)
+        val planner = Planner(bundle, PlanPreferences(), Hearts(scheduleItems = setOf(101, 105, 109)))
+        val lunch = MealBreak(MealKind.LUNCH, PlannerFixture.sat("12:15").toInstant(), PlannerFixture.sat("13:00").toInstant(), 6)
+        val view = planner.dayView(day, listOf(101, 105, 109, 109), listOf(lunch), PlannerFixture.sat("10:00").toInstant(), PlannerFixture.sat("23:00").toInstant())
+        assertEquals(listOf("11:00 109", "12:15 lunch", "17:00 105", "19:00 101"), clock(Plan(42, now, "", PlanPreferences(), listOf(view), emptyMap())))
+        assertNull(view.items.first().walkMinutes)
+        assertNotNull(view.items.last().walkMinutes)
+        assertTrue(view.items.all { it.reason == "In your schedule" })
+    }
 }

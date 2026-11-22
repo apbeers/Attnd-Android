@@ -617,9 +617,24 @@ Phase 0 (toolchain and dependencies, minSdk 36) runs elsewhere. When it lands, p
   `AssistantToolsTest` (6), `AssistantRouterTest` (32 cases, iOS's), `PlanProposalTest`; the assistant eval
   (`AssistantEvalTest`: catalogue + 50 critical questions in every run; the full router run with `-PassistantEval`):
   **245/247** (iOS 242/247; Android passes "is the beer cold?", "cheapest food" and "bbq pitt lane" through the
-  no-AI keyword search, and fails "what did I miss this morning" and "resttoom", as iOS). `TODO(one-list)` markers:
-  `PlanCommands.sequence` (builds a Plan), the controller's SEQUENCE apply (`plans.applyPlan`), the router's
-  `plan_edit` commands.
+  no-AI keyword search, and fails "what did I miss this morning" and "resttoom", as iOS). The `TODO(one-list)` items
+  (`PlanCommands.sequence` building a Plan, the controller's SEQUENCE apply, the router's `plan_edit` commands) are
+  resolved by the one-list change below.
+
+**One-list change (owner-approved, attnd-web `docs/specs/one_list_spec.md`)** — ✅ done (Nov 22, 2026)
+- **Shipped:** My schedule is the only stored list (iOS `2b6114b`). Entries get `source` / `reason`;
+  `SchedulePreferences` and the check-off set per event; no stored Plan (`PlanStore` keeps none; `applyPlan`, reconcile,
+  `MySchedule.apply(plan, previous)`, `PlanHistory`, re-plan / keep / clear and "Your plan changed" removed);
+  `Planner.propose` → `ScheduleProposal` (removes only `planner` entries unless asked); one flow (new plans now preview
+  as a `PLAN` proposal; edits, versions, swaps, sequences, shared plans and chips) → Apply → one Undo history over My
+  schedule (≤ 20, hearts included); the day view (`MySchedule.dayPlan` / `Planner.dayView`) derived for the timeline,
+  routes, live hints, WhyNot, sharing and the Live Update (no plan source); the one-time idempotent migration of the old
+  `plan_<id>` / `plan_history_<id>` keys (deleted after); "My plan" → **Ask Attnd** in the UI. Tests: `MyScheduleTest`
+  (migration, codecs, proposals, history, day view), `PlanProposalTest` (every kind previews, then one Undo step),
+  `PlanEditingTest`, `PlannerTest` (`dayView`), `LiveFollowTest`, `AssistantFlowTest`; eval router 245/247, critical
+  50/50.
+- **For 3b / 6b:** the heart's Undo snackbar can call `ScheduleController.undo` (the add is already a history step);
+  the chat's proposal card applies through `AssistantController.applyProposal`.
 - **Scope:**
   - `ConversationContext`;
   - the router's My schedule grammar + `schedule_*` actions + app-settings commands (confirm chips);

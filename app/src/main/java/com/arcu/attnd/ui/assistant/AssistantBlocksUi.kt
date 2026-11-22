@@ -175,7 +175,7 @@ fun AssistantBlockView(block: AssistantBlock, index: Int, controls: TurnControls
         is AssistantBlock.Timeline -> {
             val now = rememberNow()
             val ids = remember(block, actions.plan, now) { BlockData.timeline(block, bundle, actions.plan, now) }
-            Timeline(ids, block.title ?: if (block.source == "plan") "My plan" else null, modifier)
+            Timeline(ids, block.title ?: if (block.source == "plan") "My schedule" else null, modifier)
         }
         is AssistantBlock.MapBlock -> MapBlock(block, modifier)
         is AssistantBlock.Gallery -> Gallery(block, modifier)
@@ -675,7 +675,7 @@ fun PlanDiffCard(diff: PlanDiff, controls: TurnControls, modifier: Modifier = Mo
     fun name(id: Int) = bundle.scheduleItem(id)?.name ?: "An item"
     OutlinedCard(modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            BlockTitle("Plan changes")
+            BlockTitle("Schedule changes")
             if (diff.isEmpty) Text("Nothing changed.", style = MaterialTheme.typography.bodyMedium)
             diff.removed.forEach { DiffRow(Icons.Filled.Remove, name(it), MaterialTheme.colorScheme.error, struck = true, label = "Removed") }
             diff.added.forEach { id ->
@@ -692,7 +692,7 @@ fun PlanDiffCard(diff: PlanDiff, controls: TurnControls, modifier: Modifier = Mo
             if (controls.canUndo) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 4.dp)) {
                     if (controls.undone) Button(onClick = controls.onApply) { Text("Apply") } else FilledTonalButton(onClick = controls.onUndo) { Text("Undo") }
-                    TextButton(onClick = actions.onOpenPlan) { Text("Show my plan") }
+                    TextButton(onClick = actions.onOpenPlan) { Text("Show my schedule") }
                 }
             }
         }
@@ -806,8 +806,8 @@ fun SettingCard(setting: String, modifier: Modifier = Modifier) {
     val actions = LocalBlockActions.current ?: return
     val name = ActionName.of(setting) ?: return
     val (title, body, icon) = when (name) {
-        ActionName.FOLLOW_LOCK_SCREEN -> Triple("Follow on Lock Screen", "What's now and next in your plan, as a Live Update.", Icons.Filled.Event)
-        ActionName.REMINDERS -> Triple("Reminders", "A reminder with the walk time before liked and planned items.", Icons.Filled.Schedule)
+        ActionName.FOLLOW_LOCK_SCREEN -> Triple("Follow on Lock Screen", "What's now and next in your schedule, as a Live Update.", Icons.Filled.Event)
+        ActionName.REMINDERS -> Triple("Reminders", "A reminder with the walk time before each item in your schedule.", Icons.Filled.Schedule)
         else -> Triple("Notifications", "Announcements from the organizers.", Icons.Filled.Notifications)
     }
     val on = actions.settingOn(name)

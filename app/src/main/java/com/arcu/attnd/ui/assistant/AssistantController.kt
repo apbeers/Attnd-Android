@@ -4,6 +4,7 @@ import com.arcu.attnd.data.EventRepository
 import com.arcu.attnd.data.HeartStore
 import com.arcu.attnd.data.OnDeviceAssistant
 import com.arcu.attnd.data.PlanStore
+import com.arcu.attnd.data.ScheduleController
 import com.arcu.attnd.domain.ActionContext
 import com.arcu.attnd.domain.ActionDispatcher
 import com.arcu.attnd.domain.ActionExecutor
@@ -47,6 +48,7 @@ import com.arcu.attnd.domain.ProposalKind
 import com.arcu.attnd.domain.EventBundle
 import com.arcu.attnd.domain.MySchedule
 import com.arcu.attnd.domain.ScheduleTarget
+import com.arcu.attnd.domain.ScheduleEntrySource
 import com.arcu.attnd.domain.ProposalReply
 import com.arcu.attnd.domain.PlanShare
 import com.arcu.attnd.domain.PlanVersionKind
@@ -158,7 +160,7 @@ data class AssistantState(
     val answer: AssistantTurnUi? get() = turns.lastOrNull()
 }
 
-/** The Undo pill: [label] ("Plan updated") until [serial] changes or it times out. */
+/** The Undo pill: [label] ("Schedule updated") until [serial] changes or it times out. */
 data class UndoOffer(val label: String, val serial: Int)
 
 /**
@@ -167,14 +169,17 @@ data class UndoOffer(val label: String, val serial: Int)
  * applied on a tap or a typed "do it". Every turn goes
  * through the rule-based [AssistantRouter] or, when Gemini Nano is available and [AssistantFlow.path]
  * says so, the model ([AssistantModel], streamed, router fallback). Writes go through
- * [ActionDispatcher] (validation, confirm blocks, Undo) to this [ActionExecutor]; plan changes are
- * stored with their undo stack ([PlanStore.applyPlan]). Live hints (running late, check-off, gaps,
+ * [ActionDispatcher] (validation, confirm blocks, Undo) to this [ActionExecutor]. One list (Nov 22,
+ * 2026): every plan change (a new plan, an edit, a version, a swap, a sequence, a shared plan) is a
+ * proposal over My schedule's day view ([ScheduleController.dayPlan]); Apply turns it into My schedule
+ * edits as one step of the one Undo history ([ScheduleController.applyPlan], `undo`). Live hints (running late, check-off, gaps,
  * skipped, recap) come from position samples taken only while the app is visible.
  */
 class AssistantController(
     private val scope: CoroutineScope,
     private val repository: EventRepository,
     private val hearts: HeartStore,
+    private val schedule: ScheduleController,
     private val plans: PlanStore,
     private val model: OnDeviceAssistant,
     private val host: AssistantHost,
@@ -209,7 +214,7 @@ class AssistantController(
         samples.clear()
         dismissedSkips.clear()
         // The answer card starts empty for every event (only the model's context history is kept).
-        _state.value = AssistantState(eventId = eventId, canUndo = eventId?.let { plans.history(it).canUndo } == true)
+        _state.value = AssistantState(eventId = eventId, canUndo = eventId?.let { schedule.history(it).canUndo } == true)
         refreshLive()
     }
 
@@ -237,12 +242,12 @@ class AssistantController(
         return AssistantContext(
             bundle = bundle,
             hearts = hearts.hearts(eventId),
-            plan = plans.plan(eventId)?.takeIf { !it.isEmpty },
+            plan = schedule.dayPlan(eventId, bundle),
             now = now,
             user = host.userLocation(),
             canPlan = host.canPlan(),
             modelAvailable = available,
-            history = plans.history(eventId),
+            history = schedule.history(eventId),
             units = host.units(),
             locale = Locale.getDefault(),
             schedule = hearts.schedule(eventId),
@@ -391,7 +396,7 @@ class AssistantController(
                 turns = listOf(AssistantTurnUi(nextId++, input, blocks, source, applied = applied, shared = shared)),
                 busy = null,
                 serial = it.serial + 1,
-                canUndo = eventId?.let { id -> plans.history(id).canUndo } == true,
+                canUndo = eventId?.let { id -> schedule.history(id).canUndo } == true,
             )
         }
     }
@@ -521,12 +526,19 @@ class AssistantController(
         val eventId = bundle.event.id
         val action = option.action
         if (action == null && proposal.kind == ProposalKind.SEQUENCE) {
-            // "Music, food, then more music": the previewed plan as it is.
-            plans.applyPlan(eventId, option.edit.after)
+            // "Music, food, then more music": the previewed plan's new entries go into My schedule.
+            schedule.applyPlan(eventId, option.edit.after, source = ScheduleEntrySource.ASSISTANT, keepPreferences = false)
+        } else if (action == null && proposal.kind == ProposalKind.PLAN) {
+            // A new plan (one list §3): its items and meal places go into My schedule.
+            val applied = schedule.applyPlan(eventId, option.edit.after)
+            AppLog.info(
+                LogCategory.PLANNER, LogEvent.PLAN_EDIT, "New plan applied",
+                mapOf("ops" to listOf("add"), "source" to "plan", "applied" to true, "removed" to applied.removes.size, "added" to applied.adds.size, "moved" to 0),
+            )
         } else if (action == null) {
             // Shared plan: "Use this plan" / "Merge with mine".
             val merge = index == 1
-            plans.applyPlan(eventId, option.edit.after)
+            schedule.applyPlan(eventId, option.edit.after, source = ScheduleEntrySource.SHARED, keepPreferences = false, reason = SHARED_REASON)
             AppLog.notice(
                 LogCategory.UI, LogEvent.SHARE_OPENED, if (merge) "Shared plan merged" else "Shared plan used",
                 mapOf("target" to "plan", "items" to option.edit.after.itemIds.size, "known" to option.edit.after.itemIds.size, "action" to if (merge) "merge" else "use", "joined" to false),
@@ -555,20 +567,20 @@ class AssistantController(
         _state.update {
             it.copy(
                 proposal = null, proposalNote = null,
-                undoOffer = UndoOffer(if (proposal.kind == ProposalKind.SHARED) "Plan replaced" else "Plan updated", it.serial + 1),
-                serial = it.serial + 1, canUndo = plans.history(eventId).canUndo,
+                undoOffer = UndoOffer(if (proposal.kind == ProposalKind.SHARED) "Shared plan added" else "Schedule updated", it.serial + 1),
+                serial = it.serial + 1, canUndo = schedule.history(eventId).canUndo,
             )
         }
         refreshLive()
         return null
     }
 
-    /** The Undo pill (or "undo" typed): the last plan change back. */
+    /** The Undo pill (or "undo" typed): My schedule as it was before the last change (one Undo history). */
     fun undoLast() {
         val ctx = context() ?: return
         dispatcher.dispatch(AssistantAction(ActionName.PLAN_UNDO), actionContext(ctx), ActionSource.MANUAL)
         logAction(AssistantAction(ActionName.PLAN_UNDO), "applied")
-        _state.update { it.copy(undoOffer = null, canUndo = plans.history(ctx.bundle.event.id).canUndo) }
+        _state.update { it.copy(undoOffer = null, canUndo = schedule.history(ctx.bundle.event.id).canUndo) }
         refreshLive()
     }
 
@@ -603,7 +615,7 @@ class AssistantController(
         val result = dispatcher.dispatch(inverse, actionContext(ctx), ActionSource.MANUAL)
         if (result is Dispatch.Executed && result.outcome is ActionOutcome.Done) {
             logAction(applied, "undone")
-            _state.update { s -> s.copy(turns = s.turns.map { if (it.id == turnId) it.copy(undone = true) else it }, canUndo = plans.history(ctx.bundle.event.id).canUndo) }
+            _state.update { s -> s.copy(turns = s.turns.map { if (it.id == turnId) it.copy(undone = true) else it }, canUndo = schedule.history(ctx.bundle.event.id).canUndo) }
         }
     }
 
@@ -616,7 +628,7 @@ class AssistantController(
         val result = dispatcher.dispatch(applied, actionContext(ctx), ActionSource.MANUAL)
         if (result is Dispatch.Executed && result.outcome is ActionOutcome.Done) {
             logAction(applied, "applied")
-            _state.update { s -> s.copy(turns = s.turns.map { if (it.id == turnId) it.copy(undone = false) else it }, canUndo = plans.history(ctx.bundle.event.id).canUndo) }
+            _state.update { s -> s.copy(turns = s.turns.map { if (it.id == turnId) it.copy(undone = false) else it }, canUndo = schedule.history(ctx.bundle.event.id).canUndo) }
         }
     }
 
@@ -640,7 +652,7 @@ class AssistantController(
         val bundle = repository.bundle.value ?: return ActionOutcome.Failed("No event.")
         val eventId = bundle.event.id
         val now = Instant.now()
-        fun plan() = plans.plan(eventId)?.takeIf { !it.isEmpty }
+        fun plan() = schedule.dayPlan(eventId, bundle)
         return when (action.name) {
             ActionName.LIKE, ActionName.UNLIKE -> {
                 val (kind, id) = action.likeTarget() ?: return ActionOutcome.Failed("I couldn't find that.")
@@ -665,22 +677,23 @@ class AssistantController(
                 applyEdit(eventId, PlanVersions.make(kind, plan, bundle, hearts.hearts(eventId), now), listOf("constraint"), prefix = "${kind.label}: ")
             }
             ActionName.PLAN_UNDO -> {
-                val restored = plans.undoPlan(eventId)
-                val depth = plans.history(eventId).plans.size
-                AppLog.info(LogCategory.PLANNER, LogEvent.PLAN_UNDO, "Plan undo", mapOf("depth" to depth, "ok" to (restored != null)))
-                if (restored == null) ActionOutcome.Failed("There's nothing to undo.")
-                else ActionOutcome.Done("Undid your last plan change.", listOf(AssistantBlock.PlanBlock()))
+                val restored = schedule.undo(eventId)
+                val depth = schedule.history(eventId).snapshots.size
+                AppLog.info(LogCategory.PLANNER, LogEvent.PLAN_UNDO, "Plan undo", mapOf("depth" to depth, "ok" to restored))
+                refreshLive()
+                if (!restored) ActionOutcome.Failed("There's nothing to undo.")
+                else ActionOutcome.Done("Undid your last schedule change.", listOf(AssistantBlock.PlanBlock()))
             }
             ActionName.PLAN_MAKE -> {
                 val request = action.string("request") ?: return ActionOutcome.Failed("What should the plan be about?")
-                makePlan(request)
+                planRequest(request)
                 ActionOutcome.Done()
             }
             ActionName.CHECKOFF -> {
-                val plan = plan() ?: return ActionOutcome.Failed(AssistantRouter.NO_PLAN_TEXT)
+                plan() ?: return ActionOutcome.Failed(AssistantRouter.NO_PLAN_TEXT)
                 val id = action.id("item", 's') ?: return ActionOutcome.Failed("I couldn't find that.")
                 val done = action.bool("done") != false
-                setCheckedOff(eventId, plan, id, done, "tap")
+                setCheckedOff(eventId, id, done, "tap")
                 val name = bundle.scheduleItem(id)?.name ?: "It"
                 ActionOutcome.Done(if (done) "Checked off $name." else "$name isn't checked off any more.")
             }
@@ -694,7 +707,7 @@ class AssistantController(
             }
             ActionName.SHARE_PLAN -> {
                 val plan = plan() ?: return ActionOutcome.Failed(AssistantRouter.NO_PLAN_TEXT)
-                share(PlanShare.planLink(plan, bundle), "plan", plan.itemIds.size, "My plan for ${bundle.event.name}", "share_sheet")
+                share(PlanShare.planLink(plan, bundle), "plan", plan.itemIds.size, "My schedule for ${bundle.event.name}", "share_sheet")
                 ActionOutcome.Done()
             }
             ActionName.SHARE_ITEM -> {
@@ -728,7 +741,9 @@ class AssistantController(
         return when (action.name) {
             ActionName.SCHEDULE_ADD -> {
                 action.scheduleTarget("replace")?.let { host.setLiked(it.kind.searchKind, it.id, false) }
-                host.setLiked(ref.kind.searchKind, ref.id, true)
+                // Added by the assistant (one list §1: `source: assistant`), with the API-009 count.
+                schedule.add(eventId, target, source = ScheduleEntrySource.ASSISTANT)
+                refreshLive()
                 if (ref.kind == RefKind.LOCATION) at(action.string("time"))?.let { hearts.move(eventId, target, it) }
                 ActionOutcome.Done("Added $name to your schedule.", listOf(BlockValidator.card(ref)))
             }
@@ -762,7 +777,9 @@ class AssistantController(
     private fun applyEdit(eventId: Int, edit: PlanEdit, ops: List<String>, prefix: String = ""): ActionOutcome {
         val started = System.nanoTime()
         val bundle = repository.bundle.value ?: return ActionOutcome.Failed("No event.")
-        plans.applyPlan(eventId, edit.after)
+        // One list: the edit's result becomes edits to My schedule; what the request removed (excluded)
+        // leaves even when the person added it.
+        schedule.applyPlan(eventId, edit.after, explicit = edit.after.constraints.excluded)
         AppLog.info(
             LogCategory.PLANNER, LogEvent.PLAN_EDIT, "Plan edit applied",
             mapOf(
@@ -777,7 +794,7 @@ class AssistantController(
             prefix + AssistantRouter.describe(edit, bundle),
             listOf(
                 AssistantBlock.PlanDiffBlock(edit.diff),
-                AssistantBlock.Chips(listOf(Chip("Show my plan", AssistantAction(ActionName.PLAN)))),
+                AssistantBlock.Chips(listOf(Chip("Show my schedule", AssistantAction(ActionName.PLAN)))),
             ),
         )
     }
@@ -810,7 +827,7 @@ class AssistantController(
     /** The share block's link (also logged when the QR or Copy is used). */
     fun shareLink(target: String): String? {
         val bundle = repository.bundle.value ?: return null
-        return if (target == "plan") plans.plan(bundle.event.id)?.takeIf { !it.isEmpty }?.let { PlanShare.planLink(it, bundle) }
+        return if (target == "plan") schedule.dayPlan(bundle.event.id, bundle)?.let { PlanShare.planLink(it, bundle) }
         else EntityRef.parse(target.removePrefix("item:"))?.let { PlanShare.itemLink(it.id, bundle) }
     }
 
@@ -818,25 +835,31 @@ class AssistantController(
         val bundle = repository.bundle.value ?: return
         val link = shareLink(target) ?: return
         val isPlan = target == "plan"
-        val items = if (isPlan) plans.plan(bundle.event.id)?.itemIds?.size ?: 0 else 1
-        val title = if (isPlan) "My plan for ${bundle.event.name}" else EntityRef.parse(target.removePrefix("item:"))?.name(bundle) ?: bundle.event.name
+        val items = if (isPlan) schedule.dayPlan(bundle.event.id, bundle)?.itemIds?.size ?: 0 else 1
+        val title = if (isPlan) "My schedule for ${bundle.event.name}" else EntityRef.parse(target.removePrefix("item:"))?.name(bundle) ?: bundle.event.name
         share(link, if (isPlan) "plan" else "item", items, title, via)
     }
 
     // ── Plans ───────────────────────────────────────────────────────────────
 
-    private fun makePlan(request: String) {
+    /**
+     * Plans for a request (the model reads it when available) and previews the result as a proposal
+     * (one list §3): Apply adds it to My schedule, Cancel / "no" / another turn drops it.
+     */
+    fun planRequest(request: String, source: String = "assistant") {
+        if (request.isBlank()) return
         _state.update { it.copy(busy = TurnPath.PLAN) }
         scope.launch {
-            val plan = host.makePlan(request, "assistant")
+            val plan = host.makePlan(request, source)
             val bundle = repository.bundle.value
             if (plan == null || plan.isEmpty || bundle == null) {
                 append(null, listOf(AssistantBlock.Text(host.planError() ?: "Nothing on the schedule fits that. Try another day or fewer limits.")))
                 return@launch
             }
-            // Built in place: the timeline shows it; the Undo pill offers the way back.
-            _state.update { it.copy(busy = null, turns = emptyList(), undoOffer = UndoOffer("Plan made", it.serial + 1), serial = it.serial + 1, canUndo = plans.history(bundle.event.id).canUndo) }
-            remember(bundle.event.id, null, AssistantTurn(listOf(AssistantBlock.Text("Here's your plan: ${Planner.summary(plan, bundle.event.zone)}."))))
+            val eventId = bundle.event.id
+            val preview = schedule.schedule(eventId).proposal(plan, bundle)
+            propose(PlanProposals.newPlan(schedule.dayPlan(eventId, bundle), plan, preview, bundle))
+            remember(eventId, null, AssistantTurn(listOf(AssistantBlock.Text("Proposed: ${preview.title.lowercase()} (${preview.pillText})."))))
             refreshLive()
         }
     }
@@ -868,7 +891,7 @@ class AssistantController(
         // Previewed in place: "Use this plan" / "Merge with mine" (plan tab spec).
         val eventId = bundle.event.id
         val own = hearts.hearts(eventId)
-        val current = plans.plan(eventId)?.takeIf { !it.isEmpty }
+        val current = schedule.dayPlan(eventId, bundle)
         val use = SharedPlans.use(known, payload.day, bundle, own, ctx.now)
         if (use == null) {
             append(null, listOf(AssistantBlock.Text("Nothing in that plan is still ahead.")))
@@ -880,21 +903,19 @@ class AssistantController(
 
     // ── Live (spec §6) ──────────────────────────────────────────────────────
 
-    private fun setCheckedOff(eventId: Int, plan: Plan, itemId: Int, done: Boolean, source: String, minutesNear: Long? = null) {
-        val updated = plan.copy(checkedOff = if (done) plan.checkedOff + itemId else plan.checkedOff - itemId)
-        if (updated == plan) return
-        plans.setPlan(eventId, updated)
+    /** Check-offs (tap or auto): a per-event set in My schedule's storage, outside the Undo history. */
+    private fun setCheckedOff(eventId: Int, itemId: Int, done: Boolean, source: String, minutesNear: Long? = null) {
+        if (!schedule.setCheckedOff(eventId, itemId, done)) return
         AppLog.info(
             LogCategory.LIVE, LogEvent.LIVE_CHECKOFF, if (done) "Checked off" else "Check-off removed",
             mapOf("item_id" to itemId, "source" to source, "done" to done, "minutes_near" to minutesNear),
         )
     }
 
-    /** A check toggle on a plan row (My plan, the assistant's plan block). */
+    /** A check toggle on a schedule row (Ask Attnd's day, the assistant's plan block). */
     fun toggleCheckOff(itemId: Int) {
-        val bundle = repository.bundle.value ?: return
-        val plan = plans.plan(bundle.event.id) ?: return
-        setCheckedOff(bundle.event.id, plan, itemId, itemId !in plan.checkedOff, "tap")
+        val eventId = repository.bundle.value?.event?.id ?: return
+        setCheckedOff(eventId, itemId, itemId !in schedule.checkedOff(eventId), "tap")
         refreshLive()
     }
 
@@ -904,15 +925,10 @@ class AssistantController(
         val cutoff = at.minus(SAMPLE_WINDOW)
         while (samples.size > MAX_SAMPLES || (samples.firstOrNull()?.at?.isBefore(cutoff) == true)) samples.removeFirst()
         val bundle = repository.bundle.value ?: return
-        val plan = plans.plan(bundle.event.id)
-        if (plan != null && !plan.isEmpty) {
-            val checked = LiveAssist.checkOffs(plan, bundle, samples.toList(), at)
-            if (checked.isNotEmpty()) {
-                var updated: Plan = plan
-                checked.forEach { id ->
-                    setCheckedOff(bundle.event.id, updated, id, true, "auto", LiveAssist.CHECKOFF_DWELL.toMinutes())
-                    updated = plans.plan(bundle.event.id) ?: updated
-                }
+        val plan = schedule.dayPlan(bundle.event.id, bundle)
+        if (plan != null) {
+            LiveAssist.checkOffs(plan, bundle, samples.toList(), at).sorted().forEach { id ->
+                setCheckedOff(bundle.event.id, id, true, "auto", LiveAssist.CHECKOFF_DWELL.toMinutes())
             }
         }
         refreshLive(at)
@@ -931,7 +947,7 @@ class AssistantController(
             return
         }
         val eventId = bundle.event.id
-        val plan = plans.plan(eventId)?.takeIf { !it.isEmpty }
+        val plan = schedule.dayPlan(eventId, bundle)
         val user = samples.lastOrNull()?.takeIf { Duration.between(it.at, now) < RECENT }?.point ?: host.userLocation()
         val hints = LiveHintRules.of(plan, bundle, hearts.hearts(eventId), now, user, samples.toList(), dismissedSkips)
         hints.runningLate?.let { late ->
@@ -947,10 +963,12 @@ class AssistantController(
         val today = now.atZone(bundle.event.zone).toLocalDate()
         val day = plan?.days?.firstOrNull { it.date == today }?.items.orEmpty()
         val wants = day.isNotEmpty() && !now.isBefore(day.first().start.minus(LOCATION_LEAD)) && now.isBefore(day.last().end.plus(LOCATION_TAIL))
-        _state.update { it.copy(live = hints, wantsLocation = wants, canUndo = plans.history(eventId).canUndo) }
+        _state.update { it.copy(live = hints, wantsLocation = wants, canUndo = schedule.history(eventId).canUndo) }
     }
 
     private companion object {
+        /** The reason of entries a shared plan added (one list §1). */
+        const val SHARED_REASON = "In a shared plan"
         val SAMPLE_WINDOW: Duration = Duration.ofHours(3)
         const val MAX_SAMPLES = 600
         val RECENT: Duration = Duration.ofMinutes(5)

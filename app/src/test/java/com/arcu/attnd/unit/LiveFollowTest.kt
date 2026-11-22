@@ -65,11 +65,10 @@ class LiveFollowTest {
 
     private fun day(
         hearted: Set<Int> = emptySet(),
-        planned: Set<Int> = emptySet(),
         places: List<FollowPlace> = emptyList(),
         at: Instant = now,
         schedule: List<ScheduleItem> = this.schedule,
-    ) = LiveFollow.followDay(schedule, hearted, planned, places, eventStart, at, chicago)
+    ) = LiveFollow.followDay(schedule, hearted, places, eventStart, at, chicago)
 
     private fun content(
         day: FollowDay,
@@ -200,29 +199,24 @@ class LiveFollowTest {
     }
 
     @Test
-    fun followDay_planWinsOverHearts() {
-        val planned = day(hearted = setOf(4), planned = setOf(2, 5))!!
-        assertTrue(planned.followsPlan)
-        assertFalse(planned.followsHearts)
-        assertEquals(listOf(2, 5), planned.items.map { it.id })
-        assertEquals(LiveSource.PLAN, planned.source)
-        val state = content(planned)
-        assertTrue(state.followsPlan)
+    fun followDay_followsMySchedule() {
+        // One list (Nov 22, 2026): no plan source; the planner's items are in My schedule.
+        val mine = day(hearted = setOf(2, 5))!!
+        assertTrue(mine.followsHearts)
+        assertEquals(listOf(2, 5), mine.items.map { it.id })
+        assertEquals(LiveSource.HEARTS, mine.source)
+        val state = content(mine, hearted = setOf(2, 5))
+        assertTrue(state.followsHearts)
         assertEquals(2, state.current?.itemId)
         assertEquals(5, state.next?.itemId)
     }
 
     @Test
-    fun followDay_planOverTodayFallsBackToHearts() {
-        // Only Morning Yoga (ended) was planned today: hearts take over, then the schedule.
-        val hearts = day(hearted = setOf(4), planned = setOf(1))!!
-        assertFalse(hearts.followsPlan)
-        assertTrue(hearts.followsHearts)
-        assertEquals(listOf(4), hearts.items.map { it.id })
-        assertFalse(content(hearts).followsPlan)
-        val everything = day(planned = setOf(1))!!
-        assertFalse(everything.followsPlan)
+    fun followDay_endedEntriesFallBackToTheDay() {
+        // Only Morning Yoga (ended) is in My schedule today: the event's own day.
+        val everything = day(hearted = setOf(1))!!
         assertFalse(everything.followsHearts)
+        assertEquals(LiveSource.EVENT, everything.source)
         assertEquals(listOf(1, 2, 3, 4, 5), everything.items.map { it.id })
     }
 
@@ -241,7 +235,7 @@ class LiveFollowTest {
         assertEquals(2, content(mine, hearted = setOf(4)).current?.itemId)
 
         // Mine in progress: no gap, Now from My schedule.
-        val planned = content(day(planned = setOf(2, 5))!!)
+        val planned = content(day(hearted = setOf(2, 5))!!, hearted = setOf(2, 5))
         assertEquals("schedule", planned.nowSource)
         assertNull(planned.freeUntil)
 
@@ -335,20 +329,19 @@ class LiveFollowTest {
     fun inputs_liveActivitySettings() {
         val bundle = GlanceFixture.bundle.copy(locations = locations, schedule = schedule)
         val place = FollowPlace(20, "Food Court", now, now.plus(Duration.ofMinutes(45)))
-        val mine = LiveFollow.inputs(null, bundle, setOf(2), setOf(3), listOf(place))
+        val mine = LiveFollow.inputs(null, bundle, setOf(2), listOf(place))
         assertEquals(setOf(2), mine.hearted)
-        assertEquals(setOf(3), mine.planned)
         assertEquals(1, mine.places.size)
-        val all = LiveFollow.inputs(LiveActivitySettings(follows = LiveActivitySettings.Follows.EVERYTHING), bundle, setOf(2), setOf(3), listOf(place))
-        assertTrue(all.hearted.isEmpty() && all.planned.isEmpty() && all.places.isEmpty())
+        val all = LiveFollow.inputs(LiveActivitySettings(follows = LiveActivitySettings.Follows.EVERYTHING), bundle, setOf(2), listOf(place))
+        assertTrue(all.hearted.isEmpty() && all.places.isEmpty())
         assertEquals(schedule.size, all.schedule.size)
-        val stage = LiveFollow.inputs(LiveActivitySettings(follows = LiveActivitySettings.Follows.LOCATION, locationId = 10), bundle, setOf(3), emptySet(), emptyList())
+        val stage = LiveFollow.inputs(LiveActivitySettings(follows = LiveActivitySettings.Follows.LOCATION, locationId = 10), bundle, setOf(3), emptyList())
         assertEquals(listOf(2, 4, 5), stage.schedule.map { it.id })
         assertTrue(stage.hearted.isEmpty())
         // An unknown place falls back to My schedule.
         assertEquals(
             setOf(3),
-            LiveFollow.inputs(LiveActivitySettings(follows = LiveActivitySettings.Follows.LOCATION, locationId = 99), bundle, setOf(3), emptySet(), emptyList()).hearted,
+            LiveFollow.inputs(LiveActivitySettings(follows = LiveActivitySettings.Follows.LOCATION, locationId = 99), bundle, setOf(3), emptyList()).hearted,
         )
     }
 
@@ -421,7 +414,7 @@ class LiveFollowTest {
     private val bundle = PlannerFixture.bundle
     private fun at(localTime: String) = PlannerFixture.sat(localTime).toInstant()
     private fun live(hearts: Hearts, at: Instant, skipped: Set<Int> = emptySet()) =
-        LiveFollow.followDay(bundle.schedule, hearts.scheduleItems, emptySet(), emptyList(), bundle.event.startTime?.toInstant(), at, chicago)!!.let { day ->
+        LiveFollow.followDay(bundle.schedule, hearts.scheduleItems, emptyList(), bundle.event.startTime?.toInstant(), at, chicago)!!.let { day ->
             val c = LiveFollow.content(day, bundle.locations, hearts.scheduleItems, skipped, null, urgent = null, now = at)
             LiveFollow.render(LiveFollow.decorate(c, day, null, !hearts.isEmpty, null), day, bundle.event.name, chicago, at, Locale.US)
         }
@@ -464,7 +457,7 @@ class LiveFollowTest {
         assertEquals(LiveFollow.EMPTY_HINT, gates.subText)
 
         // Saturday ended at 11 PM; at 11:10 PM the followed day is Sunday and the summary shows.
-        val inputs = LiveFollow.inputs(null, bundle, emptySet(), emptySet(), emptyList())
+        val inputs = LiveFollow.inputs(null, bundle, emptySet(), emptyList())
         val start = bundle.event.startTime?.toInstant()
         val late = at("23:10")
         val sunday = LiveFollow.followDay(inputs, start, late, chicago)
@@ -490,9 +483,9 @@ class LiveFollowTest {
         assertTrue(urgent.isActive(Instant.parse("2026-11-15T11:59:00Z"), null))
         assertFalse(urgent.isActive(Instant.parse("2026-11-15T12:00:00Z"), null))
 
-        // Following the plan, late for Next: "Leave now".
-        val planDay = LiveFollow.followDay(bundle.schedule, emptySet(), setOf(101, 114), emptyList(), null, at("18:40"), chicago)!!
-        val c = LiveFollow.content(planDay, bundle.locations, emptySet(), emptySet(), null, urgent = null, now = at("18:40"))
+        // Following My schedule, late for Next: "Leave now".
+        val planDay = LiveFollow.followDay(bundle.schedule, setOf(101, 114), emptyList(), null, at("18:40"), chicago)!!
+        val c = LiveFollow.content(planDay, bundle.locations, setOf(101, 114), emptySet(), null, urgent = null, now = at("18:40"))
         val leave = RunningLate(101, LateState.LEAVE_NOW, 8, at("18:47"), "Leave now for The Prairie Lights · 8 min walk", emptyList())
         val decorated = LiveFollow.decorate(c, planDay, null, hasMine = true, late = leave)
         assertEquals(LateState.LEAVE_NOW, decorated.lateState)
@@ -506,7 +499,7 @@ class LiveFollowTest {
     @Test
     fun nextWakeFollowsTheDay() {
         val hearts = PlannerFixture.hearts.scheduleItems
-        fun dayAt(t: Instant) = LiveFollow.followDay(bundle.schedule, hearts, emptySet(), emptyList(), bundle.event.startTime?.toInstant(), t, chicago)
+        fun dayAt(t: Instant) = LiveFollow.followDay(bundle.schedule, hearts, emptyList(), bundle.event.startTime?.toInstant(), t, chicago)
         val now = PlannerFixture.now // Sat 10:00 AM
         // The event's own items change Now (Gates open ends 10:30).
         assertEquals(at("10:30"), LiveFollow.nextWake(dayAt(now), now, showing = false))

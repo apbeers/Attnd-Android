@@ -213,14 +213,7 @@ object LiveAssist {
         val other = plan.items.filter { it.start.isBefore(end) && it.end.isAfter(start) }
             .mapNotNull { bundle.scheduleItem(it.itemId) }
             .minWithOrNull(Planner.ITEM_ORDER) ?: return null
-        return Chip(ChipText.fit("Add to plan instead of ", other.name, "?"), AssistantAction.planEdit(listOf(PlanOp.Replace(other.id, with = itemId)), bundle))
-    }
-
-    /** Planned items the organizer changed or removed since planning (the inline "Re-plan" card). */
-    fun changedItems(plan: Plan, bundle: EventBundle): List<Int> = plan.itemIds.filter { id ->
-        val item = bundle.scheduleItem(id)
-        val print = plan.fingerprints[id]
-        item == null || (print != null && Planner.fingerprint(item) != print)
+        return Chip(ChipText.fit("Replace ", other.name, " with this?"), AssistantAction.planEdit(listOf(PlanOp.Replace(other.id, with = itemId)), bundle))
     }
 
     fun recap(plan: Plan, bundle: EventBundle, hearts: Hearts, date: LocalDate, now: Instant, units: DistanceUnits, locale: Locale = Locale.getDefault()): Recap {

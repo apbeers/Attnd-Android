@@ -22,6 +22,7 @@ import com.arcu.attnd.domain.ProposalText
 import com.arcu.attnd.domain.RowMark
 import com.arcu.attnd.domain.SequenceKind
 import com.arcu.attnd.domain.SwapCommand
+import com.arcu.attnd.domain.propose
 import com.arcu.attnd.unit.AssistantFixture.ctx
 import com.arcu.attnd.unit.AssistantFixture.plan
 import com.arcu.attnd.unit.PlannerFixture.bundle
@@ -259,5 +260,70 @@ class PlanProposalTest {
         // With a plan: its entries stay, the new ones are added.
         val merged = PlanCommands.sequence(sentence, ctx())!!.first.edit.after
         assertTrue(merged.itemIds.containsAll(plan.itemIds))
+    }
+
+    // ── One list (Nov 22, 2026): every proposal previews, then applies as one Undo step ──
+
+    private class Memory : com.arcu.attnd.data.ScheduleStore.Storage {
+        val texts = mutableMapOf<String, String>()
+        override fun mySchedule(eventId: Int) = texts["s$eventId"]
+        override fun setMySchedule(eventId: Int, value: String) { texts["s$eventId"] = value }
+        override fun hearts(eventId: Int) = texts["h$eventId"]
+        override fun setHearts(eventId: Int, value: String) { texts["h$eventId"] = value }
+        override fun history(eventId: Int) = texts["u$eventId"]
+        override fun setHistory(eventId: Int, value: String?) { if (value == null) texts.remove("u$eventId") else texts["u$eventId"] = value }
+        override fun preferences(eventId: Int) = texts["r$eventId"]
+        override fun setPreferences(eventId: Int, value: String) { texts["r$eventId"] = value }
+        override fun checkedOff(eventId: Int) = texts["c$eventId"]
+        override fun setCheckedOff(eventId: Int, value: String) { texts["c$eventId"] = value }
+        override fun legacyPlan(eventId: Int): String? = null
+        override fun legacyPlanHistory(eventId: Int): String? = null
+        override fun deleteLegacyPlan(eventId: Int) = Unit
+    }
+
+    @Test
+    fun everyProposalKindPreviewsThenAppliesAsOneUndoStep() {
+        val eventId = bundle.event.id
+        val controller = com.arcu.attnd.data.ScheduleController(com.arcu.attnd.data.ScheduleStore(Memory()), { bundle }, { _, _, _ -> })
+        listOf(101, 114, 109).forEach { controller.setLiked(eventId, com.arcu.attnd.domain.SearchKind.SCHEDULE, it, true, countUsage = false) }
+        val start = controller.history(eventId).snapshots.size
+        fun context() = com.arcu.attnd.domain.AssistantContext(bundle, controller.hearts(eventId), controller.dayPlan(eventId), PlannerFixture.now,
+            schedule = controller.schedule(eventId), history = controller.history(eventId))
+        val day = context().plan!!
+        assertEquals(setOf(101, 109, 114), day.itemIds.toSet())
+
+        val newPlan = com.arcu.attnd.domain.Planner.Companion.run {
+            val (planned, preview) = propose(controller.schedule(eventId), controller.preferences(eventId), bundle, PlannerFixture.now, AssistantFixture.musicAndBbq)
+            PlanProposals.newPlan(day, planned, preview, bundle)
+        }
+        assertEquals(ProposalKind.PLAN, newPlan.kind)
+        assertTrue(newPlan.summary.startsWith("Add "))
+        val proposals = listOf(
+            newPlan,
+            PlanProposals.fromAction(AssistantAction.planEdit(listOf(PlanOp.Add(110)), bundle), context())!!,
+            PlanProposals.fromAction(AssistantAction(ActionName.PLAN_VERSION, kotlinx.serialization.json.JsonObject(mapOf("kind" to kotlinx.serialization.json.JsonPrimitive("everything")))), context())!!,
+            PlanCommands.sequence("Let's do music, food, then more music", context())!!,
+        )
+        // Previewing changes nothing.
+        val before = controller.schedule(eventId)
+        assertEquals(before, controller.schedule(eventId))
+        assertEquals(start, controller.history(eventId).snapshots.size)
+
+        // Apply: one step each; Undo pops exactly that step.
+        for (proposal in proposals) {
+            val previous = controller.schedule(eventId)
+            val steps = controller.history(eventId).snapshots.size
+            val applied = controller.applyPlan(eventId, proposal.first.edit.after, explicit = proposal.first.edit.after.constraints.excluded)
+            if (applied.isEmpty) continue
+            assertEquals(steps + 1, controller.history(eventId).snapshots.size)
+            // The person's own entries stay.
+            assertTrue(controller.schedule(eventId).itemIds.containsAll(setOf(101, 109)))
+            assertTrue(controller.undo(eventId))
+            assertEquals(previous, controller.schedule(eventId))
+        }
+        // An explicit removal ("drop Juniper Lane") takes the person's own entry.
+        val drop = PlanProposals.fromAction(AssistantAction.planEdit(listOf(PlanOp.Remove(109)), bundle), context())!!
+        controller.applyPlan(eventId, drop.first.edit.after, explicit = drop.first.edit.after.constraints.excluded)
+        assertTrue(109 !in controller.schedule(eventId).itemIds)
     }
 }

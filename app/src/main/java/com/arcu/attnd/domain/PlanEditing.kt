@@ -1,8 +1,5 @@
 package com.arcu.attnd.domain
 
-import kotlinx.serialization.builtins.ListSerializer
-import kotlinx.serialization.builtins.serializer
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -211,7 +208,8 @@ object PlanEditor {
         }
         val after = Planner(bundle, plan.preferences, hearts, c).replan(plan, now)
         pinnedByOps.distinct().filter { it !in after.itemIds && it in c.pinned }.forEach { notes += "${name(it)} doesn't fit your plan" }
-        return PlanEdit(plan, after, PlanDiff.between(plan, after, bundle), notes)
+        // One list: a day view's timed food places stay (no-op for a planner's own plan).
+        return PlanEdit(plan, after, PlanDiff.between(plan, after, bundle), notes).keepingScheduleMeals(bundle)
     }
 
     /** The replacement for [op] in its slot (see the class rules), or null. */
@@ -271,33 +269,6 @@ enum class PlanVersionKind(val key: String, val label: String) {
 object PlanVersions {
     fun make(kind: PlanVersionKind, plan: Plan, bundle: EventBundle, hearts: Hearts, now: Instant): PlanEdit =
         PlanEditor.preview(plan, kind.ops(), bundle, hearts, now)
-}
-
-/**
- * The undo stack of one plan (≤ [MAX] earlier versions, newest last), stored with the plan per event.
- * Applying an edit pushes the plan it replaced; `plan_undo` pops it.
- */
-data class PlanHistory(val plans: List<Plan> = emptyList()) {
-    val canUndo: Boolean get() = plans.isNotEmpty()
-
-    fun push(previous: Plan): PlanHistory = PlanHistory((plans + previous).takeLast(MAX))
-
-    /** The plan to restore and the remaining history; null when there is nothing to undo. */
-    fun pop(): Pair<Plan, PlanHistory>? = plans.lastOrNull()?.let { it to PlanHistory(plans.dropLast(1)) }
-
-    fun encode(): String = json.encodeToString(ListSerializer(String.serializer()), plans.map { PlanCodec.encode(it) })
-
-    companion object {
-        const val MAX = 20
-        private val json = Json { ignoreUnknownKeys = true }
-
-        /** Lenient: unreadable entries are skipped, a broken text is an empty history. */
-        fun decode(text: String?): PlanHistory {
-            if (text.isNullOrBlank()) return PlanHistory()
-            val list = runCatching { json.decodeFromString(ListSerializer(String.serializer()), text) }.getOrNull() ?: return PlanHistory()
-            return PlanHistory(list.mapNotNull { PlanCodec.decode(it) }.takeLast(MAX))
-        }
-    }
 }
 
 /**

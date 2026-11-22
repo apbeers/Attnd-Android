@@ -20,6 +20,9 @@ enum class ProposalKind {
 
     /** "Music, food, then more music" (as iOS, Nov 21, 2026): option 0's plan is applied as it is (no action). */
     SEQUENCE,
+
+    /** A new plan from the planner (one list §3): previewed, Apply adds it to My schedule (no action). */
+    PLAN,
 }
 
 /**
@@ -150,6 +153,23 @@ object PlanProposals {
         )
     }
 
+    /**
+     * One list §3: a new plan from the planner ([Planner.Companion.propose]) previewed against My schedule's
+     * day ([current], null when nothing is timed): "Add 6 things to your schedule. 8 items, 10:00 AM – …"
+     * with the schedule proposal's pill ("+5 items, +1 lunch break").
+     */
+    fun newPlan(current: Plan?, plan: Plan, schedule: ScheduleProposal, bundle: EventBundle): PlanProposal {
+        // Only the new plan's days: My schedule's other days don't change.
+        val days = plan.days.map { it.date }.toSet()
+        val before = current?.let { it.copy(days = it.days.filter { d -> d.date in days }) } ?: plan.copy(days = emptyList(), fingerprints = emptyMap())
+        val edit = PlanEdit(before, plan, PlanDiff.between(before, plan, bundle), emptyList())
+        return PlanProposal(
+            ProposalKind.PLAN, listOf(ProposalOption("Add to My Schedule", null, edit)),
+            day = affectedDay(edit, bundle), pill = schedule.pillText,
+            summary = "${schedule.title}. ${Planner.summary(plan, bundle.event.zone)}.",
+        )
+    }
+
     private fun option(plan: Plan, action: AssistantAction, ops: List<PlanOp>, itemId: Int?, ctx: AssistantContext, edit: PlanEdit? = null): ProposalOption {
         val preview = edit ?: PlanEditor.preview(plan, ops, ctx.bundle, ctx.hearts, ctx.now)
         val reason = itemId?.let { id -> preview.after.items.firstOrNull { it.itemId == id }?.reason }
@@ -232,7 +252,8 @@ object PreviewRows {
     fun of(plan: Plan?, proposal: PlanProposal?, date: LocalDate, bundle: EventBundle): List<PreviewRow> {
         val zone = bundle.event.zone
         val edit = proposal?.first?.edit
-        val changing = proposal?.kind == ProposalKind.CHANGE || proposal?.kind == ProposalKind.SHARED || proposal?.kind == ProposalKind.SEQUENCE
+        val changing = proposal?.kind == ProposalKind.CHANGE || proposal?.kind == ProposalKind.SHARED || proposal?.kind == ProposalKind.SEQUENCE ||
+            proposal?.kind == ProposalKind.PLAN
         val basePlan = if (changing) edit!!.before else plan
         val day = basePlan?.days?.firstOrNull { it.date == date }
         val diff = edit?.diff
@@ -282,7 +303,7 @@ object PreviewRows {
                 }
                 base.subList(0, at + 1) + options + base.subList(at + 1, base.size)
             }
-            ProposalKind.CHANGE, ProposalKind.SHARED, ProposalKind.SEQUENCE -> {
+            ProposalKind.CHANGE, ProposalKind.SHARED, ProposalKind.SEQUENCE, ProposalKind.PLAN -> {
                 val after = edit!!.after.days.firstOrNull { it.date == date }
                 val added = after?.entries.orEmpty().mapNotNull { entry ->
                     when (entry) {

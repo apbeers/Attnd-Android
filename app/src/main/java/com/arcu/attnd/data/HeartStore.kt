@@ -20,8 +20,11 @@ class HeartStore(private val schedule: ScheduleStore) {
     /** My schedule itself (the assistant's router: timed places, clashes, reminders). */
     fun schedule(eventId: Int): MySchedule = schedule.schedule(eventId)
 
-    /** The assistant's time / reminder changes (phase 6a): membership doesn't change, so no API-009 count. */
-    fun move(eventId: Int, target: ScheduleTarget, at: Instant?) = schedule.update(eventId) { it.move(target, at) }
+    /**
+     * The assistant's time / reminder changes (phase 6a): membership doesn't change, so no API-009 count. A
+     * new time is a step on the one Undo history (one list §3); a reminder isn't.
+     */
+    fun move(eventId: Int, target: ScheduleTarget, at: Instant?) = schedule.update(eventId, undoable = true) { it.move(target, at) }
 
     fun setReminder(eventId: Int, target: ScheduleTarget, minutes: Int?) = schedule.update(eventId) { it.setReminder(target, minutes) }
 }

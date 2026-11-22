@@ -189,8 +189,6 @@ fun MyPlanTab(
     onDownloadModel: () -> Unit,
     onLocationShown: (Int) -> Unit,
     onScheduleItemShown: (Int) -> Unit,
-    onReplan: () -> Unit,
-    onKeepChanged: () -> Unit,
 ) {
     val state by controller.state.collectAsStateWithLifecycle()
     var stackText by rememberSaveable { mutableStateOf("") }
@@ -219,7 +217,7 @@ fun MyPlanTab(
             return@CompositionLocalProvider
         }
         Column(Modifier.fillMaxSize().imePadding()) {
-            PlanTimeline(controller, state, bundle, plan, planner, model, onDownloadModel, onReplan, onKeepChanged, Modifier.weight(1f))
+            PlanTimeline(controller, state, bundle, plan, planner, model, onDownloadModel, Modifier.weight(1f))
             AssistantDock(
                 controller = controller,
                 state = state,
@@ -304,8 +302,6 @@ private fun PlanTimeline(
     planner: PlanUiState,
     model: AssistantUiState,
     onDownloadModel: () -> Unit,
-    onReplan: () -> Unit,
-    onKeepChanged: () -> Unit,
     modifier: Modifier,
 ) {
     val actions = LocalBlockActions.current ?: return
@@ -341,7 +337,6 @@ private fun PlanTimeline(
                     RunningLateCard(late.text, late.state == LateState.CANT_MAKE_IT, late.chips, onChip = { controller.run(it.action, it.label, ActionSource.RULES) })
                 }
             }
-            if (live.changed.isNotEmpty()) item(key = "changed") { ChangedCard(bundle, live.changed, onReplan, onKeepChanged) }
             if (live.recapReady) item(key = "recap") { SummaryCard("recap") }
             if (live.gaps.isNotEmpty() || live.skipped.isNotEmpty()) item(key = "hints") { HintChips(controller, state) }
         }
@@ -378,17 +373,17 @@ private fun PlanHeader(controller: AssistantController, state: AssistantState, b
     Column(Modifier.fillMaxWidth().padding(bottom = 4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("My plan", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                val summary = plan?.let { Planner.summary(it, bundle.event.zone) } ?: state.proposal?.summary ?: "Plan your day: likes, walks and meals included."
+                Text("Ask Attnd", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                val summary = plan?.let { Planner.summary(it, bundle.event.zone) } ?: state.proposal?.summary ?: "Plan your day: your schedule, walks and meals included."
                 Text(summary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
             if (plan != null) {
                 IconButton(onClick = { controller.run(AssistantAction(ActionName.SHARE_PLAN), null, ActionSource.MANUAL) }) {
-                    Icon(Icons.Filled.Share, contentDescription = "Share my plan")
+                    Icon(Icons.Filled.Share, contentDescription = "Share my schedule")
                 }
             }
             IconButton(onClick = controller::undoLast, enabled = state.canUndo) {
-                Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = "Undo the last plan change")
+                Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = "Undo the last schedule change")
             }
         }
         if (days.size > 1) {
@@ -396,23 +391,6 @@ private fun PlanHeader(controller: AssistantController, state: AssistantState, b
                 days.forEach { d ->
                     FilterChip(selected = d == day, onClick = { onDay(d) }, label = { Text(EventTime.formatDayHeader(d)) })
                 }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ChangedCard(bundle: EventBundle, changed: List<Int>, onReplan: () -> Unit, onKeep: () -> Unit) {
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer), modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("Your plan changed", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-            Text(
-                changed.joinToString(", ") { id -> bundle.scheduleItem(id)?.name ?: "an item that was removed" } + " changed since you planned.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = onReplan) { Text("Re-plan") }
-                TextButton(onClick = onKeep) { Text("Keep as is") }
             }
         }
     }
@@ -609,7 +587,7 @@ private fun NoPlan(controller: AssistantController, bundle: EventBundle, planner
         if (liked.isNotEmpty()) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Icon(Icons.Filled.Favorite, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
-                Text("Liked (your plan starts from these)", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                Text("In your schedule (plans start from these)", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
             }
             Column {
                 liked.forEachIndexed { i, result ->
@@ -764,7 +742,7 @@ private fun LiveResults(bundle: EventBundle, query: String) {
     val now = rememberNow()
     val results = remember(bundle, settled, now) { EventSearch.search(bundle, settled, now) }
     if (results.isEmpty()) {
-        Text("Nothing matches yet. Press send to ask or change your plan.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Nothing matches yet. Press send to ask or change your schedule.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         return
     }
     results.take(20).forEachIndexed { i, result ->

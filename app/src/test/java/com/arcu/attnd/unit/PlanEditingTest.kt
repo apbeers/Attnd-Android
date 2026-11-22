@@ -7,7 +7,6 @@ import com.arcu.attnd.domain.PlanCodec
 import com.arcu.attnd.domain.PlanConstraints
 import com.arcu.attnd.domain.PlanDiff
 import com.arcu.attnd.domain.PlanEditor
-import com.arcu.attnd.domain.PlanHistory
 import com.arcu.attnd.domain.PlanOp
 import com.arcu.attnd.domain.PlanOpJson
 import com.arcu.attnd.domain.PlanOrigin
@@ -16,6 +15,11 @@ import com.arcu.attnd.domain.PlanVersionKind
 import com.arcu.attnd.domain.PlanVersions
 import com.arcu.attnd.domain.Planner
 import com.arcu.attnd.domain.ScheduleItem
+import com.arcu.attnd.domain.MealBreak
+import com.arcu.attnd.domain.MySchedule
+import com.arcu.attnd.domain.SchedulePreferences
+import com.arcu.attnd.domain.ScheduleTarget
+import com.arcu.attnd.domain.keepingScheduleMeals
 import com.arcu.attnd.unit.AssistantFixture.clock
 import com.arcu.attnd.unit.AssistantFixture.musicAndBbq
 import com.arcu.attnd.unit.AssistantFixture.plan
@@ -163,16 +167,35 @@ class PlanEditingTest {
     }
 
     @Test
-    fun undoStack() {
-        var history = PlanHistory()
-        repeat(25) { history = history.push(plan.copy(request = "v$it")) }
-        assertEquals(PlanHistory.MAX, history.plans.size)
-        val (top, rest) = history.pop()!!
-        assertEquals("v24", top.request)
-        assertEquals(19, rest.plans.size)
-        assertEquals(history, PlanHistory.decode(history.encode()))
-        assertNull(PlanHistory().pop())
-        assertFalse(PlanHistory.decode("nonsense").canUndo)
+    fun editsOfMyScheduleKeepItsFoodPlaces() {
+        // One list: the day view of My schedule (Taco Row at lunch) edited; the re-solve doesn't plan
+        // another lunch (covered) and the person's lunch place stays in the result.
+        val schedule = MySchedule()
+        listOf(101, 105, 114).forEach { schedule.add(ScheduleTarget.item(it)) }
+        schedule.add(ScheduleTarget.place(6), at = PlannerFixture.sat("12:15").toInstant())
+        val day = schedule.dayPlan(bundle, SchedulePreferences(meals = MealKind.entries.toSet()))!!
+        val edit = PlanEditor.preview(day, listOf(PlanOp.Pace(PlanPace.RELAXED)), bundle, schedule.hearts, now)
+        val lunches = edit.after.days.flatMap { it.entries.filterIsInstance<MealBreak>() }.filter { it.kind == MealKind.LUNCH }
+        assertEquals(listOf(6), lunches.map { it.locationId })
+        assertTrue(edit.diff.mealsRemoved.isEmpty())
+        // Applied: nothing removed or moved for the place.
+        val proposal = schedule.proposal(edit.after, bundle, edit.after.constraints.excluded)
+        assertFalse(proposal.removes.any { it.target == ScheduleTarget.place(6) })
+        assertFalse(proposal.adds.any { it.target == ScheduleTarget.place(6) })
+        // A planner plan (no covered slots) is unchanged by the rule.
+        val plain = edit(PlanOp.Pace(PlanPace.RELAXED))
+        assertEquals(plain, plain.keepingScheduleMeals(bundle))
+    }
+
+    @Test
+    fun olderBuildsPlanHistoryIsReadOnce() {
+        // Only for the migration (one list §6): the newest readable plan of the old history.
+        val older = plan.copy(request = "v1")
+        val newer = plan.copy(request = "v2")
+        val text = JsonArray(listOf(PlanCodec.encode(older), PlanCodec.encode(newer), "broken").map { kotlinx.serialization.json.JsonPrimitive(it) }).toString()
+        assertEquals("v2", PlanCodec.newestInHistory(text)?.request)
+        assertNull(PlanCodec.newestInHistory("nonsense"))
+        assertNull(PlanCodec.newestInHistory(null))
     }
 
     @Test

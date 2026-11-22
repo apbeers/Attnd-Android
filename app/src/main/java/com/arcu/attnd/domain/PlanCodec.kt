@@ -1,14 +1,18 @@
 package com.arcu.attnd.domain
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
 
 /**
- * The stored form of a [Plan] (one JSON text per event in the device's preferences). Lenient like the
- * API models: unknown keys are ignored, missing ones defaulted, and a broken text decodes to null.
+ * The stored form of a [Plan] in older builds (one JSON text per event in the device's preferences, plus a
+ * plan history of such texts). Since the one-list change (Nov 22, 2026) plans are never stored: this only
+ * reads an older build's plan once, for the migration into My schedule ([MySchedule.absorb]). Lenient like
+ * the API models: unknown keys are ignored, missing ones defaulted, and a broken text decodes to null.
  */
 object PlanCodec {
 
@@ -27,6 +31,13 @@ object PlanCodec {
         } catch (_: Exception) {
             null
         }
+    }
+
+    /** The newest plan of an older build's plan history (a JSON list of [encode] texts); null when none is readable. */
+    fun newestInHistory(text: String?): Plan? {
+        if (text.isNullOrBlank()) return null
+        val list = runCatching { json.decodeFromString(ListSerializer(String.serializer()), text) }.getOrNull() ?: return null
+        return list.asReversed().firstNotNullOfOrNull { decode(it) }
     }
 
     @Serializable

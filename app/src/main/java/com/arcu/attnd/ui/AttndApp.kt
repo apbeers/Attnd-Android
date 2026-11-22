@@ -441,8 +441,8 @@ private fun EventShell(state: AppUiState, bundle: EventBundle, viewModel: EventV
 }
 
 /**
- * My plan as a full-screen destination with a Close action (the planner, the assistant's router and
- * Gemini Nano with its download card). Phase 6b replaces it with the My plan chat.
+ * Ask Attnd (one list §7; was "My plan") as a full-screen destination with a Close action (the planner,
+ * the assistant's router and Gemini Nano with its download card). Phase 6b replaces it with the chat.
  */
 @Composable
 private fun PlanDestination(state: AppUiState, bundle: EventBundle, viewModel: EventViewModel, blockActions: BlockActions) {
@@ -451,7 +451,7 @@ private fun PlanDestination(state: AppUiState, bundle: EventBundle, viewModel: E
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("My plan") },
+                title = { Text("Ask Attnd") },
                 navigationIcon = { IconButton(onClick = viewModel::closePlan) { Icon(Icons.Filled.Close, contentDescription = "Close") } },
             )
         },
@@ -470,8 +470,6 @@ private fun PlanDestination(state: AppUiState, bundle: EventBundle, viewModel: E
                 onDownloadModel = viewModel::downloadAssistant,
                 onLocationShown = viewModel::onLocationShown,
                 onScheduleItemShown = viewModel::onScheduleItemShown,
-                onReplan = viewModel::replanFromNow,
-                onKeepChanged = viewModel::keepChangedPlan,
             )
         }
     }

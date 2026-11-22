@@ -30,9 +30,15 @@ import kotlin.math.ceil
  *   that reads hearts follows My schedule.
  * - Adding or removing an item or place returns the API-009 metric only when membership really changes
  *   (never for a time / reminder change, a restore, the migration or a rejoin).
- * - Migration ([migrate], once per event): hearted items and the stored plan's items become item
- *   entries, hearted places saved places, planned meal breaks with a suggested food place become place
- *   entries at the break's time. The old keys stay readable.
+ * - Migration ([migrate], once per event): hearted items become item entries, hearted places saved
+ *   places; an older build's stored plan is absorbed once ([absorb], `source: planner`).
+ * - One list (owner, Nov 22, 2026; Attnd-Web `docs/specs/one_list_spec.md`): My schedule is the only
+ *   stored list. Each entry knows who added it ([ScheduleEntry.source]: you / planner / assistant /
+ *   shared) and why ([ScheduleEntry.reason]). The planner is a function: its plan is diffed against My
+ *   schedule into a [ScheduleProposal] ([proposal]: adds and removes with reasons; it only removes its
+ *   own entries unless asked), previewed, applied ([apply]) and kept on one [ScheduleHistory] (≤ 20
+ *   snapshots, hearts included). The [Plan] the assistant and the Live Update read is derived from My
+ *   schedule ([dayPlan]), never stored. [SchedulePreferences] keeps what the planner was told.
  */
 class MySchedule(entries: List<ScheduleEntry> = emptyList()) {
 
@@ -259,79 +265,9 @@ class MySchedule(entries: List<ScheduleEntry> = emptyList()) {
             else EntryReminder(row.target, row.start, row.start.minus(Duration.ofMinutes(lead.toLong())))
         }.sortedBy { it.fireAt }
 
-    // ── Plans (the planner fills My schedule) ───────────────────────────────
-
     /**
-     * What applying a plan does to My schedule: its items are added; items of the previous plan that the
-     * new one dropped (on the new plan's days) are removed; meal breaks with a suggested food place
-     * become place entries at the break's time. Returns the changes.
-     */
-    fun apply(plan: Plan?, previous: Plan?): List<MyScheduleChange> {
-        val changes = mutableListOf<MyScheduleChange>()
-        val newIds = plan?.itemIds.orEmpty().toSet()
-        val newDays = plan?.days.orEmpty().map { it.date }.toSet()
-        val newMeals = plan?.days.orEmpty().flatMap { day -> day.entries.filterIsInstance<MealBreak>() }
-        // Clearing the plan ("New plan") keeps My schedule as it is.
-        if (plan != null) {
-            for (day in previous?.days.orEmpty()) {
-                if (day.date !in newDays) continue
-                for (item in day.items) if (item.itemId !in newIds) remove(ScheduleTarget.item(item.itemId))?.let(changes::add)
-                for (meal in day.entries.filterIsInstance<MealBreak>()) {
-                    val locationId = meal.locationId ?: continue
-                    if (entry(ScheduleEntryKind.PLACE, locationId)?.at != meal.start) continue
-                    val stays = newMeals.any { it.locationId == locationId && it.start == meal.start }
-                    if (!stays) remove(ScheduleTarget.place(locationId))?.let(changes::add)
-                }
-            }
-        }
-        for (id in plan?.itemIds.orEmpty()) add(ScheduleTarget.item(id))?.let(changes::add)
-        val previousMeals = previous?.days.orEmpty().flatMap { day -> day.entries.filterIsInstance<MealBreak>() }
-        for (meal in newMeals) {
-            val locationId = meal.locationId ?: continue
-            if (entry(ScheduleEntryKind.PLACE, locationId)?.at == null || previousMeals.any { it.locationId == locationId }) {
-                add(ScheduleTarget.place(locationId), meal.start, mealMinutes(meal))?.let(changes::add)
-            }
-        }
-        return changes
-    }
-
-    /**
-     * The plan kept in line with My schedule after a change made elsewhere: items no longer in My
-     * schedule leave it, items added on one of its days join it ("In your schedule"), meal breaks whose
-     * place entry was removed lose the place. null stays null.
-     */
-    fun reconcile(plan: Plan?, bundle: EventBundle): Plan? {
-        plan ?: return null
-        val zone = bundle.event.zone
-        val items = itemIds
-        val planned = plan.itemIds.toSet()
-        return plan.copy(days = plan.days.map { day ->
-            val kept = day.entries.mapNotNull { entry ->
-                when (entry) {
-                    is PlannedItem -> entry.takeIf { it.itemId in items }
-                    is MealBreak -> {
-                        val id = entry.locationId
-                        if (id != null && entry(ScheduleEntryKind.PLACE, id) == null) entry.copy(locationId = null) else entry
-                    }
-                }
-            }
-            val added = (items - planned).sorted().mapNotNull { id ->
-                val item = bundle.scheduleItem(id)
-                val start = item?.startTime?.toInstant()
-                if (item == null || start == null || start.atZone(zone).toLocalDate() != day.date) null
-                else PlannedItem(
-                    itemId = id, start = start,
-                    end = TimeMatcher.effectiveEnd(item) ?: start.plus(ScheduleGrouping.DEFAULT_ITEM_DURATION),
-                    reason = IN_SCHEDULE_REASON, walkMinutes = null, alternatives = emptyList(), orInstead = emptyList(),
-                )
-            }
-            day.copy(entries = (kept + added).sortedBy { it.start })
-        })
-    }
-
-    /**
-     * Meal breaks the planner shouldn't add: a timed food place in My schedule during lunch (11:30–13:30)
-     * or dinner (17:30–19:30) of that day covers it.
+     * The planner's input (one list §2): a timed food place in My schedule during lunch (11:30–13:30) or
+     * dinner (17:30–19:30) of that day covers that meal break.
      */
     fun mealsCovered(bundle: EventBundle): Set<MealSlot> {
         val zone = bundle.event.zone
@@ -340,13 +276,173 @@ class MySchedule(entries: List<ScheduleEntry> = emptyList()) {
             if (entry.kind != ScheduleEntryKind.PLACE) continue
             val at = entry.at ?: continue
             val location = bundle.location(entry.id) ?: continue
-            if ((listOf(location.category.orEmpty()) + location.tags).none { it.lowercase().contains("food") }) continue
-            val local = at.atZone(zone)
-            val minute = local.hour * 60 + local.minute
-            if (minute in (11 * 60 + 30)..(13 * 60 + 30)) slots += MealSlot(local.toLocalDate(), MealKind.LUNCH)
-            if (minute in (17 * 60 + 30)..(19 * 60 + 30)) slots += MealSlot(local.toLocalDate(), MealKind.DINNER)
+            if (!isFood(location)) continue
+            val kind = mealKind(at, zone) ?: continue
+            slots += MealSlot(at.atZone(zone).toLocalDate(), kind)
         }
         return slots
+    }
+
+    // ── One list: proposals (the planner proposes edits to My schedule) ─────
+
+    /**
+     * One list §6: the stored plan of an older build becomes entries: every planned item not in My
+     * schedule (`source: planner`, the plan's reason), each meal break with a food place not in it (a timed
+     * place, "Lunch break" / "Dinner break"); a saved place without a time gets the break's time.
+     * Idempotent: a second run finds nothing. True when something changed.
+     */
+    fun absorb(legacy: Plan): Boolean {
+        var changed = false
+        for (item in legacy.items) {
+            if (entry(ScheduleEntryKind.ITEM, item.itemId) != null || entries.size >= MAX_ENTRIES) continue
+            entries = entries + ScheduleEntry(ScheduleEntryKind.ITEM, item.itemId, source = ScheduleEntrySource.PLANNER, reason = ScheduleEntry.cleanReason(item.reason))
+            changed = true
+        }
+        for (day in legacy.days) for (meal in day.entries.filterIsInstance<MealBreak>()) {
+            val locationId = meal.locationId ?: continue
+            val index = indexOf(ScheduleEntryKind.PLACE, locationId)
+            if (index >= 0) {
+                if (entries[index].at != null) continue
+                replace(index, entries[index].copy(at = meal.start, minutes = mealMinutes(meal)))
+                changed = true
+            } else if (entries.size < MAX_ENTRIES) {
+                entries = entries + ScheduleEntry(
+                    ScheduleEntryKind.PLACE, locationId, at = meal.start, minutes = mealMinutes(meal),
+                    source = ScheduleEntrySource.PLANNER, reason = meal.kind.label,
+                )
+                changed = true
+            }
+        }
+        return changed
+    }
+
+    /**
+     * One list §2: a plan (the planner's result, an edit's re-solve, a version, a sequence, a shared plan)
+     * as edits to My schedule. Adds: its items not in My schedule (with the planner's reason) and its meal
+     * breaks with a place not there at that time. Removes: on the plan's days, entries the planner added
+     * that the plan no longer has, and anything in [explicit] (the request asked: "drop the BBQ"); never
+     * what the person added unasked. Null plan: nothing.
+     */
+    fun proposal(plan: Plan?, bundle: EventBundle, explicit: Set<Int> = emptySet()): ScheduleProposal {
+        plan ?: return ScheduleProposal()
+        val zone = bundle.event.zone
+        val days = plan.days.map { it.date }.toSet()
+        val planned = plan.itemIds.toSet()
+        val adds = mutableListOf<ScheduleProposal.Add>()
+        val removes = mutableListOf<ScheduleProposal.Remove>()
+        for (item in plan.items) {
+            if (entry(ScheduleEntryKind.ITEM, item.itemId) == null && adds.none { it.target == ScheduleTarget.item(item.itemId) }) {
+                adds += ScheduleProposal.Add(ScheduleTarget.item(item.itemId), reason = ScheduleEntry.cleanReason(item.reason))
+            }
+        }
+        val meals = plan.days.flatMap { day -> day.entries.filterIsInstance<MealBreak>() }
+        for (meal in meals) {
+            val locationId = meal.locationId ?: continue
+            // A place is in My schedule once: a meal at a place that already has a time keeps that time.
+            if (entry(ScheduleEntryKind.PLACE, locationId)?.at != null) continue
+            if (adds.any { it.target == ScheduleTarget.place(locationId) }) continue
+            adds += ScheduleProposal.Add(ScheduleTarget.place(locationId), at = meal.start, minutes = mealMinutes(meal), reason = meal.kind.label, meal = meal.kind)
+        }
+        for (entry in entries) when (entry.kind) {
+            ScheduleEntryKind.ITEM -> {
+                if (entry.id in planned) continue
+                if (entry.id in explicit) {
+                    removes += ScheduleProposal.Remove(entry.target)
+                } else if (entry.source == ScheduleEntrySource.PLANNER) {
+                    val start = bundle.scheduleItem(entry.id)?.startTime?.toInstant() ?: continue
+                    if (start.atZone(zone).toLocalDate() in days) removes += ScheduleProposal.Remove(entry.target)
+                }
+            }
+            ScheduleEntryKind.PLACE -> {
+                if (entry.source != ScheduleEntrySource.PLANNER) continue
+                val at = entry.at ?: continue
+                if (at.atZone(zone).toLocalDate() !in days || meals.any { it.locationId == entry.id }) continue
+                removes += ScheduleProposal.Remove(entry.target, meal = mealKind(at, zone))
+            }
+        }
+        return ScheduleProposal(adds, removes, if (plan.isEmpty) "" else Planner.summary(plan, zone))
+    }
+
+    /**
+     * Applies a proposal: adds get [source] and the proposal's reason (an entry already there keeps who
+     * added it; a place gets the new time), removes leave. Returns the API-009 changes.
+     */
+    fun apply(proposal: ScheduleProposal, source: ScheduleEntrySource = ScheduleEntrySource.PLANNER): List<MyScheduleChange> {
+        val changes = mutableListOf<MyScheduleChange>()
+        for (out in proposal.removes) remove(out.target)?.let(changes::add)
+        for (new in proposal.adds) {
+            val existed = new.target in this
+            val change = add(new.target, new.at, new.minutes) ?: continue
+            changes += change
+            if (!existed) mark(new.target, source, new.reason)
+        }
+        return changes
+    }
+
+    /** Sets who added [target] and why (right after an add). */
+    fun mark(target: ScheduleTarget, source: ScheduleEntrySource, reason: String?) {
+        val kind = target.entryKind ?: return
+        val index = indexOf(kind, target.id)
+        if (index >= 0) replace(index, entries[index].copy(source = source, reason = ScheduleEntry.cleanReason(reason)))
+    }
+
+    // ── One list: the derived day view (never stored) ───────────────────────
+
+    /**
+     * The [Plan] the assistant (the timeline, proposals' previews, plan edits), the Live Update, live hints,
+     * WhyNot and sharing read: My schedule's items per event day, laid out by the planner's rules
+     * ([Planner.dayView]: walks, swap alternatives), its timed food places at meal times as meal breaks, the
+     * entries' own reasons. Null without a timed item.
+     */
+    fun dayPlan(bundle: EventBundle, preferences: SchedulePreferences = SchedulePreferences(), checkedOff: Set<Int> = emptySet()): Plan? {
+        val zone = bundle.event.zone
+        val itemsByDay = sortedMapOf<LocalDate, MutableList<Int>>()
+        val spans = HashMap<LocalDate, Pair<Instant, Instant>>()
+        fun widen(day: LocalDate, start: Instant, end: Instant) {
+            val old = spans[day]
+            spans[day] = minOf(old?.first ?: start, start) to maxOf(old?.second ?: end, end)
+        }
+        for (entry in entries) {
+            if (entry.kind != ScheduleEntryKind.ITEM) continue
+            val item = bundle.scheduleItem(entry.id) ?: continue
+            val start = item.startTime?.toInstant() ?: continue
+            val day = start.atZone(zone).toLocalDate()
+            itemsByDay.getOrPut(day) { mutableListOf() } += entry.id
+            widen(day, start, TimeMatcher.effectiveEnd(item) ?: start.plus(ScheduleGrouping.DEFAULT_ITEM_DURATION))
+        }
+        if (itemsByDay.isEmpty()) return null
+        val mealsByDay = HashMap<LocalDate, MutableList<MealBreak>>()
+        for (entry in entries) {
+            if (entry.kind != ScheduleEntryKind.PLACE) continue
+            val at = entry.at ?: continue
+            val location = bundle.location(entry.id) ?: continue
+            if (!isFood(location)) continue
+            val kind = mealKind(at, zone) ?: continue
+            val day = at.atZone(zone).toLocalDate()
+            if (day !in itemsByDay || mealsByDay[day]?.any { it.kind == kind } == true) continue
+            val end = at.plus(Duration.ofMinutes((entry.minutes ?: DEFAULT_MINUTES).toLong()))
+            mealsByDay.getOrPut(day) { mutableListOf() } += MealBreak(kind, at, end, entry.id)
+            widen(day, at, end)
+        }
+        val planning = preferences.planPreferences.copy(includeMeals = false)
+        val planner = Planner(bundle, planning, hearts, preferences.constraints)
+        val reasons = entries.filter { it.kind == ScheduleEntryKind.ITEM && it.reason != null }.associate { it.id to it.reason!! }
+        val days = itemsByDay.map { (day, ids) ->
+            val (spanStart, spanEnd) = spans.getValue(day)
+            val windowStart = preferences.earliest?.let { minOf(day.atTime(it).atZone(zone).toInstant(), spanStart) } ?: spanStart
+            val windowEnd = preferences.latest?.let { maxOf(day.atTime(it).atZone(zone).toInstant(), spanEnd) } ?: spanEnd
+            val built = planner.dayView(day, ids, mealsByDay[day].orEmpty(), windowStart, windowEnd)
+            built.copy(entries = built.entries.map { e -> if (e is PlannedItem) reasons[e.itemId]?.let { e.copy(reason = it) } ?: e else e })
+        }
+        val prints = days.flatMap { it.items }.mapNotNull { bundle.scheduleItem(it.itemId) }.associate { it.id to Planner.fingerprint(it) }
+        val ids = itemsByDay.values.flatten().toSet()
+        return Plan(
+            eventId = bundle.event.id, createdAt = Instant.EPOCH, request = "", preferences = preferences.planPreferences,
+            days = days, fingerprints = prints,
+            // Timed food places cover their meal breaks: an edit's re-solve doesn't plan another one there.
+            constraints = preferences.constraints.copy(mealsDone = mealsCovered(bundle)),
+            checkedOff = checkedOff intersect ids,
+        )
     }
 
     // ── Codec ───────────────────────────────────────────────────────────────
@@ -361,6 +457,8 @@ class MySchedule(entries: List<ScheduleEntry> = emptyList()) {
                 entry.minutes?.let { put("minutes", it) }
                 entry.reminder?.let { put("reminder", it) }
                 entry.fingerprint?.let { put("fingerprint", it) }
+                if (entry.source != ScheduleEntrySource.YOU) put("source", entry.source.key)
+                entry.reason?.let { put("reason", it) }
             })
         })
     }.toString()
@@ -410,23 +508,31 @@ class MySchedule(entries: List<ScheduleEntry> = emptyList()) {
             return date
         }
 
-        /** My schedule from the likes and the plan of an older build (once per event). */
+        /**
+         * My schedule from the likes of an older build (once per event); an older build's stored plan, when
+         * given, is absorbed too ([absorb]).
+         */
         fun migrate(heartedItems: Set<Int>, heartedLocations: Set<Int>, plan: Plan?): MySchedule {
-            val items = heartedItems.sorted().map { ScheduleEntry(ScheduleEntryKind.ITEM, it) }.toMutableList()
-            for (id in plan?.itemIds.orEmpty()) {
-                if (id !in heartedItems && items.none { it.id == id }) items += ScheduleEntry(ScheduleEntryKind.ITEM, id)
+            val schedule = MySchedule(
+                heartedItems.sorted().map { ScheduleEntry(ScheduleEntryKind.ITEM, it) } +
+                    heartedLocations.sorted().map { ScheduleEntry(ScheduleEntryKind.PLACE, it) },
+            )
+            if (plan != null) schedule.absorb(plan)
+            return schedule
+        }
+
+        fun isFood(location: EventLocation): Boolean =
+            (listOf(location.category.orEmpty()) + location.tags).any { it.lowercase().contains("food") }
+
+        /** The meal a time belongs to: lunch 11:30–13:30, dinner 17:30–19:30, else none. */
+        fun mealKind(at: Instant, zone: ZoneId): MealKind? {
+            val local = at.atZone(zone)
+            val minute = local.hour * 60 + local.minute
+            return when (minute) {
+                in (11 * 60 + 30)..(13 * 60 + 30) -> MealKind.LUNCH
+                in (17 * 60 + 30)..(19 * 60 + 30) -> MealKind.DINNER
+                else -> null
             }
-            val places = heartedLocations.sorted().map { ScheduleEntry(ScheduleEntryKind.PLACE, it) }.toMutableList()
-            for (day in plan?.days.orEmpty()) for (meal in day.entries.filterIsInstance<MealBreak>()) {
-                val locationId = meal.locationId ?: continue
-                val index = places.indexOfFirst { it.id == locationId }
-                if (index >= 0) {
-                    if (places[index].at == null) places[index] = places[index].copy(at = meal.start, minutes = mealMinutes(meal))
-                } else {
-                    places += ScheduleEntry(ScheduleEntryKind.PLACE, locationId, at = meal.start, minutes = mealMinutes(meal))
-                }
-            }
-            return MySchedule(items + places)
         }
 
         private fun mealMinutes(meal: MealBreak): Int = maxOf(5, Duration.between(meal.start, meal.end).toMinutes().toInt())
@@ -446,6 +552,15 @@ enum class ScheduleEntryKind(val key: String) {
 
     companion object {
         fun fromKey(key: String?): ScheduleEntryKind? = entries.firstOrNull { it.key == key }
+    }
+}
+
+/** Who put an entry into My schedule (one list §1). Unknown or missing → [YOU]. */
+enum class ScheduleEntrySource(val key: String) {
+    YOU("you"), PLANNER("planner"), ASSISTANT("assistant"), SHARED("shared");
+
+    companion object {
+        fun of(value: String?): ScheduleEntrySource = entries.firstOrNull { it.key == value?.trim()?.lowercase() } ?: YOU
     }
 }
 
@@ -476,6 +591,10 @@ data class ScheduleEntry(
     val reminder: Int? = null,
     /** Items: [Planner.fingerprint] when added (or last kept), to notice organizer changes. */
     val fingerprint: String? = null,
+    /** Who added it (one list §1): only `planner` entries may be removed by a new plan unasked. */
+    val source: ScheduleEntrySource = ScheduleEntrySource.YOU,
+    /** Why ("Because you like jazz", "Lunch break"), ≤ [MAX_REASON] characters. */
+    val reason: String? = null,
 ) {
     internal val key: String get() = "${kind.key}$id"
 
@@ -485,6 +604,10 @@ data class ScheduleEntry(
     val reminderMinutes: Int get() = reminder ?: MySchedule.DEFAULT_REMINDER
 
     companion object {
+        const val MAX_REASON = 80
+
+        fun cleanReason(text: String?): String? = text?.trim()?.takeIf { it.isNotEmpty() }?.take(MAX_REASON)
+
         internal fun decode(element: JsonElement): ScheduleEntry? {
             val obj = element as? JsonObject ?: return null
             fun string(name: String) = (obj[name] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
@@ -499,6 +622,8 @@ data class ScheduleEntry(
                 minutes = int("minutes")?.coerceIn(5, 12 * 60),
                 reminder = int("reminder")?.takeIf { it in MySchedule.REMINDER_CHOICES },
                 fingerprint = if (place) null else string("fingerprint"),
+                source = ScheduleEntrySource.of(string("source")),
+                reason = cleanReason(string("reason")),
             )
         }
     }
@@ -539,4 +664,197 @@ data class OrganizerChange(val itemId: Int, val name: String, val kind: Kind) {
         data object Changed : Kind
         data object Cancelled : Kind
     }
+}
+
+// ── One list (owner, Nov 22, 2026; Attnd-Web docs/specs/one_list_spec.md) ────
+
+/**
+ * Edits to My schedule the planner (or an edit, version, swap, sequence, shared plan) proposes:
+ * previewed, then applied as one entry on [ScheduleHistory].
+ */
+data class ScheduleProposal(
+    val adds: List<Add> = emptyList(),
+    val removes: List<Remove> = emptyList(),
+    /** [Planner.summary] of the plan it came from ("8 items, 10:00 AM – 11:00 PM, with a lunch break"). */
+    val summary: String = "",
+) {
+    data class Add(
+        val target: ScheduleTarget,
+        /** Places only: the time (a meal break); null keeps / saves without one. */
+        val at: Instant? = null,
+        val minutes: Int? = null,
+        val reason: String? = null,
+        /** The meal break a place add covers (for the pill). */
+        val meal: MealKind? = null,
+    )
+
+    data class Remove(val target: ScheduleTarget, val meal: MealKind? = null)
+
+    val isEmpty: Boolean get() = adds.isEmpty() && removes.isEmpty()
+
+    /** "+5 items, +1 lunch break, −2 items" (U+2212 minus); "No change" when empty. */
+    val pillText: String
+        get() {
+            fun count(n: Int, one: String) = "$n ${if (n == 1) one else one + "s"}"
+            val parts = mutableListOf<String>()
+            adds.count { it.meal == null }.takeIf { it > 0 }?.let { parts += "+" + count(it, "item") }
+            for (kind in MealKind.entries) adds.count { it.meal == kind }.takeIf { it > 0 }?.let { parts += "+" + count(it, kind.label.lowercase()) }
+            removes.count { it.meal == null }.takeIf { it > 0 }?.let { parts += "\u2212" + count(it, "item") }
+            for (kind in MealKind.entries) removes.count { it.meal == kind }.takeIf { it > 0 }?.let { parts += "\u2212" + count(it, kind.label.lowercase()) }
+            return if (parts.isEmpty()) "No change" else parts.joinToString(", ")
+        }
+
+    /** The proposal card's sentence: "Add 6 things to your schedule" (one list §7). */
+    val title: String
+        get() = when {
+            removes.isEmpty() -> if (adds.size == 1) "Add 1 thing to your schedule" else "Add ${adds.size} things to your schedule"
+            adds.isEmpty() -> if (removes.size == 1) "Remove 1 thing from your schedule" else "Remove ${removes.size} things from your schedule"
+            else -> "Change your schedule: $pillText"
+        }
+}
+
+/**
+ * One Undo history over My schedule (one list §3): ≤ [MAX] snapshots, newest last. Plans, edits, versions,
+ * swaps, sequences, shared plans and hearts all push one; "undo", the Undo pill and the snackbar pop it.
+ */
+data class ScheduleHistory(val snapshots: List<MySchedule> = emptyList()) {
+    val canUndo: Boolean get() = snapshots.isNotEmpty()
+
+    fun push(previous: MySchedule): ScheduleHistory = ScheduleHistory((snapshots + previous.copy()).takeLast(MAX))
+
+    fun pop(): Pair<MySchedule, ScheduleHistory>? = snapshots.lastOrNull()?.let { it.copy() to ScheduleHistory(snapshots.dropLast(1)) }
+
+    /** `[{"entries":[…]}, …]`. */
+    fun encode(): String = JsonArray(snapshots.map { Json.parseToJsonElement(it.encode()) }).toString()
+
+    companion object {
+        const val MAX = 20
+
+        /** Lenient: unreadable text is an empty history; unreadable snapshots are skipped. */
+        fun decode(text: String?): ScheduleHistory {
+            if (text.isNullOrBlank()) return ScheduleHistory()
+            val list = runCatching { Json.parseToJsonElement(text) }.getOrNull() as? JsonArray ?: return ScheduleHistory()
+            return ScheduleHistory(list.filterIsInstance<JsonObject>().map { MySchedule.decode(it.toString()) }.takeLast(MAX))
+        }
+    }
+}
+
+/** What the planner was told for this event (one list §1), kept with My schedule. Everything optional. */
+data class SchedulePreferences(
+    val pace: PlanPace = PlanPace.BALANCED,
+    val kidFriendly: Boolean = false,
+    val maxWalkMinutes: Int? = null,
+    val likedTags: Set<String> = emptySet(),
+    val dislikedTags: Set<String> = emptySet(),
+    /** Meal breaks wanted (lunch / dinner). */
+    val meals: Set<MealKind> = emptySet(),
+    val earliest: LocalTime? = null,
+    val latest: LocalTime? = null,
+) {
+    /** For the planner (a new plan without a request, the day view). */
+    val planPreferences: PlanPreferences
+        get() = PlanPreferences(
+            likedTags = likedTags, dislikedTags = dislikedTags, earliest = earliest, latest = latest,
+            pace = pace, includeMeals = meals.isNotEmpty(), kidFriendly = kidFriendly,
+        )
+
+    val constraints: PlanConstraints get() = PlanConstraints(maxWalkMinutes = maxWalkMinutes)
+
+    /** `{"pace":"balanced","kid_friendly":true,"max_walk_minutes":10,"liked_tags":[…],"meals":["lunch"],"earliest":"10:00"}`. */
+    fun encode(): String = buildJsonObject {
+        put("pace", pace.key)
+        if (kidFriendly) put("kid_friendly", true)
+        maxWalkMinutes?.let { put("max_walk_minutes", it) }
+        if (likedTags.isNotEmpty()) put("liked_tags", buildJsonArray { likedTags.sorted().forEach { add(JsonPrimitive(it)) } })
+        if (dislikedTags.isNotEmpty()) put("disliked_tags", buildJsonArray { dislikedTags.sorted().forEach { add(JsonPrimitive(it)) } })
+        if (meals.isNotEmpty()) put("meals", buildJsonArray { meals.map { it.name.lowercase() }.sorted().forEach { add(JsonPrimitive(it)) } })
+        earliest?.let { put("earliest", clock(it)) }
+        latest?.let { put("latest", clock(it)) }
+    }.toString()
+
+    companion object {
+        private fun clock(time: LocalTime) = "%02d:%02d".format(time.hour, time.minute)
+
+        /** From a request's preferences and an edit's constraints (a new plan, a migrated one). */
+        fun of(preferences: PlanPreferences, constraints: PlanConstraints = PlanConstraints.NONE) = SchedulePreferences(
+            pace = constraints.pace ?: preferences.pace,
+            kidFriendly = preferences.kidFriendly,
+            maxWalkMinutes = constraints.maxWalkMinutes,
+            likedTags = preferences.likedTags,
+            dislikedTags = preferences.dislikedTags,
+            meals = if (preferences.includeMeals) MealKind.entries.toSet() else emptySet(),
+            earliest = preferences.earliest,
+            latest = preferences.latest,
+        )
+
+        /** Lenient: unknown keys ignored, bad values defaulted, bad text → null. */
+        fun decode(text: String?): SchedulePreferences? {
+            if (text.isNullOrBlank()) return null
+            val obj = runCatching { Json.parseToJsonElement(text) }.getOrNull() as? JsonObject ?: return null
+            fun string(name: String) = (obj[name] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+            fun strings(name: String) = (obj[name] as? JsonArray).orEmpty()
+                .mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.contentOrNull?.trim()?.lowercase()?.takeIf { t -> t.isNotEmpty() } }
+            fun time(name: String) = string(name)?.let { runCatching { LocalTime.parse(it.trim()) }.getOrNull() }
+            val kid = (obj["kid_friendly"] as? JsonPrimitive)?.contentOrNull?.lowercase() == "true"
+            return SchedulePreferences(
+                pace = PlanPace.of(string("pace")),
+                kidFriendly = kid,
+                maxWalkMinutes = (obj["max_walk_minutes"] as? JsonPrimitive)?.intOrNull?.takeIf { it > 0 },
+                likedTags = strings("liked_tags").toSet(),
+                dislikedTags = strings("disliked_tags").toSet(),
+                meals = strings("meals").mapNotNull { m -> MealKind.entries.firstOrNull { it.name.lowercase() == m } }.toSet(),
+                earliest = time("earliest"),
+                latest = time("latest"),
+            )
+        }
+    }
+}
+
+/**
+ * One list §2: the planner as a function. Plans from [now] with [request] preferences (else the stored
+ * [preferences]), My schedule's items as the must-includes (rule 7, its hearts) and its timed food places
+ * covering their meal breaks, then diffs the result against My schedule. Rules 1–20 and the fixture's
+ * numbers are unchanged; only the output is a proposal. The returned plan is the planner's result (its
+ * reasons, walks and alternatives, for the preview).
+ */
+fun Planner.Companion.propose(
+    schedule: MySchedule,
+    preferences: SchedulePreferences,
+    bundle: EventBundle,
+    now: Instant,
+    request: PlanPreferences? = null,
+    text: String = "",
+    constraints: PlanConstraints = PlanConstraints.NONE,
+): Pair<Plan, ScheduleProposal> {
+    val c = constraints.copy(
+        mealsDone = constraints.mealsDone + schedule.mealsCovered(bundle),
+        maxWalkMinutes = constraints.maxWalkMinutes ?: preferences.maxWalkMinutes,
+    )
+    val plan = Planner(bundle, request ?: preferences.planPreferences, schedule.hearts, c).plan(now, text)
+    return plan to schedule.proposal(plan, bundle)
+}
+
+/**
+ * An edit of the day view ([MySchedule.dayPlan]) keeps My schedule's timed food places: a meal break of
+ * [PlanEdit.before] whose slot My schedule covers ([PlanConstraints.mealsDone]) stays in the result when the
+ * re-solve has no meal of that kind that day, so editing the day never drops or moves the person's lunch.
+ * Plans that aren't day views (no covered slots) are unchanged.
+ */
+fun PlanEdit.keepingScheduleMeals(bundle: EventBundle): PlanEdit {
+    val covered = before.constraints.mealsDone
+    if (covered.isEmpty()) return this
+    var changed = false
+    val days = after.days.map { day ->
+        val kept = before.days.firstOrNull { it.date == day.date }?.entries.orEmpty().filterIsInstance<MealBreak>().filter { meal ->
+            meal.locationId != null && MealSlot(day.date, meal.kind) in covered &&
+                day.entries.none { it is MealBreak && it.kind == meal.kind }
+        }
+        if (kept.isEmpty()) day else {
+            changed = true
+            day.copy(entries = (day.entries + kept).sortedWith(compareBy<PlanEntry> { it.start }.thenBy { it.end }))
+        }
+    }
+    if (!changed) return this
+    val updated = after.copy(days = days)
+    return copy(after = updated, diff = PlanDiff.between(before, updated, bundle))
 }

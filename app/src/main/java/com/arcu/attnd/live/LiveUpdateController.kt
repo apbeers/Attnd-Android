@@ -46,10 +46,10 @@ import java.time.Instant
 /**
  * Drives the Live Update and reminders from the device, with no server
  * (shared spec §8, iOS's Follow on Lock Screen): [refresh] follows the day ([LiveFollow.followDay]: the
- * plan's items, else My schedule's items and timed places, else the event's; `live_activity.follows`),
+ * My schedule's items and timed places, else the event's; `live_activity.follows`),
  * builds its content ([LiveFollow.content]: Now / Next always filled) from the saved bundle,
  * posts or cancels the notification, shows due reminders and schedules the next wake-up as an inexact
- * [AlarmManager.setWindow] alarm (no exact-alarm permission). It runs after every bundle / hearts / plan
+ * [AlarmManager.setWindow] alarm (no exact-alarm permission). It runs after every bundle / My schedule
  * change (AppGraph), on each alarm, on a `content_updated` push (the bundle changes), on boot, on the
  * notification actions.
  *
@@ -57,8 +57,8 @@ import java.time.Instant
  * join"); in the background it appears 2 h before the day's first entry and keeps updating once up.
  * The Live Update only while "Follow on Lock Screen" is on for the joined event ([PlanStore.follows], on by default),
  * reminders while they are on ([PlanStore.reminders], default: the same); never in screenshot mode
- * ([suspended]). With a plan and the user's position, the next item's departure time switches the
- * Live Update to "Leave now" (assistant spec §6, [LiveAssist.runningLate]).
+ * ([suspended]). It follows My schedule (one list, Nov 22, 2026: no separate plan); with the user's
+ * position, My schedule's next item's departure time switches the Live Update to "Leave now" (assistant spec §6, [LiveAssist.runningLate]).
  */
 class LiveUpdateController(
     context: Context,
@@ -109,7 +109,8 @@ class LiveUpdateController(
         }
         val eventId = bundle.event.id
         val heartsNow = hearts.hearts(eventId)
-        val plan = plans.plan(eventId)
+        // My schedule's day view (one list: derived, never stored): running late and "Leave now".
+        val plan = mySchedules.dayPlan(eventId, bundle)
         val follows = plans.follows(eventId, heartsNow)
         val remindersOn = plans.reminders(eventId, heartsNow)
         if (!follows && !remindersOn) {
@@ -121,14 +122,13 @@ class LiveUpdateController(
         val skipped = plans.skipped(eventId, today)
         val user = lastLocation()
         val mine = mySchedules.schedule(eventId)
-        val planned = plan?.itemIds.orEmpty().toSet()
 
         // Reminders per entry of My schedule (its own lead, default 15 min; timed places too), shown once each.
         val shown = plans.remindersShown(eventId)
         val reminders = if (!remindersOn) emptyList() else LiveFollow.reminders(
             eventId = eventId,
             schedule = bundle.schedule,
-            hearted = heartsNow.scheduleItems + planned - skipped,
+            hearted = heartsNow.scheduleItems - skipped,
             locations = bundle.locations,
             user = user,
             // Alarms are inexact: a reminder whose time passed a little ago is still shown before its start.
@@ -145,7 +145,7 @@ class LiveUpdateController(
         }
 
         // The Live Update (iOS's Follow on Lock Screen): what the organizer chose it follows (API-027).
-        val inputs = LiveFollow.inputs(bundle.liveActivity, bundle, heartsNow.scheduleItems, planned, LiveFollow.places(mine, bundle))
+        val inputs = LiveFollow.inputs(bundle.liveActivity, bundle, heartsNow.scheduleItems, LiveFollow.places(mine, bundle))
         val eventStart = bundle.event.startTime?.toInstant()
         val day = if (follows) LiveFollow.followDay(inputs, eventStart, now, zone) else null
         val summaryDay = if (follows) LiveFollow.endedToday(inputs, eventStart, now, zone, day) else null
@@ -157,12 +157,12 @@ class LiveUpdateController(
         // background it starts 2 h before the day's first entry and keeps updating once up.
         val dayShown = day != null && now.isBefore(day.endAt) && (decision == LiveDecision.StartNow || foreground() || showing)
         val shownDay = if (dayShown) day else summaryDay?.takeIf { showing }
-        val late = if (shownDay?.followsPlan == true && plan != null && !plan.isEmpty) LiveAssist.runningLate(plan, bundle, now, user, skipped) else null
+        val late = if (shownDay?.followsHearts == true && plan != null && !plan.isEmpty) LiveAssist.runningLate(plan, bundle, now, user, skipped) else null
         val state = when {
             shownDay != null -> {
                 // No direction, distance or walk from the user's position (iOS batch 7): user = null.
                 val content = LiveFollow.content(shownDay, bundle.locations, heartsNow.scheduleItems, skipped, user = null, urgent = urgent, now = now)
-                val hasMine = !heartsNow.isEmpty || plan?.isEmpty == false
+                val hasMine = !heartsNow.isEmpty
                 LiveFollow.render(LiveFollow.decorate(content, shownDay, bundle.liveActivity, hasMine, late), shownDay, bundle.event.name, zone, now)
             }
             // An urgent block shows even outside the day.
@@ -178,8 +178,8 @@ class LiveUpdateController(
         val reminderWakes = later.map { it.fireAt.minus(REMINDER_EARLY) }
         val wake = if (!follows) reminderWakes.minOrNull()
         else LiveFollow.nextWake(day ?: summaryDay, now, showing = state != null && !dismissedToday, urgent = urgent, extra = reminderWakes)
-        // Assistant spec §6: also wake at the next planned item's departure time (running late).
-        val leaveBy = if (day?.followsPlan == true && plan != null && late == null) nextLeaveBy(plan, bundle, now, user, skipped) else null
+        // Assistant spec §6: also wake at My schedule's next item's departure time (running late).
+        val leaveBy = if (day?.followsHearts == true && plan != null && late == null) nextLeaveBy(plan, bundle, now, user, skipped) else null
         schedule(listOfNotNull(wake, leaveBy).minOrNull())
     }
 

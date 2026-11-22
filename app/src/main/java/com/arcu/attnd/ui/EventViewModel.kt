@@ -58,7 +58,6 @@ import com.arcu.attnd.domain.OpenRequest
 import com.arcu.attnd.domain.Plan
 import com.arcu.attnd.domain.PlanExample
 import com.arcu.attnd.domain.PlanRequest
-import com.arcu.attnd.domain.Planner
 import com.arcu.attnd.domain.ScreenshotRequest
 import com.arcu.attnd.domain.ScreenshotScreen
 import com.arcu.attnd.domain.SearchKind
@@ -109,17 +108,18 @@ data class NearbyUiState(
     val error: String? = null,
 )
 
-/** The planner (the My plan tab): every phone (likes + plain rules; Gemini Nano reads typed requests when available); never in screenshot mode. */
+/**
+ * The planner (Ask Attnd): every phone (My schedule + plain rules; Gemini Nano reads typed requests when
+ * available); never in screenshot mode. [plan] is My schedule's day view (one list: derived, never stored).
+ */
 data class PlanUiState(
     val available: Boolean = false,
     val plan: Plan? = null,
-    /** A planned item changed or disappeared in a content update since the plan was made. */
-    val changed: Boolean = false,
     val isPlanning: Boolean = false,
     val error: String? = null,
     /** Example requests from this event's data (onboarding, the empty plan card). */
     val examples: List<PlanExample> = emptyList(),
-    /** Incremented to show My plan (after planning, or from a link). */
+    /** Incremented to show Ask Attnd (after planning, or from a link). */
     val showRequest: Int = 0,
 )
 
@@ -172,7 +172,7 @@ data class AppUiState(
      * rather than the search sheet. Never in screenshot mode.
      */
     val planButton: Boolean = false,
-    /** A follow-up for the snackbar's action button (e.g. "Add to plan instead of X?" after a like). */
+    /** A follow-up for the snackbar's action button (e.g. "Replace X with this?" after a like). */
     val messageChip: Chip? = null,
     /** Reminders before liked and planned items (assistant `reminders` setting). */
     val remindersOn: Boolean = false,
@@ -304,18 +304,15 @@ class EventViewModel(
     /** The selected tab, focus requests, the search sheet, My plan and Options. */
     private val nav = NavigationController(current = { uiState.value })
 
-    /** Making, re-planning, swapping and clearing plans. */
+    /** Reading plan requests and planning (the assistant previews the result as a proposal). */
     private val planner = PlannerController(
-        scope = viewModelScope,
         bundle = { repository.bundle.value },
-        hearts = heartStore,
-        plans = planStore,
+        schedule = schedule,
         assistant = assistant,
         perf = perf,
         available = { uiState.value.planner.available },
         modelAvailable = { model.isAvailable },
         countPerf = { !screenshotMode },
-        mealsCovered = schedule::mealsCovered,
     )
 
     val uiState: StateFlow<AppUiState> =
@@ -341,7 +338,8 @@ class EventViewModel(
             }
             val notifications = bundle?.notifications.orEmpty()
             val hearts = eventId?.let(heartStore::hearts) ?: Hearts.NONE
-            val plan = eventId?.let(planStore::plan)
+            // My schedule's day view (one list: derived, never stored).
+            val plan = if (eventId != null && screenshot == null) schedule.dayPlan(eventId, bundle) else null
             // The planner runs without on-device AI too (likes + the plain-rule reading); never in screenshot mode.
             val plannerAvailable = screenshot == null
             val tabs = display?.tabLayout(screenshotMode = screenshot != null) ?: TabLayout.resolve(null, null, hasFlyer = false)
@@ -413,7 +411,6 @@ class EventViewModel(
                 planner = PlanUiState(
                     available = plannerAvailable,
                     plan = plan,
-                    changed = plan != null && Planner.changed(plan, bundle),
                     isPlanning = inputs.planner.isPlanning,
                     error = inputs.planner.error,
                     examples = if (bundle != null && plannerAvailable) PlanRequest.examples(bundle, Instant.now()) else emptyList(),
@@ -813,8 +810,8 @@ class EventViewModel(
     fun toggleHeart(kind: SearchKind, id: Int) {
         val eventId = repository.bundle.value?.event?.id ?: return
         val hearted = !schedule.isLiked(eventId, kind, id)
-        // Assistant spec §6, like clash: a liked item that overlaps the plan → "Add to plan instead of X?".
-        // Checked before the add, which reconciles the plan with My schedule.
+        // Assistant spec §6, like clash: a liked item that overlaps My schedule's day → "Replace X with this?"
+        // (checked against the day as it was before the add; the chip previews a proposal).
         val bundle = repository.bundle.value
         val clash = if (bundle != null && hearted && kind == SearchKind.SCHEDULE && !screenshotMode) schedule.likeClash(bundle, id) else null
         if (!setLiked(kind, id, hearted)) return
@@ -862,7 +859,7 @@ class EventViewModel(
     // ── Event assistant (assistant spec) ────────────────────────────────────
 
     /** The assistant: conversation, actions, live hints (see [AssistantController]). */
-    val assistantController: AssistantController = AssistantController(viewModelScope, repository, heartStore, planStore, assistant, object : AssistantHost {
+    val assistantController: AssistantController = AssistantController(viewModelScope, repository, heartStore, schedule, planStore, assistant, object : AssistantHost {
         override fun modelAvailable(): Boolean = !screenshotMode && model.isAvailable
         override fun setLiked(kind: SearchKind, id: Int, liked: Boolean): Boolean = this@EventViewModel.setLiked(kind, id, liked)
         override suspend fun makePlan(request: String, source: String): Plan? = planner.buildPlan(request, source)
@@ -967,20 +964,7 @@ class EventViewModel(
 
     // ── Planner ─────────────────────────────────────────────────────────────
 
-    /** From the plan card (or an example chip). */
-    fun makePlan(request: String, source: String = "card") = planner.makePlan(request, source)
-
-    /** "Re-plan from now": the same preferences from the current time (also after a content change). */
-    fun replanFromNow() = planner.replanFromNow()
-
-    fun swapPlanItem(oldId: Int, newId: Int) = planner.swapPlanItem(oldId, newId)
-
-    /** "Keep my plan" after a content change: the changed items are accepted as they are now. */
-    fun keepChangedPlan() = planner.keepChangedPlan()
-
-    fun clearPlan() = planner.clearPlan()
-
-    /** Opens My plan. */
+    /** Opens Ask Attnd. */
     fun showPlan() = nav.showPlan()
 
     // ── Live Update and onboarding ─────────────────────────────────────────
@@ -1006,8 +990,9 @@ class EventViewModel(
     fun useExample(example: PlanExample) {
         finishOnboarding()
         if (example.isPlan) {
-            makePlan(example.text, source = "example")
+            // Planned and previewed as a proposal in Ask Attnd (one list §3); Apply adds it to My schedule.
             showPlan()
+            assistantController.planRequest(example.text, source = "example")
         } else {
             nav.ask(example.text)
         }

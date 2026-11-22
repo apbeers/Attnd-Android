@@ -173,7 +173,7 @@ class AppGraph(context: Context, val prefs: DevicePrefs, logStore: LogStore, val
         images = images,
     )
 
-    /** My schedule per event, on the device (migrated once from hearts and the stored plan). */
+    /** My schedule per event, on the device: the only stored list (migrated once from hearts and an older build's plan). */
     val scheduleStore = ScheduleStore.of(prefs)
 
     /** Hearted schedule items and locations, per event: My schedule's mirror (UI and the Live Update). */
@@ -189,15 +189,13 @@ class AppGraph(context: Context, val prefs: DevicePrefs, logStore: LogStore, val
     /** "Ask about this event" and the planner: Gemini Nano on the device (ML Kit GenAI Prompt API), created lazily. */
     val assistant = OnDeviceAssistant()
 
-    /** Plans, "Follow on Lock Screen", skipped items, urgent block and reminders, per event (on the device). */
+    /** The assistant's conversation, "Follow on Lock Screen", skipped items, urgent block and reminders, per event (on the device). */
     val plans = PlanStore(prefs)
 
     /** My schedule: adds, removes, times, reminders (API-009 counts), shared by the UI, the assistant and the planner. */
     val schedule = ScheduleController(
         store = scheduleStore,
         bundle = { repository.bundle.value },
-        plan = plans::plan,
-        updatePlan = plans::setPlan,
         track = { eventId, name, detail -> usage.track(eventId, name, detail) },
     )
 
@@ -211,8 +209,6 @@ class AppGraph(context: Context, val prefs: DevicePrefs, logStore: LogStore, val
     val liveUpdates = LiveUpdateController(appContext, repository, hearts, plans, schedule, appScope, perf, foreground = { logSink.isForeground })
 
     init {
-        // Every plan version (made, edited, undone) fills My schedule.
-        plans.onApply = { eventId, plan, previous -> schedule.applyPlan(eventId, plan, previous) }
         api.diagSession = { diagnostics.diagCode }
         api.callListener = { call -> perf.onApiCall(call, logSink.isOffline) }
         // Leaves made offline in an earlier run (also retried after every successful refresh).
@@ -223,7 +219,7 @@ class AppGraph(context: Context, val prefs: DevicePrefs, logStore: LogStore, val
         }
         // A new bundle gives My schedule's entries their fingerprints (organizer changes).
         appScope.launch { repository.bundle.collect { bundle -> bundle?.let(schedule::onBundle) } }
-        // The Live Update follows the bundle (joins, refreshes, content_updated pushes), hearts and plans.
+        // The Live Update follows the bundle (joins, refreshes, content_updated pushes), My schedule and its settings.
         appScope.launch {
             combine(repository.bundle, hearts.version, plans.version) { bundle, _, _ -> bundle?.contentVersion to bundle?.event?.id }
                 .collect { liveUpdates.refresh() }

@@ -1,8 +1,7 @@
 package com.arcu.attnd.ui
 
-import com.arcu.attnd.data.HeartStore
 import com.arcu.attnd.data.OnDeviceAssistant
-import com.arcu.attnd.data.PlanStore
+import com.arcu.attnd.data.ScheduleController
 import com.arcu.attnd.data.log.PerfRecorder
 import com.arcu.attnd.domain.AppLog
 import com.arcu.attnd.domain.EventBundle
@@ -10,70 +9,65 @@ import com.arcu.attnd.domain.LogCategory
 import com.arcu.attnd.domain.LogEvent
 import com.arcu.attnd.domain.LogLevel
 import com.arcu.attnd.domain.MealBreak
-import com.arcu.attnd.domain.MealSlot
 import com.arcu.attnd.domain.PerfMetric
 import com.arcu.attnd.domain.Plan
-import com.arcu.attnd.domain.PlanConstraints
 import com.arcu.attnd.domain.PlanRequest
-import com.arcu.attnd.domain.PlannedItem
 import com.arcu.attnd.domain.Planner
+import com.arcu.attnd.domain.ScheduleProposal
+import com.arcu.attnd.domain.propose
 import com.arcu.attnd.domain.Redact
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.launch
 import java.time.Instant
 
-/** The planner's progress and its last error (the rest of [PlanUiState] comes from [PlanStore]). */
+/** The planner's progress and its last error (the rest of [PlanUiState] comes from My schedule). */
 data class PlannerProgress(val isPlanning: Boolean = false, val error: String? = null)
 
 /**
  * The planner's actions, split out of [EventViewModel] (iOS: the planner actions on `AppState` in
- * `PlanStore.swift`): make a plan (the model's preferences when [modelAvailable], merged with the plain
- * rules), re-plan from now, swap, keep after a content change, clear. Every change goes through
- * [PlanStore.applyPlan] (the undo stack). [available] is false in screenshot mode.
+ * `PlanStore.swift`). One list (Nov 22, 2026): the planner is a function. [buildPlan] reads a request (the
+ * model's preferences when [modelAvailable], merged with the plain rules) and plans with My schedule's
+ * items as the must-includes ([Planner.Companion.propose]); nothing is applied here: the assistant previews
+ * the result as a proposal and Apply turns it into My schedule edits ([ScheduleController.applyPlan]).
+ * [available] is false in screenshot mode.
  */
 class PlannerController(
-    private val scope: CoroutineScope,
     private val bundle: () -> EventBundle?,
-    private val hearts: HeartStore,
-    private val plans: PlanStore,
+    private val schedule: ScheduleController,
     private val assistant: OnDeviceAssistant,
     private val perf: PerfRecorder,
     private val available: () -> Boolean,
     private val modelAvailable: () -> Boolean,
     private val countPerf: () -> Boolean,
-    /** My schedule's timed food places that cover a lunch / dinner break (`ScheduleController.mealsCovered`). */
-    private val mealsCovered: (EventBundle) -> Set<MealSlot> = { emptySet() },
 ) {
     private val _state = MutableStateFlow(PlannerProgress())
     val state: StateFlow<PlannerProgress> = _state.asStateFlow()
 
-    private var planJob: Job? = null
-
     fun clearError() = _state.update { it.copy(error = null) }
 
     /**
-     * Makes and stores a plan for [request]: the on-device model extracts preferences (JSON, validated
-     * against the bundle; the plain-rule reading fills gaps or replaces it on failure), then the
-     * deterministic [Planner] schedules. Returns null when there is no event or the planner is off.
+     * Plans for [request]: the on-device model extracts preferences (JSON, validated against the bundle;
+     * the plain-rule reading fills gaps or replaces it on failure), then the deterministic [Planner]
+     * schedules from now with My schedule's items as must-includes. Returns the plan to preview (nothing
+     * is applied; empty: nothing fits or everything is already in My schedule, with [PlannerProgress.error]),
+     * or null when there is no event or the planner is off.
      */
     suspend fun buildPlan(request: String, source: String): Plan? {
         val bundle = bundle() ?: return null
         if (!available()) return null
+        val eventId = bundle.event.id
         AppLog.info(LogCategory.PLANNER, LogEvent.PLANNER_REQUEST, "Plan requested ($source)", mapOf("source" to source) + Redact.textFields("query", request, AppLog.allowText))
         _state.update { it.copy(isPlanning = true, error = null) }
         try {
             val now = Instant.now()
-            val hearts = hearts.hearts(bundle.event.id)
+            val mine = schedule.schedule(eventId)
             val rules = PlanRequest.heuristic(request, bundle, now)
             val modelStarted = System.nanoTime()
             val model = if (!modelAvailable()) null else try {
-                val prompt = PlanRequest.prompt(bundle, request, hearts, now)
+                val prompt = PlanRequest.prompt(bundle, request, mine.hearts, now)
                 val raw = assistant.extractPreferences(prompt)
                 PlanRequest.parse(raw, bundle, now)
             } catch (e: CancellationException) {
@@ -92,74 +86,24 @@ class PlannerController(
                     "liked_tags" to preferences.likedTags.size, "disliked_tags" to preferences.dislikedTags.size, "days" to preferences.days.size,
                 ),
             )
-            val covered = PlanConstraints(mealsDone = mealsCovered(bundle))
-            val plan = timedPlan { Planner(bundle, preferences, hearts, covered).plan(now, request.trim()) }
-            if (plan.isEmpty) {
-                _state.update { it.copy(error = "Nothing on the schedule fits that. Try another day or fewer limits.") }
-                return plan
+            val (plan, proposal) = timedPlan {
+                Planner.propose(mine, schedule.preferences(eventId), bundle, now, request = preferences, text = request.trim())
             }
-            plans.applyPlan(bundle.event.id, plan)
-            return plan
+            when {
+                plan.isEmpty -> _state.update { it.copy(error = NOTHING_FITS) }
+                proposal.isEmpty -> _state.update { it.copy(error = ALREADY_IN_SCHEDULE) }
+            }
+            return if (proposal.isEmpty) plan.copy(days = emptyList(), fingerprints = emptyMap()) else plan
         } finally {
             _state.update { it.copy(isPlanning = false) }
         }
     }
 
-    /** From the plan card (or an example chip). */
-    fun makePlan(request: String, source: String = "card") {
-        val trimmed = request.trim()
-        if (trimmed.isEmpty() || planJob?.isActive == true) return
-        planJob = scope.launch { buildPlan(trimmed, source) }
-    }
-
-    /** "Re-plan from now": the same preferences from the current time (also after a content change). */
-    fun replanFromNow() {
-        val bundle = bundle() ?: return
-        val plan = plans.plan(bundle.event.id) ?: return
-        val replanned = timedPlan {
-            val constraints = plan.constraints.copy(mealsDone = plan.constraints.mealsDone + mealsCovered(bundle))
-            Planner(bundle, plan.preferences, hearts.hearts(bundle.event.id), constraints).replan(plan, Instant.now())
-        }
-        if (replanned.isEmpty) {
-            _state.update { it.copy(error = "Nothing left on the schedule fits this plan.") }
-        } else {
-            _state.update { it.copy(error = null) }
-            plans.applyPlan(bundle.event.id, replanned.copy(constraints = plan.constraints, checkedOff = plan.checkedOff))
-        }
-    }
-
-    fun swapPlanItem(oldId: Int, newId: Int) {
-        val bundle = bundle() ?: return
-        val plan = plans.plan(bundle.event.id) ?: return
-        val swapped = Planner(bundle, plan.preferences, hearts.hearts(bundle.event.id)).swap(plan, oldId, newId) ?: return
-        AppLog.info(LogCategory.PLANNER, LogEvent.PLANNER_SWAP, "Plan item swapped", mapOf("item_id" to oldId))
-        plans.applyPlan(bundle.event.id, swapped)
-    }
-
-    /** "Keep my plan" after a content change: the changed items are accepted as they are now. */
-    fun keepChangedPlan() {
-        val bundle = bundle() ?: return
-        val plan = plans.plan(bundle.event.id) ?: return
-        val kept = plan.days.map { day -> day.copy(entries = day.entries.filter { it !is PlannedItem || bundle.scheduleItem(it.itemId) != null }) }
-        val updated = plan.copy(
-            days = kept,
-            fingerprints = kept.flatMap { it.items }.mapNotNull { bundle.scheduleItem(it.itemId) }.associate { it.id to Planner.fingerprint(it) },
-        )
-        AppLog.debug(LogCategory.UI, LogEvent.UI_ACTION, "Changed plan kept", mapOf("name" to "plan_keep"))
-        plans.applyPlan(bundle.event.id, updated)
-    }
-
-    fun clearPlan() {
-        val eventId = bundle()?.event?.id ?: return
-        AppLog.debug(LogCategory.UI, LogEvent.UI_ACTION, "Plan cleared", mapOf("name" to "plan_clear"))
-        plans.applyPlan(eventId, null)
-        _state.update { it.copy(error = null) }
-    }
-
     /** One planner run: Trace section `planner` (+ `perf.signpost`), `planner.run`, API-014 `perf_planner_ms`. */
-    private inline fun timedPlan(block: () -> Plan): Plan {
+    private inline fun timedPlan(block: () -> Pair<Plan, ScheduleProposal>): Pair<Plan, ScheduleProposal> {
         val started = System.nanoTime()
-        val plan = AppLog.section("planner") { block() }
+        val result = AppLog.section("planner") { block() }
+        val plan = result.first
         val ms = (System.nanoTime() - started) / 1_000_000
         AppLog.info(
             LogCategory.PLANNER, LogEvent.PLANNER_RUN, "Plan: ${plan.itemIds.size} items in $ms ms",
@@ -170,6 +114,11 @@ class PlannerController(
             ),
         )
         if (countPerf()) perf.record(PerfMetric.PLANNER_MS, PerfMetric.plannerBucket(ms))
-        return plan
+        return result
+    }
+
+    companion object {
+        const val NOTHING_FITS = "Nothing on the schedule fits that. Try another day or fewer limits."
+        const val ALREADY_IN_SCHEDULE = "Everything that fits is already in your schedule."
     }
 }

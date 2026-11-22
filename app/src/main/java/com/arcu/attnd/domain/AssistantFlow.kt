@@ -223,12 +223,10 @@ data class LiveHints(
     val gaps: List<GapSuggestion> = emptyList(),
     /** "You skipped X — fill the gap?" chips. */
     val skipped: List<Chip> = emptyList(),
-    /** Planned items the organizer changed or removed. */
-    val changed: List<Int> = emptyList(),
     /** Today's planned items have all ended: show the day's recap. */
     val recapReady: Boolean = false,
 ) {
-    val isEmpty: Boolean get() = runningLate == null && gaps.isEmpty() && skipped.isEmpty() && changed.isEmpty() && !recapReady
+    val isEmpty: Boolean get() = runningLate == null && gaps.isEmpty() && skipped.isEmpty() && !recapReady
 }
 
 /**
@@ -246,7 +244,6 @@ object LiveHintRules {
             runningLate = LiveAssist.runningLate(plan, bundle, now, user),
             gaps = LiveAssist.gaps(plan, bundle, hearts, now),
             skipped = LiveAssist.skipped(plan, bundle, samples, now).filter { it !in dismissed }.mapNotNull { LiveAssist.skippedChip(it, bundle) },
-            changed = LiveAssist.changedItems(plan, bundle),
             recapReady = recap,
         )
     }

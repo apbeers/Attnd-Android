@@ -83,7 +83,11 @@ data class PlanDay(
     val items: List<PlannedItem> get() = entries.filterIsInstance<PlannedItem>()
 }
 
-/** A plan for one event, stored on the device ([PlanCodec]). */
+/**
+ * A plan for one event: the planner's working result (a new plan, an edit's re-solve, a version, a shared
+ * plan) or the day view derived from My schedule ([MySchedule.dayPlan]). Never stored (one list, Nov 22,
+ * 2026); [PlanCodec] only reads an older build's stored plan once, for the migration.
+ */
 data class Plan(
     val eventId: Int,
     val createdAt: Instant,
@@ -357,6 +361,18 @@ class Planner(
         val rebuilt = buildDay(day.date, day.windowStart, day.windowEnd, chosen, orInstead, candidates(day.date, day.windowStart, day.windowEnd), frozen, frozenMeals, null)
         val days = plan.days.toMutableList().also { it[dayIndex] = rebuilt }
         return plan.copy(days = days, fingerprints = fingerprints(days))
+    }
+
+    /**
+     * One list (Nov 22, 2026): the day view of items chosen elsewhere (My schedule), laid out by the same
+     * rules as a planned day (walks between them, swap alternatives from the day's candidates in
+     * [windowStart]…[windowEnd]) with [meals] kept verbatim. Meal breaks are added only when the
+     * preferences ask for them (the derived view passes `includeMeals = false`, so it never invents one).
+     */
+    fun dayView(day: LocalDate, items: List<Int>, meals: List<MealBreak>, windowStart: Instant, windowEnd: Instant): PlanDay {
+        val chosen = items.distinct().mapNotNull { itemsById[it] }.filter { it.startTime != null }.sortedWith(ITEM_ORDER)
+        val pool = candidates(day, windowStart, windowEnd)
+        return buildDay(day, windowStart, windowEnd, chosen, emptyMap(), pool, frozenMeals = meals.sortedBy { it.start })
     }
 
     /** The integer milli-point score of [item] (rule 5). */

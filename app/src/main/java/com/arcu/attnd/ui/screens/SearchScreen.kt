@@ -66,7 +66,7 @@ data class SearchEntry(val kind: SearchKind, val id: Int) {
 @Composable
 fun SearchFab(onClick: () -> Unit, modifier: Modifier = Modifier, plan: Boolean = false) {
     FloatingActionButton(onClick = onClick, modifier = modifier) {
-        if (plan) Icon(Icons.Filled.AutoAwesome, contentDescription = "My plan")
+        if (plan) Icon(Icons.Filled.AutoAwesome, contentDescription = "Ask Attnd")
         else Icon(Icons.Filled.Search, contentDescription = "Search")
     }
 }

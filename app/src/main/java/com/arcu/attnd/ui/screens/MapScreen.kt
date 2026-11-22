@@ -465,7 +465,7 @@ fun EventMap(
                         containerColor = FloatingActionButtonDefaults.containerColor,
                         contentColor = contentColorFor(FloatingActionButtonDefaults.containerColor),
                     ) {
-                        if (searchIsPlan) Icon(Icons.Filled.AutoAwesome, contentDescription = "My plan")
+                        if (searchIsPlan) Icon(Icons.Filled.AutoAwesome, contentDescription = "Ask Attnd")
                         else Icon(Icons.Filled.Search, contentDescription = "Search")
                     }
                 },

@@ -165,8 +165,22 @@ class AssistantFlowTest {
         val morning = LiveHintRules.of(plan, bundle, hearts, now, null, emptyList())
         assertNull(morning.runningLate)
         assertFalse(morning.recapReady)
-        assertTrue(morning.changed.isEmpty())
         val late = Instant.parse("2026-11-15T05:30:00Z") // Sat 11:30 PM: every planned item ended
         assertTrue(LiveHintRules.of(plan, bundle, hearts, late, null, emptyList()).recapReady)
+    }
+
+    @Test
+    fun liveHintsAndWhyNotReadMyScheduleOnly() {
+        // One list §4: hints come from My schedule's day view, never a stored plan.
+        val mine = com.arcu.attnd.domain.MySchedule()
+        plan.itemIds.forEach { mine.add(com.arcu.attnd.domain.ScheduleTarget.item(it)) }
+        val day = mine.dayPlan(bundle)!!
+        assertEquals(plan.itemIds.toSet(), day.itemIds.toSet())
+        val late = Instant.parse("2026-11-15T05:30:00Z") // Sat 11:30 PM: every item ended
+        assertTrue(LiveHintRules.of(day, bundle, mine.hearts, late, null, emptyList()).recapReady)
+        assertFalse(LiveHintRules.of(day, bundle, mine.hearts, now, null, emptyList()).recapReady)
+        val why = com.arcu.attnd.domain.WhyNot.explain(plan.itemIds.first(), day, bundle, mine.hearts, now, java.util.Locale.US)
+        assertEquals(com.arcu.attnd.domain.WhyNotReason.InPlan, why?.reason)
+        assertTrue(com.arcu.attnd.domain.PlanShare.planLink(day, bundle).contains("/p/"))
     }
 }

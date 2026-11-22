@@ -135,12 +135,35 @@ class DevicePrefs(context: Context) {
 
     // ── Planner, Live Update, onboarding (per event) ──────────────────────────
 
-    /** The stored plan ([com.arcu.attnd.domain.PlanCodec] JSON). Kept after leaving, like hearts. */
-    fun plan(eventId: Int): String? = prefs.getString("$KEY_PLAN$eventId", null)
+    /**
+     * An older build's stored plan ([com.arcu.attnd.domain.PlanCodec] JSON) and its plan history. Since the
+     * one-list change (Nov 22, 2026) only read once, for the migration into My schedule, then deleted.
+     */
+    fun legacyPlan(eventId: Int): String? = prefs.getString("$KEY_PLAN$eventId", null)
 
-    fun setPlan(eventId: Int, value: String?) = prefs.edit {
-        if (value == null) remove("$KEY_PLAN$eventId") else putString("$KEY_PLAN$eventId", value)
+    fun legacyPlanHistory(eventId: Int): String? = prefs.getString("$KEY_PLAN_HISTORY$eventId", null)
+
+    fun deleteLegacyPlan(eventId: Int) = prefs.edit {
+        remove("$KEY_PLAN$eventId")
+        remove("$KEY_PLAN_HISTORY$eventId")
     }
+
+    /** One list: the Undo history over My schedule (`ScheduleHistory.encode`). Kept after leaving, like hearts. */
+    fun scheduleHistory(eventId: Int): String? = prefs.getString("$KEY_SCHEDULE_HISTORY$eventId", null)
+
+    fun setScheduleHistory(eventId: Int, value: String?) = prefs.edit {
+        if (value == null) remove("$KEY_SCHEDULE_HISTORY$eventId") else putString("$KEY_SCHEDULE_HISTORY$eventId", value)
+    }
+
+    /** One list: what the planner was told for the event (`SchedulePreferences.encode`). */
+    fun plannerPreferences(eventId: Int): String? = prefs.getString("$KEY_PLANNER_PREFS$eventId", null)
+
+    fun setPlannerPreferences(eventId: Int, value: String) = prefs.edit { putString("$KEY_PLANNER_PREFS$eventId", value) }
+
+    /** One list: My schedule's checked-off item ids (comma-separated). */
+    fun checkedOff(eventId: Int): String? = prefs.getString("$KEY_CHECKED_OFF$eventId", null)
+
+    fun setCheckedOff(eventId: Int, value: String) = prefs.edit { putString("$KEY_CHECKED_OFF$eventId", value) }
 
     /** "Follow on Lock Screen": null = never set (the default applies). */
     fun followLive(eventId: Int): Boolean? =
@@ -196,13 +219,6 @@ class DevicePrefs(context: Context) {
     fun setPermissionAsked(permission: String) = prefs.edit { putBoolean("$KEY_PERMISSION_ASKED$permission", true) }
 
     // Event assistant (assistant spec §4, §7): stored with the plan per event, kept after leaving.
-
-    /** The plan's undo stack (`PlanHistory.encode`). */
-    fun planHistory(eventId: Int): String? = prefs.getString("$KEY_PLAN_HISTORY$eventId", null)
-
-    fun setPlanHistory(eventId: Int, value: String?) = prefs.edit {
-        if (value == null) remove("$KEY_PLAN_HISTORY$eventId") else putString("$KEY_PLAN_HISTORY$eventId", value)
-    }
 
     /** The model's conversation (`AssistantConversation.encode`). */
     fun assistantConversation(eventId: Int): String? = prefs.getString("$KEY_CONVERSATION$eventId", null)
@@ -278,6 +294,9 @@ class DevicePrefs(context: Context) {
         private const val KEY_ONBOARDING = "onboarding_seen_"
         private const val KEY_PERMISSION_ASKED = "permission_asked_"
         private const val KEY_PLAN_HISTORY = "plan_history_"
+        private const val KEY_SCHEDULE_HISTORY = "schedule_history_"
+        private const val KEY_PLANNER_PREFS = "planner_prefs_"
+        private const val KEY_CHECKED_OFF = "checked_off_"
         private const val KEY_CONVERSATION = "assistant_conversation_"
         private const val KEY_TRANSCRIPT = "assistant_transcript_"
         private const val KEY_REMINDERS_ON = "reminders_on_"

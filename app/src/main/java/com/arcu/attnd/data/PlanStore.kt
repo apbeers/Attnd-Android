@@ -4,9 +4,6 @@ import com.arcu.attnd.data.prefs.DevicePrefs
 import com.arcu.attnd.domain.AssistantConversation
 import com.arcu.attnd.domain.AssistantTranscript
 import com.arcu.attnd.domain.Hearts
-import com.arcu.attnd.domain.Plan
-import com.arcu.attnd.domain.PlanCodec
-import com.arcu.attnd.domain.PlanHistory
 import com.arcu.attnd.domain.StoredTurn
 import com.arcu.attnd.domain.UrgentBlock
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -16,71 +13,18 @@ import java.time.Instant
 import java.time.LocalDate
 
 /**
- * Per-event state of the planner, the assistant and the Live Update, on the device only
- * (SharedPreferences, in Auto Backup like hearts): the plan, its undo stack, the assistant's
- * conversation and transcript, shared plans opened, "Follow on Lock Screen", reminders, skipped items,
- * the urgent block (API-011) and which reminders were shown. [version] changes on every write, so the UI and the Live Update follow.
+ * Per-event state of the assistant and the Live Update, on the device only (SharedPreferences, in Auto
+ * Backup like hearts): the assistant's conversation and transcript, shared plans opened, "Follow on Lock
+ * Screen", reminders, skipped items, the urgent block (API-011) and which reminders were shown. [version]
+ * changes on every write, so the UI and the Live Update follow. No plan: since the one-list change
+ * (Nov 22, 2026) My schedule ([ScheduleStore]) is the only stored list and its Undo history.
  */
 class PlanStore(private val prefs: DevicePrefs) {
 
-    private val plans = HashMap<Int, Plan?>()
     private val _version = MutableStateFlow(0)
     val version: StateFlow<Int> = _version
 
     private fun changed() = _version.update { it + 1 }
-
-    /**
-     * Called after every new plan version and every undo with (event, new plan, replaced plan), so My
-     * schedule follows the planner ([ScheduleController.applyPlan], wired in AppGraph). Not for
-     * [setPlan] (in-place changes such as check-offs or the reconcile after a My schedule change).
-     */
-    @Volatile
-    var onApply: ((eventId: Int, plan: Plan?, previous: Plan?) -> Unit)? = null
-
-    @Synchronized
-    fun plan(eventId: Int): Plan? = plans.getOrPut(eventId) { PlanCodec.decode(prefs.plan(eventId))?.takeIf { it.eventId == eventId } }
-
-    @Synchronized
-    fun setPlan(eventId: Int, plan: Plan?) {
-        plans[eventId] = plan
-        prefs.setPlan(eventId, plan?.let(PlanCodec::encode))
-        changed()
-    }
-
-    /**
-     * Applies a plan change with Undo (assistant spec §4): the replaced plan goes onto the undo stack
-     * (≤ 20). Returns the new stack depth.
-     */
-    @Synchronized
-    fun applyPlan(eventId: Int, plan: Plan?): Int {
-        val previous = plan(eventId)
-        val history = if (previous != null && !previous.isEmpty) history(eventId).push(previous) else history(eventId)
-        setHistory(eventId, history)
-        setPlan(eventId, plan)
-        onApply?.invoke(eventId, plan, previous)
-        return history.plans.size
-    }
-
-    /** Undo: restores the last replaced plan; null when there is nothing to undo. */
-    @Synchronized
-    fun undoPlan(eventId: Int): Plan? {
-        val (restored, rest) = history(eventId).pop() ?: return null
-        val previous = plan(eventId)
-        setHistory(eventId, rest)
-        setPlan(eventId, restored)
-        onApply?.invoke(eventId, restored, previous)
-        return restored
-    }
-
-    @Synchronized
-    fun history(eventId: Int): PlanHistory = histories.getOrPut(eventId) { PlanHistory.decode(prefs.planHistory(eventId)) }
-
-    private fun setHistory(eventId: Int, history: PlanHistory) {
-        histories[eventId] = history
-        prefs.setPlanHistory(eventId, history.takeIf { it.canUndo }?.encode())
-    }
-
-    private val histories = HashMap<Int, PlanHistory>()
 
     fun conversation(eventId: Int): AssistantConversation = AssistantConversation.decode(prefs.assistantConversation(eventId))
 
@@ -101,7 +45,7 @@ class PlanStore(private val prefs: DevicePrefs) {
         prefs.setSharedPlans(eventId, all.joinToString("\n") { it.joinToString(",") })
     }
 
-    /** Reminders before liked and planned items: the user's choice, else on while following on the Lock Screen. */
+    /** Reminders before the entries of My schedule: the user's choice, else on while following on the Lock Screen. */
     fun reminders(eventId: Int, hearts: Hearts): Boolean = prefs.reminders(eventId) ?: follows(eventId, hearts)
 
     fun setReminders(eventId: Int, on: Boolean) {

@@ -7,8 +7,11 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
-/** What the Live Update follows on its day (shared spec §8): the plan, else My schedule ("hearts"), else the event's own day. */
-enum class LiveSource { PLAN, HEARTS, EVENT }
+/**
+ * What the Live Update follows on its day (shared spec §8): My schedule ("hearts"), else the event's own day.
+ * One list (Nov 22, 2026): there is no separate plan source; the planner's items are in My schedule.
+ */
+enum class LiveSource { HEARTS, EVENT }
 
 /** API-011: an urgent organizer announcement shown front and centre for up to 12 h or until dismissed. */
 data class UrgentBlock(val id: Int, val title: String, val body: String, val sentAt: Instant) {
@@ -24,7 +27,7 @@ data class FollowDay(
     /** The day in the event's time zone, and its start. */
     val date: LocalDate,
     val dayStart: Instant,
-    /** True: My schedule's items (and timed places); false: the plan's or the event's own day. */
+    /** True: My schedule's items (and timed places); false: the event's own day. */
     val followsHearts: Boolean,
     /** The followed items of the day (by start, then id), including ones already over. */
     val items: List<ScheduleItem>,
@@ -34,26 +37,19 @@ data class FollowDay(
     val startAt: Instant,
     /** When the last followed entry ends. */
     val endAt: Instant,
-    /** True: the plan's items (spec §6), which win over My schedule. */
-    val followsPlan: Boolean = false,
     /** My schedule's places with a time on this day (only while following "mine"). */
     val places: List<FollowPlace> = emptyList(),
     /** Every timed item of the day: what's on at the event when My schedule has nothing on. */
     val eventItems: List<ScheduleItem> = emptyList(),
 ) {
-    val followsMine: Boolean get() = followsPlan || followsHearts
-    val source: LiveSource get() = when {
-        followsPlan -> LiveSource.PLAN
-        followsHearts -> LiveSource.HEARTS
-        else -> LiveSource.EVENT
-    }
+    val followsMine: Boolean get() = followsHearts
+    val source: LiveSource get() = if (followsHearts) LiveSource.HEARTS else LiveSource.EVENT
 }
 
 /** What [LiveFollow.followDay] gets under the organizer's `live_activity.follows` (API-027; iOS `FollowInputs`). */
 data class FollowInputs(
     val schedule: List<ScheduleItem>,
     val hearted: Set<Int>,
-    val planned: Set<Int>,
     val places: List<FollowPlace>,
 )
 
@@ -95,7 +91,6 @@ data class LiveContent(
     /** The gates while they haven't opened yet today. */
     val opensAt: Instant? = null,
     val followsHearts: Boolean = false,
-    val followsPlan: Boolean = false,
     val dayComplete: Boolean = false,
     val completedCount: Int? = null,
     /** "schedule" (mine) or "event" ("At the event"). */
@@ -103,7 +98,7 @@ data class LiveContent(
     val nextSource: String? = null,
     /** Next's start while My schedule has a gap ("Free until 3:00"). */
     val freeUntil: Instant? = null,
-    /** [LiveFollow.EMPTY_HINT] while nothing is in My schedule or the plan. */
+    /** [LiveFollow.EMPTY_HINT] while nothing is in My schedule. */
     val hint: String? = null,
     /** API-027 `live_activity.buttons` this app draws (Skip / Map). */
     val buttons: List<String> = LiveActivitySettings.DEFAULTS.liveButtons,
@@ -228,27 +223,25 @@ object LiveFollow {
 
     /**
      * API-027 `live_activity.follows`: `my_schedule` today's rule; `everything` every item of the day (no
-     * hearts, plan or places); `location` only the items at that place (an unknown place → My schedule's).
+     * hearts or places); `location` only the items at that place (an unknown place → My schedule's).
      */
-    fun inputs(settings: LiveActivitySettings?, bundle: EventBundle, hearted: Set<Int>, planned: Set<Int>, places: List<FollowPlace>): FollowInputs {
+    fun inputs(settings: LiveActivitySettings?, bundle: EventBundle, hearted: Set<Int>, places: List<FollowPlace>): FollowInputs {
         val s = settings ?: LiveActivitySettings.DEFAULTS
         s.followedLocation(bundle)?.let { location ->
-            return FollowInputs(bundle.schedule.filter { it.locationId == location }, emptySet(), emptySet(), emptyList())
+            return FollowInputs(bundle.schedule.filter { it.locationId == location }, emptySet(), emptyList())
         }
-        if (s.follows == LiveActivitySettings.Follows.EVERYTHING) return FollowInputs(bundle.schedule, emptySet(), emptySet(), emptyList())
-        return FollowInputs(bundle.schedule, hearted, planned, places)
+        if (s.follows == LiveActivitySettings.Follows.EVERYTHING) return FollowInputs(bundle.schedule, emptySet(), emptyList())
+        return FollowInputs(bundle.schedule, hearted, places)
     }
 
     /**
      * The day to follow: today while one of its items (or timed places) hasn't ended, else the next day
-     * with items. The plan's items when some of that day's haven't ended, else My schedule's items and
-     * places when one of them hasn't ended, else every item of the day. Items still running from an
+     * with items. My schedule's items and places when one of them hasn't ended, else every item of the day. Items still running from an
      * earlier day count for today. Null: nothing left.
      */
     fun followDay(
         schedule: List<ScheduleItem>,
         hearted: Set<Int>,
-        planned: Set<Int> = emptySet(),
         places: List<FollowPlace> = emptyList(),
         eventStart: Instant?,
         now: Instant,
@@ -275,15 +268,9 @@ object LiveFollow {
             val dayPlaces = placeDays[day].orEmpty()
             val openPlaces = dayPlaces.filter { it.end.isAfter(now) }
             if (open.isEmpty() && openPlaces.isEmpty()) continue
-            val followsPlan = open.any { it.id in planned }
-            val followsHearts = !followsPlan && (open.any { it.id in hearted } || openPlaces.isNotEmpty())
-            val mine = followsPlan || followsHearts
-            val items = when {
-                followsPlan -> all.filter { it.id in planned }
-                followsHearts -> all.filter { it.id in hearted }
-                else -> all
-            }
-            val followedPlaces = if (mine) dayPlaces else emptyList()
+            val followsHearts = open.any { it.id in hearted } || openPlaces.isNotEmpty()
+            val items = if (followsHearts) all.filter { it.id in hearted } else all
+            val followedPlaces = if (followsHearts) dayPlaces else emptyList()
             val gates = eventStart?.takeIf { it.atZone(zone).toLocalDate() == day }
             val starts = items.map { it.startTime!!.toInstant() } + followedPlaces.map { it.start }
             val dayStart = day.atStartOfDay(zone).toInstant()
@@ -298,7 +285,6 @@ object LiveFollow {
                 gatesOpen = gates,
                 startAt = startAt,
                 endAt = ends.maxOrNull() ?: first,
-                followsPlan = followsPlan,
                 places = followedPlaces,
                 eventItems = all,
             )
@@ -307,7 +293,7 @@ object LiveFollow {
     }
 
     fun followDay(inputs: FollowInputs, eventStart: Instant?, now: Instant, zone: ZoneId): FollowDay? =
-        followDay(inputs.schedule, inputs.hearted, inputs.planned, inputs.places, eventStart, now, zone)
+        followDay(inputs.schedule, inputs.hearted, inputs.places, eventStart, now, zone)
 
     /** [forced]: the user asked to follow now, so the 2 h lead doesn't apply when the day is today. */
     fun decision(day: FollowDay?, now: Instant, zone: ZoneId, forced: Boolean = false): LiveDecision {
@@ -423,7 +409,6 @@ object LiveFollow {
             urgent = urgent,
             opensAt = day.gatesOpen?.takeIf { it.isAfter(now) },
             followsHearts = day.followsHearts,
-            followsPlan = day.followsPlan,
             dayComplete = complete,
             completedCount = if (complete) completed else null,
             nowSource = nowSource,
@@ -433,8 +418,8 @@ object LiveFollow {
     }
 
     /**
-     * The organizer's buttons and stale text (API-027), the empty hint (nothing in My schedule or the plan)
-     * and "Leave now" for the next planned item ([late], only while following the plan and when it is Next).
+     * The organizer's buttons and stale text (API-027), the empty hint (nothing in My schedule)
+     * and "Leave now" for My schedule's next item ([late], only while following My schedule and when it is Next).
      */
     fun decorate(content: LiveContent, day: FollowDay?, settings: LiveActivitySettings?, hasMine: Boolean, late: RunningLate?): LiveContent {
         val s = settings ?: LiveActivitySettings.DEFAULTS
@@ -443,7 +428,7 @@ object LiveFollow {
             staleText = s.staleText,
             hint = if (!hasMine && !content.dayComplete) EMPTY_HINT else null,
         )
-        if (late != null && day?.followsPlan == true && content.next?.itemId == late.itemId) {
+        if (late != null && day?.followsHearts == true && content.next?.itemId == late.itemId) {
             result = result.copy(leaveBy = late.leaveBy, lateState = late.state, lateText = late.text, walkMinutesToNext = late.walkMinutes)
         }
         return result
@@ -521,7 +506,6 @@ object LiveFollow {
                 val items = if (count == 1) "item" else "items"
                 title = "That's a wrap for today"
                 text = when (source) {
-                    LiveSource.PLAN -> "$count $items in your plan today"
                     LiveSource.HEARTS -> "$count $items in your schedule today"
                     LiveSource.EVENT -> eventName
                 }

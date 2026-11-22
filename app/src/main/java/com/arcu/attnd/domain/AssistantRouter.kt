@@ -17,6 +17,7 @@ import kotlin.math.ceil
 data class AssistantContext(
     val bundle: EventBundle,
     val hearts: Hearts,
+    /** My schedule's day view ([MySchedule.dayPlan], one list: derived, never stored). */
     val plan: Plan?,
     val now: Instant,
     /** The user's position, only when location is permitted and known. */
@@ -25,7 +26,8 @@ data class AssistantContext(
     val canPlan: Boolean = true,
     /** Ask (the on-device model) is available; the router is then only the fallback. */
     val modelAvailable: Boolean = false,
-    val history: PlanHistory = PlanHistory(),
+    /** The one Undo history over My schedule (one list §3). */
+    val history: ScheduleHistory = ScheduleHistory(),
     val units: DistanceUnits = DistanceUnits.IMPERIAL,
     val locale: Locale = Locale.US,
     /** My schedule: timed places, reminders, clashes. [hearts] mirrors its membership. */
@@ -37,7 +39,7 @@ data class AssistantContext(
 
     /**
      * My schedule as the router sees it: the entries, plus hearts and planned items it doesn't list yet
-     * (they are in My schedule in the app; tests may pass only hearts and a plan).
+     * (in the app [plan] is My schedule's day view, so they are the same; tests may pass only hearts and a plan).
      */
     val mine: MySchedule by lazy {
         val merged = schedule.copy()
@@ -136,7 +138,7 @@ object AssistantRouter {
 
         if (cmd == "undo" || cmd == "undo that") {
             if (plan == null) return noPlan(ctx)
-            return if (ctx.history.canUndo) done(AssistantIntent.PLAN_UNDO, listOf(AssistantBlock.Text("Undid your last plan change.")), ctx, listOf(AssistantAction(ActionName.PLAN_UNDO)))
+            return if (ctx.history.canUndo) done(AssistantIntent.PLAN_UNDO, listOf(AssistantBlock.Text("Undid your last schedule change.")), ctx, listOf(AssistantAction(ActionName.PLAN_UNDO)))
             else done(AssistantIntent.PLAN_UNDO, listOf(AssistantBlock.Text("There's nothing to undo.")), ctx)
         }
 

@@ -183,7 +183,7 @@ fun OptionsScreen(
                             Text(
                                 when {
                                     followDenied -> "Notifications are blocked. Allow them in system settings."
-                                    else -> "What's on now and next in your plan or likes, as a Live Update, plus a reminder with the walk time before each liked item"
+                                    else -> "What's on now and next in your schedule, as a Live Update, plus a reminder with the walk time before each item in it"
                                 }
                             )
                             if (liveOn && promotedOff) {

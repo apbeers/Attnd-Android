@@ -223,7 +223,7 @@ class AssistantExtrasTest {
         assertEquals("Add Kolache masterclass", gap.chip.label)
 
         val clash = LiveAssist.likeClash(112, plan, bundle)!!
-        assertEquals("Add to plan instead of Sundown Choir?", clash.label)
+        assertEquals("Replace Sundown Choir with this?", clash.label)
         assertEquals(AssistantAction.planEdit(listOf(PlanOp.Replace(113, with = 112)), bundle), clash.action)
         assertNull(LiveAssist.likeClash(101, plan, bundle))
         assertNull(LiveAssist.likeClash(201, plan, bundle))
@@ -237,7 +237,5 @@ class AssistantExtrasTest {
         assertEquals(listOf("Plan tomorrow"), recap.chips.map { it.label })
         assertEquals(AssistantAction.planMake("Plan my Sunday"), recap.chips.single().action)
         assertEquals(ActionName.PLAN_MAKE, recap.chips.single().action.name)
-        val moved = bundle.copy(schedule = bundle.schedule.map { if (it.id == 105) it.copy(startTime = sat("20:30"), endTime = sat("21:30")) else it }.filter { it.id != 113 })
-        assertEquals(listOf(105, 113), LiveAssist.changedItems(plan, moved))
     }
 }
