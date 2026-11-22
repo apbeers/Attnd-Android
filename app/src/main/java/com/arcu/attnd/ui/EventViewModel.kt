@@ -28,6 +28,7 @@ import com.arcu.attnd.data.log.DiagnosticsState
 import com.arcu.attnd.data.log.PerfRecorder
 import com.arcu.attnd.data.net.ApiException
 import com.arcu.attnd.data.prefs.DevicePrefs
+import com.arcu.attnd.domain.MySchedule
 import com.arcu.attnd.domain.ActionName
 import com.arcu.attnd.domain.ActionSource
 import com.arcu.attnd.domain.AppLog
@@ -211,7 +212,16 @@ data class AppUiState(
     val followLive: Boolean = false,
     /** Debug logging and the log viewer (About & support; logging spec §2–3). */
     val diagnostics: DiagnosticsState = DiagnosticsState(dev = false),
+    /** The joined event's My schedule (Home's "Up next in my schedule"); null outside an event and in screenshot mode. */
+    val mySchedule: MySchedule? = null,
+    /** Urgent announcements swiped off Home (per event; they stay in Updates). */
+    val dismissedUrgentIds: Set<Int> = emptySet(),
+    /** A change that can be undone from a snackbar ("Dismissed … · Undo"). */
+    val undoToast: UndoToast? = null,
 )
+
+/** A snackbar offering Undo for the change it names ([id] tells two toasts with the same text apart). */
+class UndoToast(val id: Long, val message: String, val undo: () -> Unit)
 
 private data class LocalState(
     val ready: Boolean = false,
@@ -233,6 +243,9 @@ private data class LocalState(
     /** Status pills swiped away this session (`ended`, `refresh`, `instant`). */
     val dismissedBadges: Set<String> = emptySet(),
     val inAppBanner: InAppBanner? = null,
+    /** Per event: urgent announcements swiped off Home (loaded from prefs on first use). */
+    val dismissedUrgent: Map<Int, Set<Int>> = emptyMap(),
+    val undoToast: UndoToast? = null,
 )
 
 /** Everything [EventViewModel.uiState] combines besides the repository's flows. */
@@ -409,6 +422,9 @@ class EventViewModel(
                 showOnboarding = state.showOnboarding && screenshot == null && bundle != null,
                 followLive = eventId != null && planStore.follows(eventId, hearts),
                 diagnostics = versions.third,
+                mySchedule = if (screenshot == null && eventId != null) schedule.schedule(eventId) else null,
+                dismissedUrgentIds = eventId?.let { state.dismissedUrgent[it] ?: prefs.homeUrgentDismissed(it) }.orEmpty(),
+                undoToast = state.undoToast.takeIf { screenshot == null },
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, AppUiState())
 
@@ -764,6 +780,31 @@ class EventViewModel(
         val eventId = uiState.value.bundle?.event?.id ?: return
         prefs.setDismissedUpdateBanner(eventId, notificationId)
         local.update { it.copy(dismissedUpdateBanners = it.dismissedUpdateBanners + (eventId to notificationId)) }
+    }
+
+    /** Home's urgent card swiped away (iOS `dismissUrgentWithUndo`): hidden on Home, kept in Updates, with Undo. */
+    fun dismissUrgent(notificationId: Int) {
+        val eventId = uiState.value.bundle?.event?.id ?: return
+        setUrgentDismissed(eventId, notificationId, dismissed = true)
+        showUndo("Urgent update dismissed") { setUrgentDismissed(eventId, notificationId, dismissed = false) }
+    }
+
+    private fun setUrgentDismissed(eventId: Int, notificationId: Int, dismissed: Boolean) {
+        val current = local.value.dismissedUrgent[eventId] ?: prefs.homeUrgentDismissed(eventId)
+        val next = if (dismissed) current + notificationId else current - notificationId
+        prefs.setHomeUrgentDismissed(eventId, next)
+        local.update { it.copy(dismissedUrgent = it.dismissedUrgent + (eventId to next)) }
+    }
+
+    /** Shows the Undo snackbar for a change ([undo] runs when tapped). */
+    fun showUndo(message: String, undo: () -> Unit) {
+        local.update { it.copy(undoToast = UndoToast(System.nanoTime(), message, undo)) }
+    }
+
+    /** The Undo snackbar went away (tapped: [undone]). */
+    fun consumeUndo(toast: UndoToast, undone: Boolean) {
+        if (undone) toast.undo()
+        local.update { if (it.undoToast?.id == toast.id) it.copy(undoToast = null) else it }
     }
 
     // ── Hearts ──────────────────────────────────────────────────────────────

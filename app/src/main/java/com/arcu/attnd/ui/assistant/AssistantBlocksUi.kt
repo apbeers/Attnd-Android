@@ -189,8 +189,8 @@ fun AssistantBlockView(block: AssistantBlock, index: Int, controls: TurnControls
         is AssistantBlock.Share -> ShareCard(block.target, modifier)
         is AssistantBlock.Chips -> ChipRow(block.chips.filter { !(controls.canUndo && it.action.name == ActionName.PLAN_UNDO) }, modifier)
         is AssistantBlock.Confirm -> ConfirmCard(block, answered = index in controls.answered, onAnswer = { controls.onConfirm(index, it) }, modifier = modifier)
-        // Screen components (menu, FAQ, My schedule…) get their renderer in phase 5b; nothing produces them yet.
-        is AssistantBlock.ComponentBlock -> Unit
+        // Screen components (menu, FAQ, My schedule…): the one renderer's screen side.
+        is AssistantBlock.ComponentBlock -> com.arcu.attnd.ui.components.ScreenComponentView(block.component, modifier)
     }
 }
 

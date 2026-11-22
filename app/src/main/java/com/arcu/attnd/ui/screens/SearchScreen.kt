@@ -41,7 +41,6 @@ import com.arcu.attnd.domain.EventBundle
 import com.arcu.attnd.domain.EventTime
 import com.arcu.attnd.domain.SearchKind
 import com.arcu.attnd.ui.components.EmptyState
-import com.arcu.attnd.ui.components.EventInfoCard
 import com.arcu.attnd.ui.components.RemoteImage
 
 /** What the search sheet's back stack holds: an item's detail. */
@@ -165,9 +164,7 @@ fun SearchDetail(
                     }
                 }
             }
-            SearchKind.EVENT -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
-                EventInfoCard(bundle.event)
-            }
+            SearchKind.EVENT -> EventInfoScreen(bundle, onLocation = { onPush(SearchEntry(SearchKind.LOCATION, it)) })
         }
     }
 }

@@ -98,6 +98,8 @@ class AttndApiClientTest {
         assertEquals("\"v15\"", first.etag)
         assertFalse(http.requests[0].headers.containsKey("If-None-Match"))
         assertEquals("dev-1", http.requests[0].headers["X-Device-Id"])
+        // API-024 / API-027: the layout catalogue this build draws (phase 5b).
+        assertEquals("2", http.requests[0].headers["X-Attnd-Sections"])
         assertEquals("https://example.test/api/v2/events/1/bundle/", http.requests[0].url)
 
         val second = api.bundle(1, etag = first.etag, deviceId = "dev-1")

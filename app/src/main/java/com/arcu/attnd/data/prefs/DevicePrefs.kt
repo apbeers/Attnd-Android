@@ -64,6 +64,11 @@ class DevicePrefs(context: Context) {
         get() = prefs.getString(KEY_ETAG, null)
         set(value) = prefs.edit { putString(KEY_ETAG, value) }
 
+    /** The layout catalogue (`X-Attnd-Sections`) the stored bundle and its ETag were made for (0 = before 5b). */
+    var bundleSections: Int
+        get() = prefs.getInt(KEY_SECTIONS, 0)
+        set(value) = prefs.edit { putInt(KEY_SECTIONS, value) }
+
     var lastSyncedAt: Long?
         get() = prefs.getLong(KEY_LAST_SYNC, 0L).takeIf { it > 0L }
         set(value) = prefs.edit { if (value == null) remove(KEY_LAST_SYNC) else putLong(KEY_LAST_SYNC, value) }
@@ -164,6 +169,14 @@ class DevicePrefs(context: Context) {
 
     fun setDismissedUrgent(eventId: Int, notificationId: Int) = prefs.edit { putInt("$KEY_URGENT_DISMISSED$eventId", notificationId) }
 
+    /** Urgent announcements swiped off Home (ids; the Live Update's own Dismiss is [dismissedUrgent]). */
+    fun homeUrgentDismissed(eventId: Int): Set<Int> =
+        prefs.getString("$KEY_HOME_URGENT$eventId", null).orEmpty().split(',').mapNotNull { it.trim().toIntOrNull() }.toSet()
+
+    fun setHomeUrgentDismissed(eventId: Int, ids: Set<Int>) = prefs.edit {
+        if (ids.isEmpty()) remove("$KEY_HOME_URGENT$eventId") else putString("$KEY_HOME_URGENT$eventId", ids.sorted().joinToString(","))
+    }
+
     /** Schedule items whose reminder was already shown (comma-separated ids). */
     fun remindersShown(eventId: Int): String? = prefs.getString("$KEY_REMINDERS$eventId", null)
 
@@ -242,6 +255,8 @@ class DevicePrefs(context: Context) {
         private const val KEY_EVENT_ID = "event_id"
         private const val KEY_EVENT_CODE = "event_code"
         private const val KEY_ETAG = "bundle_etag"
+        private const val KEY_SECTIONS = "bundle_sections"
+        private const val KEY_HOME_URGENT = "home_urgent_dismissed_"
         private const val KEY_LAST_SYNC = "bundle_last_sync"
         private const val KEY_PUSH_TOKEN = "push_token"
         private const val KEY_DISMISSED_UPDATE = "dismissed_update_version"

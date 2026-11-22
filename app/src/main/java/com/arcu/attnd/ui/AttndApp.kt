@@ -34,6 +34,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -108,6 +109,11 @@ import com.arcu.attnd.ui.screens.SearchSheet
 import com.arcu.attnd.ui.screens.UpdateAvailableBanner
 import com.arcu.attnd.ui.screens.UpdateRequiredScreen
 import com.arcu.attnd.ui.theme.AttndTheme
+import com.arcu.attnd.ui.components.LocalScreenEnv
+import com.arcu.attnd.ui.components.ScreenEnv
+import com.arcu.attnd.ui.components.ComponentHost
+import com.arcu.attnd.ui.components.withOpen
+import com.arcu.attnd.data.AssistantAvailability
 import kotlinx.coroutines.delay
 
 /** Root composable: theme (the event's API-023 theme, else its accent colour) and launch vs. event UI. */
@@ -115,7 +121,13 @@ import kotlinx.coroutines.delay
 fun AttndApp(viewModel: EventViewModel = viewModel(factory = EventViewModel.Factory)) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     AttndTheme(eventTheme = state.bundle?.event?.theme, accentColor = state.bundle?.display?.accentColor, screenshot = state.isScreenshot) {
-        CompositionLocalProvider(LocalScreenshotMode provides state.isScreenshot) {
+        // API-024 screens: the bundle's layouts (never in screenshot mode) and what their conditions read.
+        val screenEnv = ScreenEnv(
+            layoutsEnabled = !state.isScreenshot,
+            modelAvailable = state.assistant.availability == AssistantAvailability.AVAILABLE,
+            hasSchedule = state.mySchedule?.isEmpty == false,
+        )
+        CompositionLocalProvider(LocalScreenshotMode provides state.isScreenshot, LocalScreenEnv provides screenEnv) {
             if (state.update.level == UpdateLevel.REQUIRED) {
                 UpdateRequiredScreen(state.update)
                 return@CompositionLocalProvider
@@ -143,6 +155,11 @@ fun AttndApp(viewModel: EventViewModel = viewModel(factory = EventViewModel.Fact
                             val context = LocalContext.current
                             OptionsScreen(
                                 event = bundle.event,
+                                bundle = bundle,
+                                onLocation = { id ->
+                                    viewModel.showOptions(false)
+                                    viewModel.open(OpenRequest(bundle.event.id, OpenTarget.Location(id)))
+                                },
                                 supportInfo = supportInfo,
                                 notificationsEnabled = state.notificationsEnabled,
                                 onNotificationsChange = viewModel::setNotificationsEnabled,
@@ -238,6 +255,12 @@ private fun EventShell(state: AppUiState, bundle: EventBundle, viewModel: EventV
     val snackbar = remember { SnackbarHostState() }
     val tabStates = rememberSaveableStateHolder()
 
+    // Undo for a change made with one tap (Home's urgent card swiped away).
+    LaunchedEffect(state.undoToast?.id) {
+        val toast = state.undoToast ?: return@LaunchedEffect
+        val result = snackbar.showSnackbar(toast.message, actionLabel = "Undo", duration = SnackbarDuration.Short)
+        viewModel.consumeUndo(toast, undone = result == SnackbarResult.ActionPerformed)
+    }
     LaunchedEffect(state.message) {
         val message = state.message ?: return@LaunchedEffect
         val chip = state.messageChip
@@ -387,7 +410,7 @@ private fun EventShell(state: AppUiState, bundle: EventBundle, viewModel: EventV
                 }
                 Box(Modifier.fillMaxWidth().weight(1f)) {
                     tabStates.SaveableStateProvider(selected.key) {
-                        TabContent(selected, state, bundle, viewModel, onMapSearch = if (fabInMapToolbar) onFab else null)
+                        TabContent(selected, state, bundle, viewModel, blockActions, onMapSearch = if (fabInMapToolbar) onFab else null)
                     }
                     // Float over the content (no layout space); each swipes away for the session.
                     StatusPills(state.statusBadges, onDismiss = viewModel::dismissStatusBadge, modifier = Modifier.align(Alignment.TopCenter))
@@ -449,19 +472,45 @@ private fun PlanDestination(state: AppUiState, bundle: EventBundle, viewModel: E
 
 /** One tab's screen: Home, or an organizer tab (today's tabs in screenshot mode). */
 @Composable
-private fun TabContent(tab: EventTab, state: AppUiState, bundle: EventBundle, viewModel: EventViewModel, onMapSearch: (() -> Unit)?) {
+private fun TabContent(
+    tab: EventTab,
+    state: AppUiState,
+    bundle: EventBundle,
+    viewModel: EventViewModel,
+    blockActions: BlockActions,
+    onMapSearch: (() -> Unit)?,
+) {
     when (tab) {
-        EventTab.HOME -> HomeScreen(
-            bundle = bundle,
-            plan = state.planner.plan,
-            isRefreshing = state.sync.isRefreshing,
-            onRefresh = viewModel::refresh,
-            showOptions = state.tabs.optionsTab == EventTab.HOME,
-            onOptions = { viewModel.showOptions(true) },
-            onOpenPlan = viewModel::showPlan,
-            onScheduleItem = { id -> viewModel.open(OpenRequest(bundle.event.id, OpenTarget.ScheduleItem(id))) },
-            onNotification = { id -> viewModel.open(OpenRequest(bundle.event.id, OpenTarget.Notification(id))) },
-        )
+        EventTab.HOME -> {
+            val eventId = bundle.event.id
+            val homeActions = remember(blockActions, viewModel, eventId) {
+                blockActions.withOpen { ref ->
+                    val target = when (ref.kind) {
+                        RefKind.SCHEDULE -> OpenTarget.ScheduleItem(ref.id)
+                        RefKind.LOCATION -> OpenTarget.Location(ref.id)
+                        RefKind.UPDATE -> OpenTarget.Notification(ref.id)
+                    }
+                    viewModel.open(OpenRequest(eventId, target))
+                }
+            }
+            val showOptions = state.tabs.optionsTab == EventTab.HOME
+            val host = remember(state.mySchedule, state.dismissedUrgentIds, showOptions, viewModel) {
+                ComponentHost(
+                    mySchedule = state.mySchedule,
+                    dismissedUrgent = state.dismissedUrgentIds,
+                    onDismissUrgent = viewModel::dismissUrgent,
+                    onEventInfo = { viewModel.open(OpenRequest(eventId, OpenTarget.EventInfo)) },
+                    onOptions = if (showOptions) ({ viewModel.showOptions(true) }) else null,
+                )
+            }
+            HomeScreen(
+                bundle = bundle,
+                actions = homeActions,
+                host = host,
+                isRefreshing = state.sync.isRefreshing,
+                onRefresh = viewModel::refresh,
+            )
+        }
         EventTab.MAP -> MapTab(state, viewModel, onSearch = onMapSearch)
         EventTab.LOCATIONS -> LocationsTab(
             bundle = bundle,

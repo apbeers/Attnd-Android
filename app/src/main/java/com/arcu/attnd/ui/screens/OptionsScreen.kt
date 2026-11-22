@@ -76,6 +76,7 @@ import com.arcu.attnd.domain.Event
 import com.arcu.attnd.domain.SupportInfo
 import com.arcu.attnd.push.PushNotifications
 import com.arcu.attnd.ui.components.EventInfoCard
+import com.arcu.attnd.domain.EventBundle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.ZoneId
@@ -87,6 +88,9 @@ import java.time.ZoneId
 @Composable
 fun OptionsScreen(
     event: Event,
+    /** The event's bundle: Options' event rows (API-024 `options_event`) and the event info screen. */
+    bundle: EventBundle? = null,
+    onLocation: (Int) -> Unit = {},
     supportInfo: SupportInfo,
     notificationsEnabled: Boolean,
     onNotificationsChange: (Boolean) -> Unit,
@@ -114,6 +118,22 @@ fun OptionsScreen(
     var showLogs by rememberSaveable { mutableStateOf(false) }
     if (showLogs && logs != null) {
         LogViewerScreen(logs, title = if (diagnostics.debugMode) "Logs" else "Recent logs", onBack = { showLogs = false })
+        return
+    }
+    var showEventInfo by rememberSaveable { mutableStateOf(false) }
+    if (showEventInfo && bundle != null) {
+        BackHandler { showEventInfo = false }
+        Surface(Modifier.fillMaxSize()) {
+            Column(Modifier.fillMaxSize()) {
+                TopAppBar(
+                    title = { Text("About this event") },
+                    navigationIcon = {
+                        IconButton(onClick = { showEventInfo = false }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
+                    },
+                )
+                EventInfoScreen(bundle, onLocation = onLocation)
+            }
+        }
         return
     }
     BackHandler(onBack = onBack)
@@ -146,7 +166,7 @@ fun OptionsScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 if (supportInfo.isTestBuild) TestBuildWarning(supportInfo.serverHost)
-                EventInfoCard(event)
+                if (bundle != null) OptionsEventRows(bundle, onEventInfo = { showEventInfo = true }) else EventInfoCard(event)
                 StatusSection(statusBadges, lastUpdated)
                 PermissionsSection(
                     showUserLocation = showUserLocation,

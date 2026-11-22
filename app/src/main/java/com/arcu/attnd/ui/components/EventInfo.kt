@@ -28,11 +28,11 @@ import com.arcu.attnd.domain.Event
 import com.arcu.attnd.domain.EventSearch
 
 /**
- * The event header (Options, and the event result in search): name, dates, address, code, description,
- * and a **Website** button when the event has an Attnd Studio site (API-016).
+ * The event header (Options, the event info screen): name, dates, address, code, description, and a
+ * **Website** button when the event has an Attnd Studio site (API-016) and [showWebsite].
  */
 @Composable
-fun EventInfoCard(event: Event, modifier: Modifier = Modifier) {
+fun EventInfoCard(event: Event, modifier: Modifier = Modifier, showWebsite: Boolean = true, showDescription: Boolean = true) {
     Card(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
         modifier = modifier.fillMaxWidth(),
@@ -48,29 +48,34 @@ fun EventInfoCard(event: Event, modifier: Modifier = Modifier) {
             if (event.eventCode.isNotBlank()) {
                 Text("Event code ${event.eventCode}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
             }
-            if (event.description.isNotBlank()) {
+            if (showDescription && event.description.isNotBlank()) {
                 Text(event.description, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 4.dp))
             }
-            event.websiteUrl?.let { url ->
-                val context = LocalContext.current
-                OutlinedButton(
-                    onClick = {
-                        // The system browser (or the user's Custom Tab default), never a WebView: nothing from the
-                        // app (device id, tokens, cookies) goes to the site, which is on another domain.
-                        val intent = Intent(Intent.ACTION_VIEW, url.toUri()).addCategory(Intent.CATEGORY_BROWSABLE)
-                        try {
-                            context.startActivity(intent)
-                        } catch (e: ActivityNotFoundException) {
-                            AppLog.caught(LogCategory.UI, "event_website", e)
-                        }
-                    },
-                    modifier = Modifier.padding(top = 8.dp),
-                ) {
-                    Icon(Icons.Filled.Language, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("Website")
-                }
-            }
+            if (showWebsite) event.websiteUrl?.let { url -> EventWebsiteButton(url, Modifier.padding(top = 8.dp)) }
         }
+    }
+}
+
+/**
+ * API-016 **Website**: the system browser (or the user's Custom Tab default), never a WebView: nothing
+ * from the app (device id, tokens, cookies) goes to the site, which is on another domain.
+ */
+@Composable
+fun EventWebsiteButton(url: String, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    OutlinedButton(
+        onClick = {
+            val intent = Intent(Intent.ACTION_VIEW, url.toUri()).addCategory(Intent.CATEGORY_BROWSABLE)
+            try {
+                context.startActivity(intent)
+            } catch (e: ActivityNotFoundException) {
+                AppLog.caught(LogCategory.UI, "event_website", e)
+            }
+        },
+        modifier = modifier,
+    ) {
+        Icon(Icons.Filled.Language, contentDescription = null, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(8.dp))
+        Text("Website")
     }
 }

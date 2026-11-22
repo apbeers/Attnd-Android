@@ -574,7 +574,17 @@ Phase 0 (toolchain and dependencies, minSdk 36) runs elsewhere. When it lands, p
 - **Files:** A`domain/ScreenLayout.kt`, `Component.kt`, `FoldRules.kt`, `AssistantBlocks.kt` (`Component` block).
 - **Tests:** `ScreenLayoutTest` (37), `ComponentTest` (6).
 
-**Phase 5b — Renderer, details, Home, context (L)**
+**Phase 5b — Renderer, details, Home, context (L)** — ✅ done (Nov 22, 2026)
+- **Shipped:** `X-Attnd-Sections: 2` + `EventBundle.layout` (saved ETag per catalogue); `ComponentView` (the one renderer,
+  chat blocks + screen components; `ComponentBlock` in chat answers); Home from the `home` layout (two columns ≥ 700 dp);
+  place / item details, event info, Options' event rows and the map overlay from their layouts (details in
+  `LocationDetail.kt` / `ScheduleDetail.kt`, two columns ≥ 700 dp); API-018 sections, Listen on Apple Music (API-030),
+  the photo credit with live attribution (API-031); Home's urgent card with sideways swipe + Undo; the Places "3 events"
+  disclosure and the place walk map. Tests `ScreenPartsTest` (PlaceEvents, PlaceWalkMap, photo attribution, Home header
+  and urgent, saved ETag, a server layout round trip), `AttndApiClientTest` (header).
+- **Deferred:** Home's fold-aware column widths (10a); `PlaceWalkMap.region` (the lite map fits its own bounds); the
+  "3 saved places" row opens nothing yet (3b's saved-places list); the remaining `DisplayLogic` cases (map clustering
+  overlap, `filterRegion`) go with 10a / 11's map work.
 - **Scope:**
   - `ComponentView` and one composable per section type;
   - item / place detail, event info, Options' event rows and the map overlay drawn from the layout;

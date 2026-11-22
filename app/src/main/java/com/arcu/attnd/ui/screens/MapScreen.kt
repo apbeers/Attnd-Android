@@ -81,6 +81,9 @@ import com.arcu.attnd.domain.LogCategory
 import com.arcu.attnd.domain.LogEvent
 import com.arcu.attnd.domain.LogLevel
 import com.arcu.attnd.domain.NowPlaying
+import com.arcu.attnd.domain.LayoutScreen
+import com.arcu.attnd.domain.ScreenFacts
+import com.arcu.attnd.ui.components.rememberSections
 import com.arcu.attnd.domain.PerfMetric
 import com.arcu.attnd.domain.SearchKind
 import com.arcu.attnd.domain.WalkRoute
@@ -198,7 +201,13 @@ fun EventMap(
                 )
             }
     }
-    val nowPlaying = remember(bundle, now, glance) { if (glance) Glance.nowPlaying(bundle, now) else emptyList() }
+    // API-024 `map_overlay`: whether the Now playing strip and the selected place's card show.
+    val overlay = rememberSections(LayoutScreen.MAP_OVERLAY, bundle, now) { b, state -> ScreenFacts.event(b, state) }.map { it.type }
+    val showsNowPlaying = "now_playing" in overlay
+    val showsPlaceCard = "selected_place" in overlay
+    val nowPlaying = remember(bundle, now, glance, showsNowPlaying) {
+        if (glance && showsNowPlaying) Glance.nowPlaying(bundle, now) else emptyList()
+    }
     val selected = selectedId?.let { bundle.location(it) }?.takeIf { it.coordinate != null }
 
     val initialTarget = eventCenter ?: pins.firstOrNull()?.point
@@ -467,7 +476,7 @@ fun EventMap(
             VerticalFloatingToolbar(expanded = true, modifier = toolbarModifier, content = toolbarContent)
         }
 
-        if (selected != null) {
+        if (selected != null && showsPlaceCard) {
             // Beside the floating toolbar (it stays usable), above the navigation.
             SelectedLocationCard(
                 bundle = bundle,

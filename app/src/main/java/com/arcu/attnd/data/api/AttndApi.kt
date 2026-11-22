@@ -9,6 +9,7 @@ import com.arcu.attnd.domain.LogCategory
 import com.arcu.attnd.domain.LogEvent
 import com.arcu.attnd.domain.LogLevel
 import com.arcu.attnd.domain.Redact
+import com.arcu.attnd.domain.SectionCatalogue
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.serialization.KSerializer
@@ -96,12 +97,15 @@ class AttndApi(
 
     /**
      * Conditional bundle download. [etag] goes out as `If-None-Match`; [deviceId] as `X-Device-Id`
-     * so the server can record last-seen for organizer stats.
+     * so the server can record last-seen for organizer stats. `X-Attnd-Sections` (API-024 / API-027)
+     * names the layout catalogue this build draws: the server then sends `layout` and Home in
+     * `display.tabs` (its ETag is per catalogue version).
      */
     suspend fun bundle(eventId: Int, etag: String?, deviceId: String?): BundleResponse {
         val headers = buildMap {
             if (etag != null) put("If-None-Match", etag)
             if (deviceId != null) put("X-Device-Id", deviceId)
+            put(SECTIONS_HEADER, SectionCatalogue.VERSION.toString())
         }
         val response = send("GET", "events/$eventId/bundle/", body = null, extraHeaders = headers)
         return BundleResponse(response.code, response.body, response.header("ETag"))
@@ -272,6 +276,9 @@ class AttndApi(
     companion object {
         /** The API version this build speaks. Bump it together with [BASE_URL]. */
         const val API_VERSION = 2
+
+        /** The layout catalogue header (API-024), its value [SectionCatalogue.VERSION]. */
+        const val SECTIONS_HEADER = "X-Attnd-Sections"
 
         /** Host comes from the ATTND_SERVER build setting: develop builds use the dev server. */
         val BASE_URL = "https://${com.arcu.attnd.BuildConfig.ATTND_SERVER}/api/v$API_VERSION/"

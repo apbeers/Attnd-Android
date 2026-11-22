@@ -18,6 +18,8 @@ import com.arcu.attnd.domain.LogEvent
 import com.arcu.attnd.domain.LogLevel
 import com.arcu.attnd.domain.NearbyEvent
 import com.arcu.attnd.domain.PreviewPoll
+import com.arcu.attnd.domain.SavedBundleETag
+import com.arcu.attnd.domain.SectionCatalogue
 import com.arcu.attnd.domain.UpdateLevel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
@@ -470,9 +472,12 @@ class EventRepository(
 
     // ── Internals ───────────────────────────────────────────────────────────
 
-    /** Only send the ETag when the matching bundle is actually in memory; otherwise a 304 would leave us empty. */
+    /**
+     * Only send the ETag when the matching bundle is actually in memory (otherwise a 304 would leave us
+     * empty) and was made for this build's layout catalogue (a 304 must never keep a body without `layout`).
+     */
     private fun etagFor(eventId: Int): String? =
-        prefs.bundleEtag?.takeIf { _bundle.value?.event?.id == eventId }
+        SavedBundleETag.usable(prefs.bundleEtag, prefs.bundleSections)?.takeIf { _bundle.value?.event?.id == eventId }
 
     private suspend fun fetchBundle(eventId: Int, failuresBeforeError: Int, source: String): RefreshResult {
         val response = api.bundle(eventId, etagFor(eventId), deviceId)
@@ -496,6 +501,7 @@ class EventRepository(
                     else -> {
                         writeCache(json, parsed.contentVersion)
                         prefs.bundleEtag = response.etag
+                        prefs.bundleSections = SectionCatalogue.VERSION
                         val previousVersion = _bundle.value?.contentVersion
                         _bundle.value = parsed
                         AppLog.info(

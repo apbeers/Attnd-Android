@@ -14,6 +14,7 @@ import com.arcu.attnd.domain.NotificationPriority
 import com.arcu.attnd.domain.ScheduleItem
 import com.arcu.attnd.domain.UpdateLevel
 import com.arcu.attnd.domain.WebLinks
+import com.arcu.attnd.domain.ScreenLayouts
 
 /**
  * Converts v2 DTOs into domain models, applying the documented default for every missing key.
@@ -46,6 +47,7 @@ object ApiMapper {
             schedule = dto.schedule.orEmpty().mapNotNull { scheduleItem(it) },
             notifications = dto.notifications.orEmpty().mapNotNull { notification(it) },
             liveActivity = ContextMapper.liveActivity(dto.liveActivity),
+            layout = ScreenLayouts.decode(dto.layout),
         )
     }
 

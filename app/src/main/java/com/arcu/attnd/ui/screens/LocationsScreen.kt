@@ -110,6 +110,7 @@ fun LocationsTab(
                 selectedId = selectedId,
                 onLocationClick = open,
                 onSearch = onSearch,
+                onScheduleItemClick = onScheduleItemClick,
             )
         },
         detail = { id, showBack, back ->
@@ -141,6 +142,8 @@ fun LocationsList(
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(0.dp),
     onSearch: () -> Unit = {},
+    /** A schedule item tapped in a place's "3 events" disclosure; null = not tappable. */
+    onScheduleItemClick: ((Int) -> Unit)? = null,
 ) {
     val display = bundle.display
     val hearts = LocalEventActions.current.hearts
@@ -187,12 +190,12 @@ fun LocationsList(
                 LazyColumn(Modifier.fillMaxSize(), contentPadding = contentPadding) {
                     when (display.locationsStyle) {
                         LocationsStyle.CARDS -> items(filtered, key = { it.id }) { location ->
-                            LocationCard(bundle, location, display.showLocationImages, location.id == selectedId, now, open, longPress)
+                            LocationCard(bundle, location, display.showLocationImages, location.id == selectedId, now, open, longPress, onScheduleItemClick)
                         }
-                        LocationsStyle.LIST -> locationRows(bundle, filtered, display.showLocationImages, selectedId, now, open, longPress)
+                        LocationsStyle.LIST -> locationRows(bundle, filtered, display.showLocationImages, selectedId, now, open, longPress, onScheduleItemClick)
                         LocationsStyle.GROUPED -> LocationGrouping.byCategory(filtered, bundle.categories).forEach { section ->
                             item(key = section.key) { SectionHeader(section.title) }
-                            locationRows(bundle, section.locations, display.showLocationImages, selectedId, now, open, longPress)
+                            locationRows(bundle, section.locations, display.showLocationImages, selectedId, now, open, longPress, onScheduleItemClick)
                         }
                     }
                 }
@@ -209,28 +212,11 @@ private fun LazyListScope.locationRows(
     now: Instant,
     onClick: (Int) -> Unit,
     onLongClick: (Int) -> Unit,
+    onItem: ((Int) -> Unit)?,
 ) {
     items(locations, key = { it.id }) { location ->
-        LocationRow(bundle, location, showImages, location.id == selectedId, now, { onClick(location.id) }, { onLongClick(location.id) })
+        LocationRow(bundle, location, showImages, location.id == selectedId, now, { onClick(location.id) }, { onLongClick(location.id) }, onItem)
         HorizontalDivider()
-    }
-}
-
-/** "Now: X · Next 8:30 Y" for a location with a schedule (stages etc.). */
-@Composable
-private fun NowNextLine(bundle: EventBundle, location: EventLocation, now: Instant) {
-    val line = remember(bundle.schedule, location.id, now) { Glance.locationLine(bundle, location.id, now) } ?: return
-    val live = remember(bundle.schedule, location.id, now) { Glance.isLive(bundle, location.id, now) }
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        if (live) LiveDot()
-        Text(
-            line,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.primary,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
     }
 }
 
@@ -243,6 +229,7 @@ private fun LocationRow(
     now: Instant,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
+    onItem: ((Int) -> Unit)?,
 ) {
     val hasSchedule = remember(bundle.schedule, location.id) { bundle.schedule.any { it.locationId == location.id } }
     ListItem(
@@ -254,7 +241,10 @@ private fun LocationRow(
             {
                 Column {
                     if (location.snippet.isNotBlank()) Text(location.snippet, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    if (hasSchedule) NowNextLine(bundle, location, now)
+                    if (hasSchedule) {
+                        NowNextLine(bundle, location, now)
+                        PlaceEventsDisclosure(bundle, location.id, now, onItem)
+                    }
                 }
             }
         } else {
@@ -304,6 +294,7 @@ private fun LocationCard(
     now: Instant,
     onClick: (Int) -> Unit,
     onLongClick: (Int) -> Unit,
+    onItem: ((Int) -> Unit)?,
 ) {
     Card(
         colors = if (selected) {
@@ -338,134 +329,11 @@ private fun LocationCard(
                     Text(location.snippet, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 NowNextLine(bundle, location, now)
+                PlaceEventsDisclosure(bundle, location.id, now, onItem)
             }
             Column(horizontalAlignment = Alignment.End) {
                 HeartButton(SearchKind.LOCATION, location.id, name = location.name)
                 DistanceArrow(location.coordinate, modifier = Modifier.padding(end = 12.dp))
-            }
-        }
-    }
-}
-
-/** Location detail: image, address, walking directions, description, website and its schedule. */
-@Composable
-fun LocationDetail(
-    bundle: EventBundle,
-    location: EventLocation,
-    onBack: (() -> Unit)?,
-    onScheduleItemClick: (Int) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val context = LocalContext.current
-    val actions = LocalEventActions.current
-    val zone = bundle.event.zone
-    val now = rememberNow()
-    val items = remember(bundle.schedule, location.id) {
-        ScheduleGrouping.sortChronologically(bundle.scheduleAt(location.id))
-    }
-
-    Column(modifier.fillMaxSize()) {
-        if (onBack != null) {
-            TopAppBar(
-                title = { Text(location.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-            )
-        }
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-            if (bundle.display.showLocationImages && location.imageUrl != null) {
-                RemoteImage(
-                    url = location.imageUrl,
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxWidth().height(220.dp),
-                )
-            }
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                location.category?.let { AssistChip(onClick = {}, label = { Text(it) }) }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(location.name, style = MaterialTheme.typography.headlineMedium, modifier = Modifier.weight(1f))
-                    HeartButton(SearchKind.LOCATION, location.id, name = location.name)
-                }
-                if (location.address.isNotBlank()) {
-                    Text(location.address, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    DistanceArrow(location.coordinate, style = MaterialTheme.typography.labelLarge)
-                    WalkTime(location.coordinate)
-                }
-                NowNextLine(bundle, location, now)
-                val directions = location.coordinate?.let { point ->
-                    "https://www.google.com/maps/dir/?api=1&destination=${point.latitude},${point.longitude}&travelmode=walking".toUri()
-                }
-                val website = location.website?.toUri()
-                val showOnMap = actions.onShowOnMap?.takeIf { location.coordinate != null }
-                if (directions != null || website != null || showOnMap != null) {
-                    // Material 3 Expressive button group: the pressed button widens, its neighbour yields.
-                    ButtonGroup(
-                        overflowIndicator = { menuState -> ButtonGroupDefaults.OverflowIndicator(menuState) },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        if (showOnMap != null) {
-                            clickableItem(
-                                onClick = { showOnMap(location.id) },
-                                label = "Map",
-                                icon = { Icon(Icons.Filled.Map, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                                weight = 1f,
-                            )
-                        }
-                        if (directions != null) {
-                            clickableItem(
-                                onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, directions)) },
-                                label = "Directions",
-                                icon = { Icon(Icons.AutoMirrored.Filled.DirectionsWalk, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                                weight = 1f,
-                            )
-                        }
-                        if (website != null) {
-                            clickableItem(
-                                onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, website)) },
-                                label = "Website",
-                                icon = { Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                                weight = 1f,
-                            )
-                        }
-                    }
-                }
-                if (location.description.isNotBlank()) {
-                    Text(location.description, style = MaterialTheme.typography.bodyLarge)
-                }
-                if (location.tags.isNotEmpty()) {
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        location.tags.forEach { tag -> SuggestionChip(onClick = {}, label = { Text(Tags.display(tag)) }) }
-                    }
-                }
-                if (items.isNotEmpty()) {
-                    HorizontalDivider(Modifier.padding(vertical = 8.dp))
-                    Text("Schedule", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                    items.forEach { item ->
-                        Column(
-                            Modifier
-                                .fillMaxWidth()
-                                .clickable { onScheduleItemClick(item.id) }
-                                .padding(vertical = 6.dp),
-                        ) {
-                            Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-                                Text(
-                                    EventTime.formatDayTime(item.startTime, zone),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                                RelativeTime.forItem(item, now, zone)?.let {
-                                    Text(it, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
-                                }
-                            }
-                            Text(item.name, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
-                        }
-                    }
-                }
             }
         }
     }

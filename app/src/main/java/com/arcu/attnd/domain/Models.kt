@@ -136,6 +136,8 @@ data class EventBundle(
     val notifications: List<EventNotification>,
     /** API-027 `live_activity`: what the Live Update follows; null = the defaults. */
     val liveActivity: LiveActivitySettings? = null,
+    /** API-024 / API-027 `layout`: the server-driven screens (null = the built-in ones, see [ScreenLayout]). */
+    val layout: ScreenLayouts? = null,
 ) {
     fun location(id: Int?): EventLocation? = id?.let { wanted -> locations.firstOrNull { it.id == wanted } }
     fun scheduleItem(id: Int?): ScheduleItem? = id?.let { wanted -> schedule.firstOrNull { it.id == wanted } }
