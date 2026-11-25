@@ -9,6 +9,10 @@ name: Store listing text
 on:
   workflow_dispatch:
     inputs:
+      send_for_review:
+        description: Also send the change for Google's review (off = it waits in Play Console until you send it)
+        type: boolean
+        default: false
       upload:
         description: Upload to Google Play (goes live for everyone after Google's review)
         type: boolean
@@ -42,4 +46,4 @@ jobs:
         run: |
           python3 -m venv "$RUNNER_TEMP/venv"
           "$RUNNER_TEMP/venv/bin/pip" install --quiet "pyjwt[crypto]"
-          "$RUNNER_TEMP/venv/bin/python" scripts/ci/play_publish.py --listing store/en-US
+          "$RUNNER_TEMP/venv/bin/python" scripts/ci/play_publish.py --listing store/en-US ${{ !inputs.send_for_review && '--not-for-review' || '' }}

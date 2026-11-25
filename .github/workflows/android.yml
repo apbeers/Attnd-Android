@@ -23,6 +23,11 @@ name: Android
 # repository variable CI_FULL = 'true'. Full pipeline + how to restore it: attnd-web docs/CI_PIPELINES.md.
 on:
   workflow_dispatch:
+    inputs:
+      play_draft:
+        description: 'Play: upload as a draft release (nothing sent for review; send it from Play Console)'
+        type: boolean
+        default: false
 
 concurrency:
   group: android-${{ github.ref }}
@@ -214,7 +219,8 @@ jobs:
         env:
           GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
           TRACK: ${{ github.ref == 'refs/heads/main' && 'production' || 'internal' }}
-          ROLLOUT: ${{ github.ref == 'refs/heads/main' && (vars.PLAY_ROLLOUT || '1.0') || '1.0' }}
+          ROLLOUT: ${{ github.ref == 'refs/heads/main' && !inputs.play_draft && (vars.PLAY_ROLLOUT || '1.0') || '1.0' }}
+          DRAFT: ${{ inputs.play_draft && '1' || '' }}  # Run workflow → "upload as a draft": nothing sent for review
           # The RELEASE_NOTES repo variable overrides store/en-US/release_notes.txt.
           NOTES: ${{ vars.RELEASE_NOTES || '' }}
           # Production releases also publish the listing text (it is shared by every track, so never on develop).
@@ -226,7 +232,8 @@ jobs:
           NATIVE=""; [ -f bundle/native-debug-symbols.zip ] && NATIVE=bundle/native-debug-symbols.zip
           python3 scripts/ci/play_publish.py bundle/app.aab \
             --track "$TRACK" --rollout "$ROLLOUT" --notes "$NOTES" --notes-file store/en-US/release_notes.txt \
-            ${LISTING:+--listing "$LISTING"} ${MAPPING:+--mapping "$MAPPING"} ${NATIVE:+--native-symbols "$NATIVE"}
+            ${LISTING:+--listing "$LISTING"} ${MAPPING:+--mapping "$MAPPING"} ${NATIVE:+--native-symbols "$NATIVE"} \
+            ${DRAFT:+--draft}
 
   integration:
     # Live API tests through the app's real client (HttpClient → AttndApi → ApiMapper), pure JVM, against

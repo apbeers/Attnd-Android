@@ -8,6 +8,8 @@ Bundle release:
         --listing store/en-US                     # also the listing text, in the same edit as the release
         --mapping mapping.txt                     # R8 mapping for Play's crash deobfuscation (same edit)
         --native-symbols native-debug-symbols.zip # native debug symbols, if the build has any
+        --draft                                   # a draft release: nothing goes to review or to users;
+                                                  # a person sends it from Play Console (Publishing overview)
 
 Store listing (text from store/en-US/*.txt, images from compose_screenshots.py):
     play_publish.py --listing store/en-US --check                      # validate the text only, offline
@@ -230,10 +232,13 @@ def publish_bundle(token, package, args, fields=None):
                  '?uploadType=media', raw=f.read(), content_type='application/octet-stream')
         print(f'Uploaded {kind} deobfuscation file for {version_code} ({Path(path).stat().st_size} bytes)')
 
-    release = {'versionCodes': [str(version_code)],
-               'status': 'completed' if args.rollout >= 1 else 'inProgress'}
-    if args.rollout < 1:
-        release['userFraction'] = args.rollout
+    if args.draft:  # prepared, not released: Play Console shows it under the track as a draft
+        release = {'versionCodes': [str(version_code)], 'status': 'draft'}
+    else:
+        release = {'versionCodes': [str(version_code)],
+                   'status': 'completed' if args.rollout >= 1 else 'inProgress'}
+        if args.rollout < 1:
+            release['userFraction'] = args.rollout
     if notes:
         release['releaseNotes'] = [{'language': LANGUAGE, 'text': notes}]
     call(token, 'PUT', f'{API}/{package}/edits/{edit}/tracks/{args.track}',
@@ -241,9 +246,17 @@ def publish_bundle(token, package, args, fields=None):
     if fields:
         # Same edit as the release: the listing text goes out (and into review) together with it.
         patch_listing_text(token, f'{package}/edits/{edit}/listings/{LANGUAGE}', fields)
-    call(token, 'POST', f'{API}/{package}/edits/{edit}:commit')
-    print(f'Released {version_code} to the {args.track} track'
-          + (f' at {args.rollout:.0%} rollout' if args.rollout < 1 else ''))
+    # A draft (or --not-for-review) commits with changesNotSentForReview: the release and the listing wait in
+    # Play Console until a person presses "Send for review".
+    hold = args.draft or args.not_for_review
+    call(token, 'POST', f'{API}/{package}/edits/{edit}:commit' + ('?changesNotSentForReview=true' if hold else ''))
+    if args.draft:
+        print(f'Draft release of {version_code} on the {args.track} track: nothing sent for review. '
+              'Review it in Play Console, then send it from Publishing overview.')
+    else:
+        print(f'Released {version_code} to the {args.track} track'
+              + (f' at {args.rollout:.0%} rollout' if args.rollout < 1 else '')
+              + (' (not sent for review)' if hold else ''))
 
 
 def publish_listing(token, package, fields, images, not_for_review=False):
@@ -287,7 +300,9 @@ def main():
                         help='listing mode: upload the images and leave the listing text as it is')
     parser.add_argument('--check', action='store_true', help='listing mode: validate only, upload nothing')
     parser.add_argument('--not-for-review', action='store_true',
-                        help="listing mode: commit with changesNotSentForReview (send from Play Console)")
+                        help="commit with changesNotSentForReview (send from Play Console)")
+    parser.add_argument('--draft', action='store_true',
+                        help='bundle mode: a draft release, committed without sending anything for review')
     args = parser.parse_args()
 
     bundle_mode = bool(args.aab)
@@ -296,6 +311,8 @@ def main():
     if bundle_mode:
         if not args.track:
             parser.error('bundle mode needs --track')
+        if args.draft and args.rollout < 1:
+            parser.error('--draft and --rollout: a draft has no rollout (set it when sending the release)')
         for path in (args.mapping, args.native_symbols):
             if path and not Path(path).is_file():
                 parser.error(f'{path} does not exist')

@@ -9,6 +9,10 @@ name: Store screenshots
 on:
   workflow_dispatch:
     inputs:
+      send_for_review:
+        description: Also send the change for Google's review (off = it waits in Play Console until you send it)
+        type: boolean
+        default: false
       upload:
         description: Upload the images to Google Play (goes live for everyone after Google's review)
         type: boolean
@@ -112,7 +116,7 @@ jobs:
         if: env.UPLOAD == 'true'
         env:
           GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
-        run: python scripts/ci/play_publish.py --listing store/en-US --images build/store --images-only
+        run: python scripts/ci/play_publish.py --listing store/en-US --images build/store --images-only ${{ !inputs.send_for_review && '--not-for-review' || '' }}
 
       - name: Remove signing material
         if: always()
