@@ -1,290 +1,277 @@
 package com.arcu.attnd.integration
 
-// Integration tests that hit the live attnd.app API.
-// All test data matches the sample_data.json fixture loaded on the production server.
-//
-// Event fixture summary:
-//   id=1  "Fort Worth Food & Music Festival"  code=FWFM2026  10 locations  2 sent notifications
-//   id=2  "Austin Tech & Innovation Summit"   code=ATIS2026  10 locations  2 sent notifications
-//   id=3  "Dallas Arts & Culture Night"       code=DACN2026  10 locations  2 sent notifications
+// Live protocol tests against the v2 API (attnd-web API_V2.md) through the app's real client stack.
+// Server and key come from ATTND_IT_SERVER / ATTND_IT_KEY; without them every test is skipped.
+// They only touch the DEMO event (the production CI key is accepted for nothing else).
 
 import com.arcu.attnd.BuildConfig
-import com.arcu.attnd.data.JoinRequest
-import com.arcu.attnd.data.NetworkModule
+import com.arcu.attnd.data.api.ApiJson
+import com.arcu.attnd.data.api.ApiMapper
+import com.arcu.attnd.data.api.AttndApi
+import com.arcu.attnd.data.api.DeviceRequest
+import com.arcu.attnd.data.api.JoinRequest
+import com.arcu.attnd.data.api.LeaveRequest
+import com.arcu.attnd.data.api.UsageEntryDto
+import com.arcu.attnd.data.api.UsageRequest
+import com.arcu.attnd.data.net.ApiException
+import com.arcu.attnd.domain.UpdateLevel
+import com.arcu.attnd.domain.UsageAggregator
+import com.arcu.attnd.domain.UsageMetric
 import kotlinx.coroutines.runBlocking
-import org.junit.Assert.*
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
+import org.junit.Before
 import org.junit.Test
-import retrofit2.HttpException
+import java.time.Instant
 import java.util.UUID
 
 class AttndApiTest {
 
-    private val api = NetworkModule.api
+    private val api by lazy { LiveServer.api() }
 
-    // ── Event Lookup by Code ──────────────────────────────────────────────────
+    /** (event id, device id) pairs joined by a test; left again in [leaveJoinedEvents]. */
+    private val joined = mutableListOf<Pair<Int, String>>()
 
-    @Test
-    fun testLookupByCode_FortWorth() = runBlocking {
-        val event = api.lookupEvent("FWFM2026")
-        assertEquals(1, event.id)
-        assertEquals("Fort Worth Food & Music Festival", event.name)
-        assertEquals("FWFM2026", event.eventCode)
-        assertEquals("Sundance Square, 420 Main St, Fort Worth, TX 76102", event.address)
-        assertEquals(32.7555, event.latitude, 0.001)
-        assertEquals(-97.3308, event.longitude, 0.001)
-        assertFalse(event.paid)
+    @Before
+    fun requireServer() = LiveServer.assumeConfigured()
+
+    @After
+    fun leaveJoinedEvents() = runBlocking {
+        for ((eventId, deviceId) in joined) {
+            runCatching { LiveServer.api().leave(eventId, LeaveRequest(deviceId)) }
+        }
+        joined.clear()
     }
 
-    @Test
-    fun testLookupByCode_Austin() = runBlocking {
-        val event = api.lookupEvent("ATIS2026")
-        assertEquals(2, event.id)
-        assertEquals("Austin Tech & Innovation Summit", event.name)
-        assertEquals("ATIS2026", event.eventCode)
-    }
-
-    @Test
-    fun testLookupByCode_Dallas() = runBlocking {
-        val event = api.lookupEvent("DACN2026")
-        assertEquals(3, event.id)
-        assertEquals("Dallas Arts & Culture Night", event.name)
-        assertEquals("DACN2026", event.eventCode)
-    }
-
-    // ── Event Lookup by Name ──────────────────────────────────────────────────
-
-    @Test
-    fun testLookupByName_FortWorth() = runBlocking {
-        val event = api.lookupEvent("Fort Worth Food & Music Festival")
-        assertEquals(1, event.id)
-        assertEquals("FWFM2026", event.eventCode)
-    }
-
-    @Test
-    fun testLookupByName_Austin() = runBlocking {
-        val event = api.lookupEvent("Austin Tech & Innovation Summit")
-        assertEquals(2, event.id)
-    }
-
-    // ── Lookup Not Found ──────────────────────────────────────────────────────
-
-    @Test
-    fun testLookupNotFound() = runBlocking {
+    private suspend fun expectApiError(code: Int, block: suspend () -> Unit) {
         try {
-            api.lookupEvent("DOESNOTEXIST99999")
-            fail("Expected HttpException 404")
-        } catch (e: HttpException) {
-            assertEquals(404, e.code())
+            block()
+            fail("Expected HTTP $code")
+        } catch (e: ApiException) {
+            assertEquals("HTTP status", code, e.code)
         }
     }
 
-    // ── Fetch Event by ID ─────────────────────────────────────────────────────
+    // ── 1. app-status (unversioned, unauthenticated) ────────────────────────
 
     @Test
-    fun testFetchEventById_FortWorth() = runBlocking {
-        val event = api.getEvent(1)
-        assertEquals(1, event.id)
-        assertEquals("Fort Worth Food & Music Festival", event.name)
+    fun appStatus_answersForThisPlatformAndVersion() = runBlocking<Unit> {
+        val dto = api.appStatus(BuildConfig.VERSION_NAME)
+        assertTrue("update = ${dto.update}", dto.update in setOf("none", "available", "required"))
+        assertTrue("update_url = ${dto.updateUrl}", dto.updateUrl.orEmpty().startsWith("https://"))
+        assertTrue("Android update_url should point at Play: ${dto.updateUrl}", "com.arcu.attnd" in dto.updateUrl.orEmpty())
+        val update = ApiMapper.appUpdate(dto)
+        assertEquals(dto.updateUrl, update.updateUrl)
+        // The build speaks a supported API version, so the server only asks it to update for min_version.
+        if (dto.minVersion == null) assertTrue(update.level != UpdateLevel.REQUIRED)
+    }
+
+    // ── 2. lookup + authentication ──────────────────────────────────────────
+
+    @Test
+    fun lookup_codeInAnyCaseAndWhitespace_findsDemo() = runBlocking<Unit> {
+        val ids = listOf("DEMO", "demo", " Demo ").map { query ->
+            val event = ApiMapper.event(api.lookup(query).event)
+            assertNotNull("lookup('$query') returned no event", event)
+            assertEquals("DEMO", event!!.eventCode)
+            event.id
+        }
+        assertEquals(1, ids.toSet().size)
     }
 
     @Test
-    fun testFetchEventById_Austin() = runBlocking {
-        val event = api.getEvent(2)
-        assertEquals(2, event.id)
-        assertEquals("Austin Tech & Innovation Summit", event.name)
+    fun lookup_unknownCode_is404() = runBlocking<Unit> {
+        expectApiError(404) { api.lookup("CI-NOPE-${UUID.randomUUID().toString().take(8)}") }
     }
 
     @Test
-    fun testFetchEventById_NotFound() = runBlocking {
-        try {
-            api.getEvent(99999)
-            fail("Expected HttpException 404")
-        } catch (e: HttpException) {
-            assertEquals(404, e.code())
+    fun lookup_withoutAuthorization_is401() = runBlocking<Unit> {
+        // The real HTTP client with no Authorization header at all.
+        val response = LiveServer.http.execute(
+            "GET", LiveServer.baseUrl() + "events/lookup/?q=DEMO", mapOf("Accept" to "application/json"), null,
+        )
+        assertEquals(401, response.code)
+        // An empty token (what the app sends with no JWT and no static key) is rejected the same way.
+        expectApiError(401) { LiveServer.api(token = "").lookup(LiveServer.DEMO_CODE) }
+    }
+
+    @Test
+    fun lookup_wrongKey_is401_andNotRetriedWithoutReattestation() = runBlocking<Unit> {
+        val tokens = LiveServer.Tokens("ci-wrong-key-${UUID.randomUUID()}")
+        val wrong = AttndApi(tokens, LiveServer.baseUrl(), LiveServer.http)
+        expectApiError(401) { wrong.lookup(LiveServer.DEMO_CODE) }
+        assertEquals("a 401 asks the provider to re-attest once", 1, tokens.reauthCount)
+        assertFalse(wrong.updateRequired.value)
+    }
+
+    @Test
+    fun lookup_wrongKey_thenReattestation_retriesOnceAndSucceeds() = runBlocking<Unit> {
+        val tokens = LiveServer.Tokens("ci-wrong-key-${UUID.randomUUID()}", fresh = LiveServer.key)
+        val api = AttndApi(tokens, LiveServer.baseUrl(), LiveServer.http)
+        assertEquals("DEMO", api.lookup(LiveServer.DEMO_CODE).event?.eventCode)
+        assertEquals(1, tokens.reauthCount)
+    }
+
+    // ── 3. bundle: ETag / If-None-Match ─────────────────────────────────────
+
+    @Test
+    fun bundle_etag_conditionalGet() = runBlocking<Unit> {
+        val id = LiveServer.demo.id
+        val first = api.bundle(id, etag = null, deviceId = null)
+        assertEquals(200, first.code)
+        assertNotNull("bundle has a body", first.json)
+        val etag = first.etag
+        assertNotNull("bundle response carries an ETag", etag)
+
+        val unchanged = api.bundle(id, etag = etag, deviceId = null)
+        assertEquals("same ETag → 304", 304, unchanged.code)
+        assertTrue("304 has no body", unchanged.json.isNullOrEmpty())
+
+        val stale = api.bundle(id, etag = "\"e$id-v0\"", deviceId = null)
+        assertEquals("stale ETag → full bundle", 200, stale.code)
+        assertNotNull(ApiMapper.parseBundle(stale.json!!))
+
+        val garbage = api.bundle(id, etag = "not-an-etag-${UUID.randomUUID()}", deviceId = null)
+        assertEquals("garbage If-None-Match → full bundle", 200, garbage.code)
+        assertNotNull(ApiMapper.parseBundle(garbage.json!!))
+    }
+
+    @Test
+    fun bundle_withDeviceIdHeader_isAccepted() = runBlocking<Unit> {
+        assertEquals(200, api.bundle(LiveServer.demo.id, etag = null, deviceId = LiveServer.newDeviceId()).code)
+    }
+
+    @Test
+    fun bundle_unknownEvent_is404() = runBlocking<Unit> {
+        assertEquals(404, api.bundle(999_999_999, etag = null, deviceId = null).code)
+    }
+
+    // ── 4. join / leave ─────────────────────────────────────────────────────
+
+    @Test
+    fun joinTwice_thenLeaveTwice_areOk() = runBlocking<Unit> {
+        val id = LiveServer.demo.id
+        val deviceId = LiveServer.newDeviceId()
+        joined += id to deviceId
+        val request = JoinRequest(deviceId = deviceId, appVersion = BuildConfig.VERSION_NAME)
+
+        val first = api.join(id, request)
+        assertEquals("ok", first.status)
+        assertTrue("join returns the content_version", (first.contentVersion ?: 0) >= 1)
+        assertEquals("join is idempotent", "ok", api.join(id, request).status)
+
+        assertEquals("ok", api.leave(id, LeaveRequest(deviceId)).status)
+        assertEquals("leaving again is still ok", "ok", api.leave(id, LeaveRequest(deviceId)).status)
+    }
+
+    // ── 5. devices ──────────────────────────────────────────────────────────
+
+    @Test
+    fun devices_registerWithToken_thenWithoutToken() = runBlocking<Unit> {
+        val deviceId = LiveServer.newDeviceId()
+        val token = "ci-${UUID.randomUUID()}"
+
+        val registered = api.registerDevice(
+            DeviceRequest(deviceId = deviceId, pushToken = token, appVersion = BuildConfig.VERSION_NAME, subscribed = false),
+        )
+        assertEquals("ok", registered.status)
+        assertEquals(false, registered.subscribed)
+        assertNull("a device that never joined has no event", registered.eventId)
+
+        // Joined devices keep their event when devices/ is called without one.
+        val id = LiveServer.demo.id
+        joined += id to deviceId
+        assertEquals("ok", api.join(id, JoinRequest(deviceId = deviceId)).status)
+
+        // No token: the key is left out (never ""), and the rest of the device is unchanged.
+        val again = api.registerDevice(DeviceRequest(deviceId = deviceId, appVersion = BuildConfig.VERSION_NAME))
+        assertEquals("ok", again.status)
+        assertEquals("subscribed is unchanged when omitted", false, again.subscribed)
+        assertEquals("devices/ doesn't change the joined event", id, again.eventId)
+
+        val body = ApiJson.encodeToString(DeviceRequest.serializer(), DeviceRequest(deviceId = deviceId))
+        assertFalse("no push_token key without a token: $body", "push_token" in body)
+        LiveServer.sentBodies.toList().forEach { sent ->
+            assertFalse("never send an empty push_token: $sent", Regex("\"push_token\"\\s*:\\s*\"\"").containsMatchIn(sent))
         }
     }
 
-    // ── Locations List ────────────────────────────────────────────────────────
+    // ── 6. usage (API-005) ──────────────────────────────────────────────────
 
     @Test
-    fun testLocations_FortWorth_Count() = runBlocking {
-        val response = api.getLocations(1)
-        assertEquals(10, response.count)
-        assertEquals(10, response.results.size)
+    fun usage_validBatch_isAccepted() = runBlocking<Unit> {
+        val aggregator = UsageAggregator()
+        aggregator.add(UsageMetric.APP_OPEN, at = Instant.now())
+        aggregator.add(UsageMetric.TAB_VIEW, detail = "map", at = Instant.now(), count = 2)
+        val entries = aggregator.drain().map { UsageEntryDto(it.name, it.detail, it.count, it.at) }
+
+        val response = api.sendUsage(LiveServer.demo.id, UsageRequest(events = entries))
+        assertEquals("ok", response.status)
+        assertEquals(entries.size, response.accepted)
     }
 
     @Test
-    fun testLocations_FortWorth_Names() = runBlocking {
-        val names = api.getLocations(1).results.map { it.name }
-        assertTrue(names.contains("Cattlemen's Steakhouse"))
-        assertTrue(names.contains("Sundance Square Plaza"))
-        assertTrue(names.contains("Billy Bob's Texas"))
-        assertTrue(names.contains("Kimbell Art Museum"))
+    fun usage_invalidEntries_areDroppedNot400() = runBlocking<Unit> {
+        // API_V2.md: unknown names and invalid details are dropped silently; the request still succeeds.
+        val entries = listOf(
+            UsageEntryDto(name = "ci_not_a_metric"),
+            UsageEntryDto(name = UsageMetric.TAB_VIEW, detail = "ci_not_a_tab"),
+            UsageEntryDto(name = UsageMetric.LOCATION_VIEW, detail = "999999999"),
+        )
+        val response = api.sendUsage(LiveServer.demo.id, UsageRequest(events = entries))
+        assertEquals("ok", response.status)
+        assertEquals(0, response.accepted)
+
+        // A malformed `at` is not a reason to fail either (the server counts it now).
+        val badTime = api.sendUsage(
+            LiveServer.demo.id, UsageRequest(events = listOf(UsageEntryDto(name = UsageMetric.APP_OPEN, at = "not-a-time"))),
+        )
+        assertEquals("ok", badTime.status)
     }
 
     @Test
-    fun testLocations_Austin_Count() = runBlocking {
-        val response = api.getLocations(2)
-        assertEquals(10, response.count)
-        val names = response.results.map { it.name }
-        assertTrue(names.contains("Palmer Events Center"))
-        assertTrue(names.contains("Capital Factory"))
-        assertTrue(names.contains("Stubb's Amphitheater"))
+    fun usage_malformedBody_stillReturns200() = runBlocking<Unit> {
+        val response = LiveServer.http.execute(
+            "POST",
+            LiveServer.baseUrl() + "events/${LiveServer.demo.id}/usage/",
+            mapOf("Authorization" to "Bearer ${LiveServer.key}", "Accept" to "application/json"),
+            "{not json",
+        )
+        assertEquals(200, response.code)
+        assertEquals("0", LiveServer.parse(response.body!!).jsonObject["accepted"]?.jsonPrimitive?.content)
     }
 
     @Test
-    fun testLocations_Dallas_Count() = runBlocking {
-        val response = api.getLocations(3)
-        assertEquals(10, response.count)
-        val names = response.results.map { it.name }
-        assertTrue(names.contains("Dallas Museum of Art"))
-        assertTrue(names.contains("Deep Ellum"))
-        assertTrue(names.contains("The Bomb Factory"))
+    fun usage_emptyBatch_isANoOp() = runBlocking<Unit> {
+        val response = api.sendUsage(LiveServer.demo.id, UsageRequest(events = emptyList()))
+        assertEquals("ok", response.status)
+        assertEquals(0, response.accepted)
     }
 
-    // ── Single Location ───────────────────────────────────────────────────────
+    // ── 7. retired API version ──────────────────────────────────────────────
 
     @Test
-    fun testFetchLocation_CattleSteak() = runBlocking {
-        val loc = api.getLocationDetails(1, 1)
-        assertEquals(1, loc.id)
-        assertEquals("Cattlemen's Steakhouse", loc.name)
-        assertEquals("Award-winning steakhouse since 1947.", loc.snippet)
-        assertEquals("2458 N Main St, Fort Worth, TX 76106", loc.address)
-        assertEquals(32.755, loc.latitude, 0.001)
-        assertEquals(-97.332, loc.longitude, 0.001)
-        assertNull(loc.imageUrl)
-        assertNull(loc.website)
-        assertTrue(loc.description.isNotEmpty())
-    }
+    fun retiredApiVersion_is410UpdateRequired() = runBlocking<Unit> {
+        val retired = LiveServer.api(apiVersion = 9)
+        expectApiError(410) { retired.lookup(LiveServer.DEMO_CODE) }
+        assertTrue("410 flags updateRequired", retired.updateRequired.value)
 
-    @Test
-    fun testFetchLocation_PalmerEvents() = runBlocking {
-        val loc = api.getLocationDetails(2, 11)
-        assertEquals(11, loc.id)
-        assertEquals("Palmer Events Center", loc.name)
-    }
-
-    @Test
-    fun testFetchLocation_NotFound() = runBlocking {
-        try {
-            api.getLocationDetails(1, 99999)
-            fail("Expected HttpException 404")
-        } catch (e: HttpException) {
-            assertEquals(404, e.code())
-        }
-    }
-
-    // ── Notifications (API only returns sent=true) ────────────────────────────
-
-    @Test
-    fun testNotifications_FortWorth() = runBlocking {
-        val response = api.getNotifications(1)
-        assertEquals(2, response.count)
-        assertEquals(2, response.results.size)
-        assertTrue(response.results.all { it.sent })
-        val titles = response.results.map { it.title }
-        assertTrue(titles.contains("Festival kicks off tomorrow!"))
-        assertTrue(titles.contains("Lineup announced for Saturday night"))
-    }
-
-    @Test
-    fun testNotifications_Austin() = runBlocking {
-        val response = api.getNotifications(2)
-        assertEquals(2, response.count)
-        val titles = response.results.map { it.title }
-        assertTrue(titles.contains("Early bird registration closes tonight"))
-        assertTrue(titles.contains("Speaker spotlight: keynote revealed"))
-    }
-
-    @Test
-    fun testNotifications_Dallas() = runBlocking {
-        val response = api.getNotifications(3)
-        assertEquals(2, response.count)
-        val titles = response.results.map { it.title }
-        assertTrue(titles.contains("Venue map now available"))
-        assertTrue(titles.contains("Free parking at Klyde Warren Park"))
-    }
-
-    @Test
-    fun testNotifications_AllSent() = runBlocking {
-        for (eventId in listOf(1, 2, 3)) {
-            val response = api.getNotifications(eventId)
-            assertTrue(
-                "Event $eventId returned an unsent notification",
-                response.results.all { it.sent }
-            )
-        }
-    }
-
-    // ── Device Join / Leave ───────────────────────────────────────────────────
-
-    @Test
-    fun testJoinAndLeaveEvent() = runBlocking {
-        val deviceId = "android-test-${UUID.randomUUID()}"
-        val joinResult = api.joinEvent(1, deviceId, JoinRequest())
-        assertNotNull(joinResult)
-        val leaveResult = api.leaveEvent(1, deviceId)
-        assertNotNull(leaveResult)
-    }
-
-    @Test
-    fun testJoinEvent_UnknownEvent() = runBlocking {
-        try {
-            api.joinEvent(99999, "android-test-404", JoinRequest())
-            fail("Expected HttpException 404")
-        } catch (e: HttpException) {
-            assertEquals(404, e.code())
-        }
-    }
-
-    // ── Nearby Events ─────────────────────────────────────────────────────────
-
-    @Test
-    fun testNearbyEvents_FortWorth_ContainsEvent1() = runBlocking {
-        val response = api.getNearbyEvents(32.7555, -97.3308)
-        assertTrue(response.count > 0)
-        val ids = response.results.map { it.event.id }
-        assertTrue("Fort Worth event should appear near its own coordinates", ids.contains(1))
-    }
-
-    @Test
-    fun testNearbyEvents_Austin_ContainsEvent2() = runBlocking {
-        val response = api.getNearbyEvents(30.2672, -97.7431)
-        assertTrue(response.count > 0)
-        val ids = response.results.map { it.event.id }
-        assertTrue(ids.contains(2))
-    }
-
-    @Test
-    fun testNearbyEvents_Dallas_ContainsEvent3() = runBlocking {
-        val response = api.getNearbyEvents(32.7767, -96.7970)
-        assertTrue(response.count > 0)
-        val ids = response.results.map { it.event.id }
-        assertTrue(ids.contains(3))
-    }
-
-    @Test
-    fun testNearbyEvents_ResultShape() = runBlocking {
-        val response = api.getNearbyEvents(32.7555, -97.3308)
-        val first = response.results.firstOrNull()
-        assertNotNull("Expected at least one nearby event", first)
-        first!!
-        assertTrue(first.distanceMiles >= 0.0)
-        assertTrue(first.event.name.isNotEmpty())
-        assertTrue(first.event.eventCode.isNotEmpty())
-        assertTrue(first.event.address.isNotEmpty())
-        assertEquals(response.count, response.results.size)
-    }
-
-    // ── Response Envelope ─────────────────────────────────────────────────────
-
-    @Test
-    fun testEnvelope_CountMatchesResults() = runBlocking {
-        val locations = api.getLocations(1)
-        assertEquals(locations.count, locations.results.size)
-
-        val notifications = api.getNotifications(1)
-        assertEquals(notifications.count, notifications.results.size)
+        val raw = LiveServer.http.execute(
+            "GET",
+            LiveServer.baseUrl(apiVersion = 9) + "events/lookup/?q=DEMO",
+            mapOf("Authorization" to "Bearer ${LiveServer.key}", "Accept" to "application/json"),
+            null,
+        )
+        assertEquals(410, raw.code)
+        val json = LiveServer.parse(raw.body!!).jsonObject
+        assertEquals("update_required", json["error"]?.jsonPrimitive?.content)
+        assertTrue(json["update_url"]?.jsonPrimitive?.content.orEmpty().startsWith("https://"))
     }
 }

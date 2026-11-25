@@ -1,469 +1,262 @@
-@file:OptIn(ExperimentalMaterial3Api::class)
+@file:OptIn(ExperimentalMaterial3ExpressiveApi::class)
 
 package com.arcu.attnd.ui.screens
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.Context
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.ImageAnalysis
-import androidx.camera.core.Preview
-import androidx.camera.core.resolutionselector.ResolutionSelector
-import androidx.camera.core.resolutionselector.ResolutionStrategy
-import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.view.PreviewView
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.QrCodeScanner
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LoadingIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.compose.ui.tooling.preview.Preview as ComposePreview
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
-import com.arcu.attnd.data.Event
-import com.arcu.attnd.data.JoinRequest
-import com.arcu.attnd.data.NearbyEvent
-import com.arcu.attnd.data.NetworkModule
-import com.arcu.attnd.ui.theme.AttndTheme
+import com.arcu.attnd.data.log.PermissionLog
+import com.arcu.attnd.domain.AppLog
+import com.arcu.attnd.domain.DistanceFormat
+import com.arcu.attnd.domain.Event
+import com.arcu.attnd.domain.EventTime
+import com.arcu.attnd.domain.LogCategory
+import com.arcu.attnd.domain.LogLevel
+import com.arcu.attnd.domain.NearbyEvent
+import com.arcu.attnd.domain.RelativeTime
+import com.arcu.attnd.ui.JoinUiState
+import com.arcu.attnd.ui.NearbyUiState
+import com.arcu.attnd.ui.components.DistanceArrow
+import com.arcu.attnd.ui.components.QrScannerDialog
+import com.arcu.attnd.ui.components.rememberDistanceUnits
+import com.arcu.attnd.ui.components.rememberNow
+import com.arcu.attnd.ui.components.rememberUserLocation
 import com.google.android.gms.location.LocationServices
-import com.google.mlkit.vision.barcode.BarcodeScannerOptions
-import com.google.mlkit.vision.barcode.BarcodeScanning
-import com.google.mlkit.vision.barcode.common.Barcode
-import com.google.mlkit.vision.common.InputImage
+import com.google.android.gms.location.Priority
+import com.google.android.gms.tasks.CancellationTokenSource
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
-import retrofit2.HttpException
-import java.io.IOException
-import java.util.Locale
-import java.util.concurrent.Executors
 
-@SuppressLint("MissingPermission")
+/** Home screen before joining: event code entry, QR scanner and nearby events. */
 @Composable
 fun LaunchScreen(
-    deviceId: String,
-    onEventJoined: (Event) -> Unit,
-    onLocationEnabled: () -> Unit = {},
+    join: JoinUiState,
+    nearby: NearbyUiState,
+    message: String?,
+    onJoinCode: (String) -> Unit,
+    onJoinEvent: (Event) -> Unit,
+    onNearbyLoading: () -> Unit,
+    onNearbyLocation: (lat: Double, lng: Double) -> Unit,
+    onNearbyError: (String) -> Unit,
+    onClearJoinError: () -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val fusedClient = remember { LocationServices.getFusedLocationProviderClient(context) }
+    var code by rememberSaveable { mutableStateOf("") }
+    var showScanner by rememberSaveable { mutableStateOf(false) }
+    var cameraError by rememberSaveable { mutableStateOf<String?>(null) }
 
-    var eventCode by remember { mutableStateOf("") }
-    var isSearching by remember { mutableStateOf(value = false) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
-    var isLoadingNearby by remember { mutableStateOf(false) }
-    var nearbyEvents by remember { mutableStateOf<List<NearbyEvent>>(emptyList()) }
-    var nearbyError by remember { mutableStateOf<String?>(null) }
-    
-    var showScanner by remember { mutableStateOf(false) }
-
-    fun joinEvent(code: String) {
-        isSearching = true
-        errorMessage = null
+    fun findNearby() {
+        onNearbyLoading()
         scope.launch {
-            try {
-                val event = NetworkModule.api.lookupEvent(code)
-                NetworkModule.api.joinEvent(event.id, deviceId, JoinRequest())
-                onEventJoined(event)
-            } catch (e: HttpException) {
-                errorMessage = when (e.code()) {
-                    401 -> "Authentication failed (401). API key may not be configured."
-                    404 -> "Event \"$code\" not found. Check the code and try again."
-                    else -> "Server error (${e.code()}). Please try again."
-                }
-            } catch (_: IOException) {
-                errorMessage = "Network error. Check your connection and try again."
-            } catch (e: Exception) {
-                errorMessage = "Unexpected error: ${e.javaClass.simpleName}"
-            } finally {
-                isSearching = false
-            }
+            val point = currentLocation(context)
+            if (point != null) onNearbyLocation(point.first, point.second)
+            else onNearbyError("Couldn't determine your location. Try again in a moment.")
         }
     }
 
-    fun loadNearbyEvents() {
-        scope.launch {
-            isLoadingNearby = true
-            nearbyError = null
-            try {
-                val location = fusedClient.lastLocation.await()
-                if (location != null) {
-                    val response = NetworkModule.api.getNearbyEvents(location.latitude, location.longitude)
-                    nearbyEvents = response.results
-                } else {
-                    nearbyError = "Unable to determine your location. Please move around and try again."
-                }
-            } catch (e: Exception) {
-                nearbyError = "Could not load nearby events: ${e.message}"
-            } finally {
-                isLoadingNearby = false
-            }
-        }
+    val locationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+        PermissionLog.location("launch", result)
+        if (result.values.any { it }) findNearby() else onNearbyError("Location permission is needed to find nearby events.")
     }
-
-    // Auto-load nearby events if permission is already granted
-    LaunchedEffect(Unit) {
-        val fineGranted = ContextCompat.checkSelfPermission(
-            context,
-            Manifest.permission.ACCESS_FINE_LOCATION,
-        ) == PackageManager.PERMISSION_GRANTED
-        val coarseGranted = ContextCompat.checkSelfPermission(
-            context, Manifest.permission.ACCESS_COARSE_LOCATION
-        ) == PackageManager.PERMISSION_GRANTED
-
-        if (fineGranted || coarseGranted) {
-            onLocationEnabled()
-            loadNearbyEvents()
-        }
-    }
-
-    val locationPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions(),
-    ) { perms ->
-        val granted = (perms[Manifest.permission.ACCESS_FINE_LOCATION] == true) ||
-                (perms[Manifest.permission.ACCESS_COARSE_LOCATION] == true)
-        if (granted) {
-            onLocationEnabled()
-            loadNearbyEvents()
-        } else {
-            nearbyError = "Location permission is needed to find nearby events."
-        }
-    }
-
-    val cameraPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) {
-            showScanner = true
-        } else {
-            errorMessage = "Camera permission is required to scan QR codes."
-        }
-    }
-
-    val onFindNearbyTapped = {
-        val fineGranted = ContextCompat.checkSelfPermission(
-            context,
-            Manifest.permission.ACCESS_FINE_LOCATION,
-        ) == PackageManager.PERMISSION_GRANTED
-        val coarseGranted = ContextCompat.checkSelfPermission(
-            context, Manifest.permission.ACCESS_COARSE_LOCATION
-        ) == PackageManager.PERMISSION_GRANTED
-
-        if (fineGranted || coarseGranted) {
-            onLocationEnabled()
-            loadNearbyEvents()
-        } else {
-            locationPermissionLauncher.launch(
-                arrayOf(
-                    Manifest.permission.ACCESS_FINE_LOCATION,
-                    Manifest.permission.ACCESS_COARSE_LOCATION
-                )
-            )
-        }
+    val cameraPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        PermissionLog.camera(granted)
+        if (granted) showScanner = true else cameraError = "Camera permission is needed to scan QR codes."
     }
 
     if (showScanner) {
-        QRScannerDialog(
+        QrScannerDialog(
             onDismiss = { showScanner = false },
-            onCodeScanned = { code ->
+            onScanned = { raw ->
                 showScanner = false
-                joinEvent(code)
-            }
-        )
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp)
-    ) {
-        Text("Welcome to Attnd", style = MaterialTheme.typography.headlineMedium)
-        Spacer(Modifier.height(24.dp))
-
-        // Manual code entry
-        OutlinedTextField(
-            value = eventCode,
-            onValueChange = { eventCode = it },
-            label = { Text("Enter Event Code") },
-            modifier = Modifier.fillMaxWidth(),
-            isError = errorMessage != null,
-            enabled = !isSearching,
-            singleLine = true,
-            trailingIcon = {
-                IconButton(
-                    onClick = {
-                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-                            showScanner = true
-                        } else {
-                            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-                        }
-                    }
-                ) {
-                    Icon(Icons.Default.QrCodeScanner, contentDescription = "Scan QR Code")
-                }
-            }
-        )
-        Spacer(Modifier.height(8.dp))
-        Button(
-            onClick = {
-                if (eventCode.isNotBlank()) {
-                    joinEvent(eventCode)
-                }
+                onJoinCode(raw)
             },
-            modifier = Modifier.fillMaxWidth(),
-            enabled = !isSearching && eventCode.isNotBlank()
-        ) {
-            if (isSearching) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(24.dp),
-                    color = MaterialTheme.colorScheme.onPrimary
-                )
-            } else {
-                Text("Join Event")
-            }
-        }
-        if (errorMessage != null) {
-            Text(
-                errorMessage!!,
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(top = 4.dp)
-            )
-        }
-
-        // Divider
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            HorizontalDivider(modifier = Modifier.weight(1f))
-            Text(
-                "  OR  ",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.outline
-            )
-            HorizontalDivider(modifier = Modifier.weight(1f))
-        }
-
-        // Find Nearby Events
-        Button(
-            onClick = onFindNearbyTapped,
-            modifier = Modifier.fillMaxWidth(),
-            enabled = !isLoadingNearby
-        ) {
-            Icon(Icons.Default.LocationOn, contentDescription = null)
-            Spacer(Modifier.width(8.dp))
-            Text("Find Nearby Events")
-        }
-
-        if (nearbyError != null) {
-            Text(
-                nearbyError!!,
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(top = 4.dp)
-            )
-        }
-
-        if (isLoadingNearby) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                CircularProgressIndicator()
-            }
-        }
-
-        if (nearbyEvents.isNotEmpty()) {
-            Spacer(Modifier.height(8.dp))
-            Text("Nearby Events", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(4.dp))
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                items(nearbyEvents) { nearby ->
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        onClick = {
-                            scope.launch {
-                                try {
-                                    NetworkModule.api.joinEvent(nearby.event.id, deviceId, JoinRequest())
-                                    onEventJoined(nearby.event)
-                                } catch (_: Exception) {}
-                            }
-                        }
-                    ) {
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            Text(
-                                nearby.event.name,
-                                style = MaterialTheme.typography.bodyLarge
-                            )
-                            Text(
-                                String.format(Locale.US, "%.1f mi away", nearby.distanceMiles),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.outline
-                            )
-                            if (nearby.event.address.isNotEmpty()) {
-                                Text(
-                                    nearby.event.address,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.outline
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        )
     }
-}
 
-@Composable
-fun QRScannerDialog(onDismiss: () -> Unit, onCodeScanned: (String) -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Scan QR Code") },
-        text = {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(300.dp)
-            ) {
-                QRScannerView(onCodeScanned = onCodeScanned)
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel")
-            }
-        }
-    )
-}
-
-@Composable
-fun QRScannerView(onCodeScanned: (String) -> Unit) {
-    val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
-    
-    if (androidx.compose.ui.platform.LocalInspectionMode.current) {
-        // Preview mode placeholder
+    Surface(Modifier.fillMaxSize()) {
         Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(MaterialTheme.colorScheme.surfaceVariant),
-            contentAlignment = Alignment.Center
+            Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing),
+            contentAlignment = Alignment.TopCenter,
         ) {
-            Text("Camera Preview Placeholder")
-        }
-        return
-    }
+            // Comfortable reading width when unfolded; full width on the folded/cover screen.
+            Column(Modifier.widthIn(max = 560.dp).fillMaxWidth().padding(16.dp)) {
+                Text("Welcome to Attnd", style = MaterialTheme.typography.headlineMedium)
+                Spacer(Modifier.height(24.dp))
 
-    val cameraProviderFuture = remember { ProcessCameraProvider.getInstance(context) }
-    val executor = remember { Executors.newSingleThreadExecutor() }
-
-    DisposableEffect(executor) {
-        onDispose {
-            executor.shutdown()
-        }
-    }
-
-    AndroidView(
-        factory = { ctx ->
-            val previewView = PreviewView(ctx)
-            cameraProviderFuture.addListener(
-                {
-                    val cameraProvider = cameraProviderFuture.get()
-                
-                val preview = Preview.Builder().build().also {
-                    it.surfaceProvider = previewView.surfaceProvider
-                }
-
-                val barcodeScanner = BarcodeScanning.getClient(
-                    BarcodeScannerOptions.Builder()
-                        .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
-                        .build()
+                OutlinedTextField(
+                    value = code,
+                    onValueChange = {
+                        code = it
+                        if (join.error != null) onClearJoinError()
+                    },
+                    label = { Text("Event code") },
+                    singleLine = true,
+                    enabled = !join.isJoining,
+                    isError = join.error != null,
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters, imeAction = ImeAction.Go),
+                    keyboardActions = KeyboardActions(onGo = { if (code.isNotBlank()) onJoinCode(code) }),
+                    trailingIcon = {
+                        IconButton(onClick = {
+                            cameraError = null
+                            if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                                showScanner = true
+                            } else {
+                                cameraPermission.launch(Manifest.permission.CAMERA)
+                            }
+                        }) { Icon(Icons.Filled.QrCodeScanner, contentDescription = "Scan QR code") }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
                 )
-
-                val resolutionSelector = ResolutionSelector.Builder()
-                    .setResolutionStrategy(ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY)
-                    .build()
-
-                val imageAnalysis = ImageAnalysis.Builder()
-                    .setResolutionSelector(resolutionSelector)
-                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                    .build()
-
-                imageAnalysis.setAnalyzer(executor) { imageProxy ->
-                    @SuppressLint("UnsafeOptInUsageError")
-                    val mediaImage = imageProxy.image
-                    if (mediaImage != null) {
-                        val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
-                        barcodeScanner.process(image)
-                            .addOnSuccessListener { barcodes ->
-                                for (barcode in barcodes) {
-                                    val rawValue = barcode.rawValue
-                                    if (rawValue != null) {
-                                        // Support both raw code and URL
-                                        val code = if (rawValue.contains("attnd.app/join/")) {
-                                            rawValue.substringAfter("attnd.app/join/").substringBefore("/")
-                                        } else {
-                                            rawValue
-                                        }
-                                        onCodeScanned(code)
-                                    }
-                                }
-                            }
-                            .addOnCompleteListener {
-                                imageProxy.close()
-                            }
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    onClick = { onJoinCode(code) },
+                    enabled = !join.isJoining && code.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    if (join.isJoining) {
+                        CircularProgressIndicator(Modifier.size(24.dp), color = MaterialTheme.colorScheme.onPrimary)
                     } else {
-                        imageProxy.close()
+                        Text("Join event")
                     }
                 }
-
-                try {
-                    cameraProvider.unbindAll()
-                    cameraProvider.bindToLifecycle(
-                        lifecycleOwner,
-                        CameraSelector.DEFAULT_BACK_CAMERA,
-                        preview,
-                        imageAnalysis
-                    )
-                } catch (e: Exception) {
-                    e.printStackTrace()
+                (join.error ?: cameraError ?: message)?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
                 }
-            }, ContextCompat.getMainExecutor(ctx))
-            previewView
-        },
-        modifier = Modifier.fillMaxSize()
-    )
-}
 
-@ComposePreview(showBackground = true)
-@Composable
-fun LaunchScreenPreview() {
-    AttndTheme {
-        LaunchScreen(deviceId = "test-id", onEventJoined = {})
+                Row(Modifier.fillMaxWidth().padding(vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    HorizontalDivider(Modifier.weight(1f))
+                    Text("  OR  ", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.outline)
+                    HorizontalDivider(Modifier.weight(1f))
+                }
+
+                OutlinedButton(
+                    onClick = {
+                        if (hasLocationPermission(context)) findNearby()
+                        else locationPermission.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+                    },
+                    enabled = !nearby.isLoading && !join.isJoining,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Filled.LocationOn, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Find nearby events")
+                }
+                nearby.error?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
+                }
+                if (nearby.isLoading) {
+                    Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) { LoadingIndicator() }
+                }
+                if (nearby.events.isNotEmpty()) {
+                    Text("Nearby events", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 16.dp, bottom = 4.dp))
+                    LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(nearby.events, key = { it.event.id }) { item ->
+                            NearbyEventCard(item, enabled = !join.isJoining) { onJoinEvent(item.event) }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
-@ComposePreview(showBackground = true)
 @Composable
-fun QRScannerDialogPreview() {
-    AttndTheme {
-        QRScannerDialog(onDismiss = {}, onCodeScanned = {})
+private fun NearbyEventCard(item: NearbyEvent, enabled: Boolean, onClick: () -> Unit) {
+    val event = item.event
+    Card(onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp)) {
+            Text(event.name, style = MaterialTheme.typography.titleMedium)
+            val now = rememberNow()
+            val units = rememberDistanceUnits()
+            val user = rememberUserLocation()
+            val relative = remember(item, now) { RelativeTime.forNearby(item, now) }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // Live distance + arrow from the user's position; the server's distance otherwise.
+                val coordinate = event.coordinate
+                if (user != null && coordinate != null) {
+                    DistanceArrow(coordinate, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                } else {
+                    item.distanceMiles?.let {
+                        Text(DistanceFormat.formatMiles(it, units), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                    }
+                }
+                relative?.let { Text(it, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold) }
+            }
+            event.startTime?.let {
+                Text(EventTime.formatDateTime(it, event.zone), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+            }
+            if (event.address.isNotEmpty()) {
+                Text(event.address, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+            }
+        }
+    }
+}
+
+/** Last known location, or a fresh balanced-accuracy fix. Null without permission or on failure. */
+@SuppressLint("MissingPermission")
+private suspend fun currentLocation(context: Context): Pair<Double, Double>? {
+    if (!hasLocationPermission(context)) return null
+    return try {
+        val client = LocationServices.getFusedLocationProviderClient(context)
+        val location = client.lastLocation.await()
+            ?: client.getCurrentLocation(Priority.PRIORITY_BALANCED_POWER_ACCURACY, CancellationTokenSource().token).await()
+        location?.let { it.latitude to it.longitude }
+    } catch (e: Exception) {
+        AppLog.caught(LogCategory.LOCATION, "launch.location", e, LogLevel.WARNING)
+        null
     }
 }

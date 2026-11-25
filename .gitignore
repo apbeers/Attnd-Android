@@ -23,3 +23,11 @@ cleanup_locks.command
 
 # GitHub PAT for agent push — never commit
 .push-token
+
+# Firebase config (per developer / CI secret) — see CLAUDE.md "Push notifications (FCM)"
+app/google-services.json
+app/src/*/google-services.json
+
+# Python bytecode (scripts/ci)
+__pycache__/
+*.pyc

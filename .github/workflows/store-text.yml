@@ -1,0 +1,49 @@
+# Google Play store listing TEXT (title, short and full description from store/en-US/*.txt).
+# Manual only: Actions → "Store listing text" → Run workflow (or ask Claude to "update the store listing").
+# Quick (Linux, no build). Merging to main also publishes the text automatically: android.yml sends it in
+# the same Play edit as the production release.
+#   upload off → validate only (lengths and Play metadata policy)
+#   upload on  → replace the en-US text and commit; Google reviews it, then it is live for everyone
+name: Store listing text
+
+on:
+  workflow_dispatch:
+    inputs:
+      send_for_review:
+        description: Also send the change for Google's review (off = it waits in Play Console until you send it)
+        type: boolean
+        default: false
+      upload:
+        description: Upload to Google Play (goes live for everyone after Google's review)
+        type: boolean
+        default: true
+
+concurrency:
+  group: play-listing
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  text:
+    name: ${{ inputs.upload && 'Validate & upload listing text' || 'Validate listing text' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: ${{ inputs.upload && 'production' || 'dev' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            scripts/ci
+            store
+      - name: Check listing text (lengths and Play metadata policy)
+        run: python3 scripts/ci/play_publish.py --listing store/en-US --check
+      - name: Upload listing text to Google Play
+        if: inputs.upload
+        env:
+          GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet "pyjwt[crypto]"
+          "$RUNNER_TEMP/venv/bin/python" scripts/ci/play_publish.py --listing store/en-US ${{ !inputs.send_for_review && '--not-for-review' || '' }}

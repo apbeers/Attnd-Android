@@ -1,32 +1,17 @@
-# Retrofit
--keepattributes Signature, InnerClasses, EnclosingMethod
--keepattributes RuntimeVisibleAnnotations, RuntimeVisibleParameterAnnotations
--keepattributes AnnotationDefault
--dontwarn retrofit2.**
--keep class retrofit2.** { *; }
+# kotlinx.serialization ships its own R8 rules; keep the generated serializers of our @Serializable
+# classes explicitly as well (API DTOs, the plan JSON, attestation, routes), since they are decoded at
+# runtime and from files on the device. Maps, ML Kit, Play services and Firebase ship
+# their own consumer rules.
+-keepattributes RuntimeVisibleAnnotations,AnnotationDefault
+-keep,includedescriptorclasses class com.arcu.attnd.**$$serializer { *; }
+-keepclassmembers class com.arcu.attnd.** {
+    *** Companion;
+}
+-keepclasseswithmembers class com.arcu.attnd.** {
+    kotlinx.serialization.KSerializer serializer(...);
+}
 
-# Gson
--keep class com.google.gson.** { *; }
--keep class com.arcu.attnd.data.** { *; }
-
-# OkHttp
--dontwarn okhttp3.**
--dontwarn okio.**
--dontwarn javax.annotation.**
--dontwarn org.conscrypt.**
--keepnames class okhttp3.internal.publicsuffix.PublicSuffixDatabase
-
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
-
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
-
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# Crash and ANR stacks (ApplicationExitInfo reports) are retraced on the server with mapping.txt:
+# keep line numbers, and name the source file "SourceFile" (retrace maps it back).
+-keepattributes SourceFile,LineNumberTable
+-renamesourcefileattribute SourceFile

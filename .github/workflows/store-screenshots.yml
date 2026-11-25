@@ -1,0 +1,123 @@
+# Google Play listing MEDIA: phone screenshots (headless emulator, DEMO event on the dev server),
+# feature graphic and hi-res icon. Slow (~20-30 min), so it never runs with normal builds.
+# Manual only: Actions → "Store screenshots" → Run workflow (or ask Claude to "update the screenshots").
+#   upload off → generate and keep the images as the store-listing artifact (preview)
+#   upload on  → also replace the Play images (text untouched; see store-text.yml) and commit;
+#                Google reviews them, then they are live for everyone
+name: Store screenshots
+
+on:
+  workflow_dispatch:
+    inputs:
+      send_for_review:
+        description: Also send the change for Google's review (off = it waits in Play Console until you send it)
+        type: boolean
+        default: false
+      upload:
+        description: Upload the images to Google Play (goes live for everyone after Google's review)
+        type: boolean
+        default: false
+
+concurrency:
+  group: play-listing-media
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  GRADLE_OPTS: -Dorg.gradle.daemon=false
+  UPLOAD: ${{ github.event_name == 'workflow_dispatch' && inputs.upload && 'true' || 'false' }}
+
+jobs:
+  listing:
+    name: ${{ (github.event_name == 'workflow_dispatch' && inputs.upload) && 'Screenshots & Play upload' || 'Screenshots (preview, no upload)' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # Uploads use the production environment (its Play service account); previews use dev.
+    environment: ${{ (github.event_name == 'workflow_dispatch' && inputs.upload) && 'production' || 'dev' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Python tools
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet --upgrade pip
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet Pillow "pyjwt[crypto]"
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+
+      - name: Check listing text (lengths and Play metadata policy)
+        run: python scripts/ci/play_publish.py --listing store/en-US --check
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - name: Accept Android SDK licenses
+        # `yes` reports "Broken pipe" when sdkmanager exits before reading all of it; that is expected.
+        run: yes 2> /dev/null | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
+
+      # Screenshot mode is debug-only. The dev server has the always-current DEMO event; the repo
+      # secret ATTND_API_KEY is the dev server's static key. Release builds never contain it.
+      # The Maps key only accepts the real app's package + signing certificates, so the screenshot build
+      # is signed with the upload key as com.arcu.attnd (-PstoreScreenshots). It never leaves the emulator.
+      - name: Upload key for the screenshot build
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then echo "::error::ANDROID_KEYSTORE_BASE64 is not available in this environment"; exit 1; fi
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/upload.jks"
+          {
+            echo "STORE_FILE=$RUNNER_TEMP/upload.jks"
+            echo "STORE_PASSWORD=$STORE_PASSWORD"
+            echo "KEY_ALIAS=$KEY_ALIAS"
+            echo "KEY_PASSWORD=$KEY_PASSWORD"
+          } > signing.properties
+
+      - name: Build the debug app (dev server)
+        env:
+          ATTND_SERVER: ${{ vars.SCREENSHOT_SERVER || 'dev.attnd.app' }}
+          ATTND_API_KEY: ${{ secrets.ATTND_API_KEY }}
+          MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
+        run: |
+          if [ -z "$ATTND_API_KEY" ]; then echo "::error::The ATTND_API_KEY secret is needed to join DEMO on $ATTND_SERVER"; exit 1; fi
+          if [ -z "$MAPS_API_KEY" ]; then echo "::warning::MAPS_API_KEY is not set: the map screenshot will have no tiles"; fi
+          ./gradlew assembleDebug -PstoreScreenshots
+          rm -f signing.properties "$RUNNER_TEMP/upload.jks"
+
+      - name: Capture screenshots on the emulator
+        env:
+          SCREENSHOT_PACKAGE: com.arcu.attnd
+        run: scripts/ci/screenshots.sh app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Compose listing images
+        run: |
+          sudo apt-get install -y --no-install-recommends fonts-dejavu-core > /dev/null || true
+          python scripts/ci/compose_screenshots.py --raw build/screenshots/raw --out build/store
+          python scripts/ci/play_publish.py --listing store/en-US --images build/store --check
+
+      - name: Listing images
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: store-listing
+          path: |
+            build/store/
+            build/screenshots/
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Upload the images to Google Play
+        if: env.UPLOAD == 'true'
+        env:
+          GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+        run: python scripts/ci/play_publish.py --listing store/en-US --images build/store --images-only ${{ !inputs.send_for_review && '--not-for-review' || '' }}
+
+      - name: Remove signing material
+        if: always()
+        run: rm -f signing.properties "$RUNNER_TEMP/upload.jks"

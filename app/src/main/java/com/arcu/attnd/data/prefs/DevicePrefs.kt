@@ -1,30 +1,321 @@
 package com.arcu.attnd.data.prefs
 
 import android.content.Context
-import java.util.UUID
 import androidx.core.content.edit
+import com.arcu.attnd.domain.AppLog
+import com.arcu.attnd.domain.LogCategory
+import com.arcu.attnd.domain.LogEvent
+import java.util.UUID
 
+/**
+ * Small key/value settings that must survive restarts. The bundle itself lives in a file
+ * (see EventRepository); this only holds identifiers and preferences.
+ */
 class DevicePrefs(context: Context) {
-    private val prefs = context.getSharedPreferences("attnd_prefs", Context.MODE_PRIVATE)
+    private val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-    fun getDeviceId(): String {
-        var id = prefs.getString("device_id", null)
-        if (id == null) {
-            id = UUID.randomUUID().toString()
-            prefs.edit { putString("device_id", id) }
+    /**
+     * The device id lives in its own file, excluded from Auto Backup and device transfer
+     * (`res/xml/data_extraction_rules.xml`), so two phones never share one; the rest of these
+     * preferences (hearts, plans) are backed up.
+     */
+    private val identity = context.applicationContext.getSharedPreferences(DEVICE_PREFS_NAME, Context.MODE_PRIVATE)
+
+    /**
+     * The device id stored by this install, or null before the first launch resolved one
+     * ([com.arcu.attnd.domain.DeviceIdentity]). Moves an id older builds kept in [PREFS_NAME] (backed
+     * up) into its own file once.
+     */
+    val storedDeviceId: String?
+        get() = identity.getString(KEY_DEVICE_ID, null)?.takeIf { it.isNotBlank() } ?: synchronized(this) {
+            identity.getString(KEY_DEVICE_ID, null)?.takeIf { it.isNotBlank() }
+                ?: prefs.getString(KEY_DEVICE_ID, null)?.takeIf { it.isNotBlank() }?.also { legacy ->
+                    identity.edit(commit = true) { putString(KEY_DEVICE_ID, legacy) }
+                    prefs.edit { remove(KEY_DEVICE_ID) }
+                    AppLog.notice(
+                        LogCategory.STORAGE, LogEvent.PREFS_MIGRATED, "Device id moved to its own preferences file",
+                        mapOf("from" to "$PREFS_NAME.$KEY_DEVICE_ID", "to" to "$DEVICE_PREFS_NAME.$KEY_DEVICE_ID"),
+                    )
+                }
         }
-        return id
+
+    fun setDeviceId(id: String) = synchronized(this) { identity.edit(commit = true) { putString(KEY_DEVICE_ID, id) } }
+
+    /**
+     * Stable device id. Normally resolved at launch (`AttndApplication`, with Block Store) before
+     * anything reads it; made here only if nothing resolved one.
+     */
+    val deviceId: String
+        get() = storedDeviceId ?: synchronized(this) {
+            storedDeviceId ?: UUID.randomUUID().toString().also { setDeviceId(it) }
+        }
+
+    /** The joined event, or null when the device is not in an event. */
+    var eventId: Int?
+        get() = prefs.getInt(KEY_EVENT_ID, NO_EVENT).takeIf { it != NO_EVENT }
+        set(value) = prefs.edit { if (value == null) remove(KEY_EVENT_ID) else putInt(KEY_EVENT_ID, value) }
+
+    var eventCode: String?
+        get() = prefs.getString(KEY_EVENT_CODE, null)
+        set(value) = prefs.edit { putString(KEY_EVENT_CODE, value) }
+
+    /** ETag of the bundle stored on disk. */
+    var bundleEtag: String?
+        get() = prefs.getString(KEY_ETAG, null)
+        set(value) = prefs.edit { putString(KEY_ETAG, value) }
+
+    /** The layout catalogue (`X-Attnd-Sections`) the stored bundle and its ETag were made for (0 = before 5b). */
+    var bundleSections: Int
+        get() = prefs.getInt(KEY_SECTIONS, 0)
+        set(value) = prefs.edit { putInt(KEY_SECTIONS, value) }
+
+    var lastSyncedAt: Long?
+        get() = prefs.getLong(KEY_LAST_SYNC, 0L).takeIf { it > 0L }
+        set(value) = prefs.edit { if (value == null) remove(KEY_LAST_SYNC) else putLong(KEY_LAST_SYNC, value) }
+
+    /** The `latest_version` whose "update available" banner the user dismissed. */
+    var dismissedUpdateVersion: String?
+        get() = prefs.getString(KEY_DISMISSED_UPDATE, null)
+        set(value) = prefs.edit { putString(KEY_DISMISSED_UPDATE, value) }
+
+    var pushToken: String?
+        get() = prefs.getString(KEY_PUSH_TOKEN, null)
+        set(value) = prefs.edit { putString(KEY_PUSH_TOKEN, value) }
+
+    /** The user's push opt-in (also requires the POST_NOTIFICATIONS permission to be granted). */
+    var notificationsEnabled: Boolean
+        get() = prefs.getBoolean(KEY_NOTIFICATIONS, false)
+        set(value) = prefs.edit { putBoolean(KEY_NOTIFICATIONS, value) }
+
+    /** Map blue-dot toggle. */
+    var showUserLocation: Boolean
+        get() = prefs.getBoolean(KEY_SHOW_LOCATION, false)
+        set(value) = prefs.edit { putBoolean(KEY_SHOW_LOCATION, value) }
+
+    /**
+     * Events left while `POST leave/` couldn't be sent (offline, server down). Kept until the server
+     * accepted it (it only detaches the device from that event, so a late leave never affects a newer
+     * join); rejoining the event drops it.
+     */
+    var pendingLeaves: Set<Int>
+        get() = prefs.getString(KEY_PENDING_LEAVES, null).orEmpty()
+            .split(',').mapNotNullTo(LinkedHashSet()) { it.trim().toIntOrNull() }
+        set(value) = prefs.edit {
+            if (value.isEmpty()) remove(KEY_PENDING_LEAVES) else putString(KEY_PENDING_LEAVES, value.joinToString(","))
+        }
+
+    /** Whether the Play install referrer has been checked (only done once per install). */
+    var installReferrerChecked: Boolean
+        get() = prefs.getBoolean(KEY_REFERRER_CHECKED, false)
+        set(value) = prefs.edit { putBoolean(KEY_REFERRER_CHECKED, value) }
+
+    /** Hearted locations / schedule items of an event ([com.arcu.attnd.domain.Hearts] text). Kept after leaving. */
+    fun hearts(eventId: Int): String? = prefs.getString("$KEY_HEARTS$eventId", null)
+
+    fun setHearts(eventId: Int, value: String) = prefs.edit {
+        if (value.isEmpty()) remove("$KEY_HEARTS$eventId") else putString("$KEY_HEARTS$eventId", value)
     }
 
-    fun saveEventCode(code: String) {
-        prefs.edit { putString("event_code", code) }
+    /** My schedule of an event ([com.arcu.attnd.domain.MySchedule] JSON); null = not migrated yet. Kept after leaving. */
+    fun mySchedule(eventId: Int): String? = prefs.getString("$KEY_MY_SCHEDULE$eventId", null)
+
+    fun setMySchedule(eventId: Int, value: String) = prefs.edit { putString("$KEY_MY_SCHEDULE$eventId", value) }
+
+    /** When the Updates tab of an event was last seen (epoch ms); null = never. */
+    fun updatesSeenAt(eventId: Int): Long? = prefs.getLong("$KEY_UPDATES_SEEN$eventId", 0L).takeIf { it > 0L }
+
+    fun setUpdatesSeenAt(eventId: Int, epochMillis: Long) = prefs.edit { putLong("$KEY_UPDATES_SEEN$eventId", epochMillis) }
+
+    /** The organizer update whose banner the user dismissed, per event. */
+    fun dismissedUpdateBanner(eventId: Int): Int? =
+        prefs.getInt("$KEY_UPDATE_BANNER$eventId", NO_EVENT).takeIf { it != NO_EVENT }
+
+    fun setDismissedUpdateBanner(eventId: Int, notificationId: Int) =
+        prefs.edit { putInt("$KEY_UPDATE_BANNER$eventId", notificationId) }
+
+    // ── Planner, Live Update, onboarding (per event) ──────────────────────────
+
+    /**
+     * An older build's stored plan ([com.arcu.attnd.domain.PlanCodec] JSON) and its plan history. Since the
+     * one-list change (Nov 22, 2026) only read once, for the migration into My schedule, then deleted.
+     */
+    fun legacyPlan(eventId: Int): String? = prefs.getString("$KEY_PLAN$eventId", null)
+
+    fun legacyPlanHistory(eventId: Int): String? = prefs.getString("$KEY_PLAN_HISTORY$eventId", null)
+
+    fun deleteLegacyPlan(eventId: Int) = prefs.edit {
+        remove("$KEY_PLAN$eventId")
+        remove("$KEY_PLAN_HISTORY$eventId")
     }
 
-    fun getEventCode(): String? {
-        return prefs.getString("event_code", null)
+    /** One list: the Undo history over My schedule (`ScheduleHistory.encode`). Kept after leaving, like hearts. */
+    fun scheduleHistory(eventId: Int): String? = prefs.getString("$KEY_SCHEDULE_HISTORY$eventId", null)
+
+    fun setScheduleHistory(eventId: Int, value: String?) = prefs.edit {
+        if (value == null) remove("$KEY_SCHEDULE_HISTORY$eventId") else putString("$KEY_SCHEDULE_HISTORY$eventId", value)
     }
 
-    fun clearEventCode() {
-        prefs.edit { remove("event_code") }
+    /** One list: what the planner was told for the event (`SchedulePreferences.encode`). */
+    fun plannerPreferences(eventId: Int): String? = prefs.getString("$KEY_PLANNER_PREFS$eventId", null)
+
+    fun setPlannerPreferences(eventId: Int, value: String) = prefs.edit { putString("$KEY_PLANNER_PREFS$eventId", value) }
+
+    /** One list: My schedule's checked-off item ids (comma-separated). */
+    fun checkedOff(eventId: Int): String? = prefs.getString("$KEY_CHECKED_OFF$eventId", null)
+
+    fun setCheckedOff(eventId: Int, value: String) = prefs.edit { putString("$KEY_CHECKED_OFF$eventId", value) }
+
+    /** "Follow on Lock Screen": null = never set (the default applies). */
+    fun followLive(eventId: Int): Boolean? =
+        if (prefs.contains("$KEY_FOLLOW$eventId")) prefs.getBoolean("$KEY_FOLLOW$eventId", true) else null
+
+    fun setFollowLive(eventId: Int, follow: Boolean) = prefs.edit { putBoolean("$KEY_FOLLOW$eventId", follow) }
+
+    /** Schedule items skipped from the Live Update, as `<date>|<id>,<id>` (only that event day counts). */
+    fun liveSkipped(eventId: Int): String? = prefs.getString("$KEY_SKIPPED$eventId", null)
+
+    fun setLiveSkipped(eventId: Int, value: String) = prefs.edit { putString("$KEY_SKIPPED$eventId", value) }
+
+    /** The day (ISO date) on which the user swiped the Live Update away: not reposted that day. */
+    fun liveDismissedDay(eventId: Int): String? = prefs.getString("$KEY_LIVE_DISMISSED$eventId", null)
+
+    fun setLiveDismissedDay(eventId: Int, day: String?) = prefs.edit {
+        if (day == null) remove("$KEY_LIVE_DISMISSED$eventId") else putString("$KEY_LIVE_DISMISSED$eventId", day)
+    }
+
+    /** API-011: the latest urgent announcement, as `id|sentAtEpochMs|title|body` (body may contain `|`). */
+    fun urgent(eventId: Int): String? = prefs.getString("$KEY_URGENT$eventId", null)
+
+    fun setUrgent(eventId: Int, value: String) = prefs.edit { putString("$KEY_URGENT$eventId", value) }
+
+    fun dismissedUrgent(eventId: Int): Int? = prefs.getInt("$KEY_URGENT_DISMISSED$eventId", NO_EVENT).takeIf { it != NO_EVENT }
+
+    fun setDismissedUrgent(eventId: Int, notificationId: Int) = prefs.edit { putInt("$KEY_URGENT_DISMISSED$eventId", notificationId) }
+
+    /** Urgent announcements swiped off Home (ids; the Live Update's own Dismiss is [dismissedUrgent]). */
+    fun homeUrgentDismissed(eventId: Int): Set<Int> =
+        prefs.getString("$KEY_HOME_URGENT$eventId", null).orEmpty().split(',').mapNotNull { it.trim().toIntOrNull() }.toSet()
+
+    fun setHomeUrgentDismissed(eventId: Int, ids: Set<Int>) = prefs.edit {
+        if (ids.isEmpty()) remove("$KEY_HOME_URGENT$eventId") else putString("$KEY_HOME_URGENT$eventId", ids.sorted().joinToString(","))
+    }
+
+    /** Schedule items whose reminder was already shown (comma-separated ids). */
+    fun remindersShown(eventId: Int): String? = prefs.getString("$KEY_REMINDERS$eventId", null)
+
+    fun setRemindersShown(eventId: Int, value: String) = prefs.edit { putString("$KEY_REMINDERS$eventId", value) }
+
+    /** Whether the onboarding tour was shown (or skipped) for an event. */
+    fun onboardingSeen(eventId: Int): Boolean = prefs.getBoolean("$KEY_ONBOARDING$eventId", false)
+
+    fun setOnboardingSeen(eventId: Int) = prefs.edit { putBoolean("$KEY_ONBOARDING$eventId", true) }
+
+    /**
+     * Whether Attnd has asked the system for [permission] before (Options → Permissions tells "never
+     * asked" from "denied" with it; Android itself has no such state).
+     */
+    fun permissionAsked(permission: String): Boolean = prefs.getBoolean("$KEY_PERMISSION_ASKED$permission", false)
+
+    fun setPermissionAsked(permission: String) = prefs.edit { putBoolean("$KEY_PERMISSION_ASKED$permission", true) }
+
+    // Event assistant (assistant spec §4, §7): stored with the plan per event, kept after leaving.
+
+    /** The model's conversation (`AssistantConversation.encode`). */
+    fun assistantConversation(eventId: Int): String? = prefs.getString("$KEY_CONVERSATION$eventId", null)
+
+    fun setAssistantConversation(eventId: Int, value: String?) = prefs.edit {
+        if (value == null) remove("$KEY_CONVERSATION$eventId") else putString("$KEY_CONVERSATION$eventId", value)
+    }
+
+    /** The assistant screen's transcript (`AssistantTranscript.encode`). */
+    fun assistantTranscript(eventId: Int): String? = prefs.getString("$KEY_TRANSCRIPT$eventId", null)
+
+    fun setAssistantTranscript(eventId: Int, value: String?) = prefs.edit {
+        if (value == null) remove("$KEY_TRANSCRIPT$eventId") else putString("$KEY_TRANSCRIPT$eventId", value)
+    }
+
+    /** Reminders before liked / planned items; null = not chosen (follows "Follow on Lock Screen"). */
+    fun reminders(eventId: Int): Boolean? =
+        if (prefs.contains("$KEY_REMINDERS_ON$eventId")) prefs.getBoolean("$KEY_REMINDERS_ON$eventId", true) else null
+
+    fun setReminders(eventId: Int, on: Boolean) = prefs.edit { putBoolean("$KEY_REMINDERS_ON$eventId", on) }
+
+    /** Shared plans opened for the event (API-015): one line of comma-separated ids per plan. */
+    fun sharedPlans(eventId: Int): String? = prefs.getString("$KEY_SHARED$eventId", null)
+
+    fun setSharedPlans(eventId: Int, value: String) = prefs.edit { putString("$KEY_SHARED$eventId", value) }
+
+    fun clearEvent() = prefs.edit {
+        remove(KEY_EVENT_ID)
+        remove(KEY_EVENT_CODE)
+        remove(KEY_ETAG)
+        remove(KEY_LAST_SYNC)
+    }
+
+    // ── API-026 preview phone ───────────────────────────────────────────────
+
+    /**
+     * The event this device is the organizer's preview phone for (until leaving, switching or `preview: false`).
+     * In the device file (not backed up): it belongs to this phone, not to a restore onto another one.
+     */
+    var previewEventId: Int?
+        get() = identity.getInt(KEY_PREVIEW_EVENT, -1).takeIf { it != -1 }
+        set(value) = identity.edit { if (value == null) remove(KEY_PREVIEW_EVENT) else putInt(KEY_PREVIEW_EVENT, value) }
+
+    // ── Test server switch (dev and debug builds) ──────────────────────────
+
+    /**
+     * The test server chosen in Options (a [com.arcu.attnd.domain.TestServer] name), read once at launch
+     * ([com.arcu.attnd.domain.ServerSwitch.resolve]). In the device file: never restored onto another phone.
+     * Written with `commit` so a restart right after picking it sees it.
+     */
+    var serverChoice: String?
+        get() = identity.getString(KEY_SERVER_CHOICE, null)
+        set(value) = identity.edit(commit = true) { if (value == null) remove(KEY_SERVER_CHOICE) else putString(KEY_SERVER_CHOICE, value) }
+
+    companion object {
+        const val PREFS_NAME = "attnd_prefs"
+        private const val KEY_SERVER_CHOICE = "server_choice"
+
+        /** Excluded from backup and device transfer (`data_extraction_rules.xml`). */
+        const val DEVICE_PREFS_NAME = "attnd_device"
+        private const val KEY_DEVICE_ID = "device_id"
+        private const val KEY_EVENT_ID = "event_id"
+        private const val KEY_EVENT_CODE = "event_code"
+        private const val KEY_ETAG = "bundle_etag"
+        private const val KEY_SECTIONS = "bundle_sections"
+        private const val KEY_HOME_URGENT = "home_urgent_dismissed_"
+        private const val KEY_LAST_SYNC = "bundle_last_sync"
+        private const val KEY_PUSH_TOKEN = "push_token"
+        private const val KEY_DISMISSED_UPDATE = "dismissed_update_version"
+        private const val KEY_NOTIFICATIONS = "notifications_enabled"
+        private const val KEY_SHOW_LOCATION = "show_user_location"
+        private const val KEY_REFERRER_CHECKED = "install_referrer_checked"
+        private const val KEY_PENDING_LEAVES = "pending_leaves"
+        private const val KEY_HEARTS = "hearts_"
+        private const val KEY_MY_SCHEDULE = "my_schedule_"
+        private const val KEY_UPDATES_SEEN = "updates_seen_"
+        private const val KEY_UPDATE_BANNER = "update_banner_dismissed_"
+        private const val KEY_PLAN = "plan_"
+        private const val KEY_FOLLOW = "follow_live_"
+        private const val KEY_SKIPPED = "live_skipped_"
+        private const val KEY_LIVE_DISMISSED = "live_dismissed_"
+        private const val KEY_URGENT = "urgent_"
+        private const val KEY_URGENT_DISMISSED = "urgent_dismissed_"
+        private const val KEY_REMINDERS = "reminders_shown_"
+        private const val KEY_ONBOARDING = "onboarding_seen_"
+        private const val KEY_PERMISSION_ASKED = "permission_asked_"
+        private const val KEY_PLAN_HISTORY = "plan_history_"
+        private const val KEY_SCHEDULE_HISTORY = "schedule_history_"
+        private const val KEY_PLANNER_PREFS = "planner_prefs_"
+        private const val KEY_CHECKED_OFF = "checked_off_"
+        private const val KEY_CONVERSATION = "assistant_conversation_"
+        private const val KEY_TRANSCRIPT = "assistant_transcript_"
+        private const val KEY_REMINDERS_ON = "reminders_on_"
+        private const val KEY_SHARED = "shared_plans_"
+        private const val NO_EVENT = -1
     }
 }
+
+/** API-026: [DevicePrefs.previewEventId] (kept apart from the companion's keys). */
+private const val KEY_PREVIEW_EVENT = "preview_event_id"

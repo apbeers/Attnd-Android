@@ -1,0 +1,212 @@
+package com.arcu.attnd.live
+
+import com.arcu.attnd.domain.LiveTheme
+import android.annotation.SuppressLint
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import com.arcu.attnd.R
+import com.arcu.attnd.OpenIntents
+import com.arcu.attnd.domain.AppLog
+import com.arcu.attnd.domain.EventBundle
+import com.arcu.attnd.domain.LiveMode
+import com.arcu.attnd.domain.LiveState
+import com.arcu.attnd.domain.LogCategory
+import com.arcu.attnd.domain.LogEvent
+import com.arcu.attnd.domain.OpenRequest
+import com.arcu.attnd.domain.OpenTarget
+import com.arcu.attnd.domain.Tab
+import com.arcu.attnd.push.PushNotifications
+
+/**
+ * The Live Update (shared spec §8), reminders and urgent announcements (API-011) as notifications.
+ *
+ * The Live Update is an Android 16 **promoted ongoing notification** ("Live Update"): ongoing, a content
+ * title, `ProgressStyle` (or `BigTextStyle` in urgent mode), `setRequestPromotedOngoing(true)` and the
+ * status-bar chip text via `setShortCriticalText`, on a channel that isn't IMPORTANCE_MIN, never
+ * colorized or custom, with `POST_PROMOTED_NOTIFICATIONS` in the manifest. The user can turn promotion off in system settings (`canPostPromotedNotifications()`); it then shows
+ * as a normal ongoing notification.
+ */
+object LiveNotifications {
+
+    const val CHANNEL_LIVE = "live_update"
+    const val CHANNEL_REMINDERS = "reminders"
+    const val CHANNEL_URGENT = "urgent_updates"
+
+    const val LIVE_NOTIFICATION_ID = 7_001
+    private const val REMINDER_ID_BASE = 8_000_000
+
+    fun createChannels(context: Context) {
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        manager.createNotificationChannels(
+            listOf(
+                // Quiet: the Live Update changes often and must never buzz. LOW is allowed (only MIN isn't).
+                NotificationChannel(CHANNEL_LIVE, context.getString(R.string.live_channel_name), NotificationManager.IMPORTANCE_LOW).apply {
+                    description = context.getString(R.string.live_channel_description)
+                    setShowBadge(false)
+                },
+                NotificationChannel(CHANNEL_REMINDERS, context.getString(R.string.reminders_channel_name), NotificationManager.IMPORTANCE_HIGH).apply {
+                    description = context.getString(R.string.reminders_channel_description)
+                },
+                NotificationChannel(CHANNEL_URGENT, context.getString(R.string.urgent_channel_name), NotificationManager.IMPORTANCE_HIGH).apply {
+                    description = context.getString(R.string.urgent_channel_description)
+                },
+            )
+        )
+    }
+
+    private fun open(context: Context, eventId: Int, target: OpenTarget): PendingIntent =
+        OpenIntents.pendingIntent(context, OpenRequest(eventId, target))
+
+    private fun action(context: Context, action: String, eventId: Int, itemId: Int? = null): PendingIntent {
+        val intent = Intent(context, LiveUpdateReceiver::class.java).setAction(action)
+            .putExtra(LiveUpdateReceiver.EXTRA_EVENT_ID, eventId)
+        if (itemId != null) intent.putExtra(LiveUpdateReceiver.EXTRA_ITEM_ID, itemId)
+        // The request code keeps PendingIntents for different items apart.
+        return PendingIntent.getBroadcast(
+            context,
+            (action.hashCode() * 31 + (itemId ?: 0)),
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+    }
+
+    /** Posts the Live Update; false when it can't be shown (no POST_NOTIFICATIONS). */
+    @SuppressLint("MissingPermission") // checked by PushNotifications.hasPermission()
+    fun showLive(context: Context, bundle: EventBundle, state: LiveState): Boolean {
+        if (!PushNotifications.hasPermission(context)) return false
+        val eventId = bundle.event.id
+        val focus = state.focus
+        val urgent = state.urgent
+        val focusItem = focus?.itemId
+        val focusPlace = focus?.locationId?.takeIf { focus.isPlace }
+        val tap = when {
+            urgent != null -> open(context, eventId, OpenTarget.Notification(urgent.id))
+            focusItem != null -> open(context, eventId, OpenTarget.ScheduleItem(focusItem))
+            focusPlace != null -> open(context, eventId, OpenTarget.Location(focusPlace))
+            else -> open(context, eventId, OpenTarget.MyPlan)
+        }
+        // API-023: the theme's light primary, else accent_color, else the brand; urgent stays red.
+        val accent = LiveTheme.accent(bundle.event.theme, bundle.display.accentColor) ?: context.getColor(R.color.attnd_primary)
+        val isUrgent = state.mode == LiveMode.URGENT && urgent != null
+        val builder = NotificationCompat.Builder(context, CHANNEL_LIVE)
+            .setSmallIcon(R.drawable.ic_stat_attnd)
+            .setColor(if (isUrgent) context.getColor(R.color.live_urgent) else accent)
+            .setContentTitle(state.title)
+            .setContentText(state.text)
+            .setSubText(state.subText)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setSilent(true)
+            .setCategory(NotificationCompat.CATEGORY_EVENT)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setRequestPromotedOngoing(true)
+            .setShortCriticalText(state.chip)
+            .setContentIntent(tap)
+            .setDeleteIntent(action(context, LiveUpdateReceiver.ACTION_DISMISSED, eventId))
+
+        val countdown = state.countdownTo
+        if (countdown != null) {
+            builder.setWhen(countdown.toEpochMilli()).setShowWhen(true).setUsesChronometer(true).setChronometerCountDown(true)
+        } else {
+            builder.setShowWhen(false)
+        }
+
+        if (state.mode == LiveMode.URGENT && urgent != null) {
+            builder.setStyle(NotificationCompat.BigTextStyle().bigText(urgent.body).setBigContentTitle(state.title))
+            builder.addAction(0, context.getString(R.string.live_action_dismiss_urgent), action(context, LiveUpdateReceiver.ACTION_DISMISS_URGENT, eventId, urgent.id))
+        } else {
+            builder.setStyle(progressStyle(context, state, accent))
+        }
+
+        // API-027 `live_activity.buttons`: Skip (Next's item) and Map (Next's, else Now's, place).
+        state.skipItemId?.let { next ->
+            builder.addAction(0, context.getString(R.string.live_action_skip), action(context, LiveUpdateReceiver.ACTION_SKIP, eventId, next))
+        }
+        val place = bundle.location(state.mapLocationId)?.takeIf { it.coordinate != null }
+        if (place != null && Tab.MAP in bundle.display.tabs) {
+            builder.addAction(0, context.getString(R.string.live_action_map), open(context, eventId, OpenTarget.MapLocation(place.id)))
+        }
+        NotificationManagerCompat.from(context).notify(LIVE_NOTIFICATION_ID, builder.build())
+        return true
+    }
+
+    /** The day as a journey: item segments in the accent colour, gaps neutral, a point at each start. */
+    private fun progressStyle(context: Context, state: LiveState, accent: Int): NotificationCompat.ProgressStyle {
+        val style = NotificationCompat.ProgressStyle().setStyledByProgress(true)
+        if (state.segments.isEmpty()) return style.setProgressIndeterminate(true)
+        val gap = context.getColor(R.color.live_gap)
+        style.setProgressSegments(state.segments.map { NotificationCompat.ProgressStyle.Segment(it.minutes).setColor(if (it.isItem) accent else gap) })
+        style.setProgressPoints(state.points.map { NotificationCompat.ProgressStyle.Point(it).setColor(accent) })
+        style.setProgress(state.progress)
+        return style
+    }
+
+    /** Live Updates may be promoted (the user can turn that off per app). */
+    fun canPromote(context: Context): Boolean =
+        NotificationManagerCompat.from(context).canPostPromotedNotifications()
+
+    /** Whether this app's Live Update is on screen now (kept up to date after a swipe or a reboot). */
+    fun isShowing(context: Context): Boolean =
+        context.getSystemService(NotificationManager::class.java)?.activeNotifications?.any { it.id == LIVE_NOTIFICATION_ID } == true
+
+    fun cancelLive(context: Context) {
+        NotificationManagerCompat.from(context).cancel(LIVE_NOTIFICATION_ID)
+    }
+
+    @SuppressLint("MissingPermission") // checked by PushNotifications.hasPermission()
+    /** A reminder; [key] = the item id, or −location id for a timed place ([target] opens it). */
+    fun showReminder(context: Context, eventId: Int, key: Int, target: OpenTarget, title: String, text: String) {
+        if (!PushNotifications.hasPermission(context)) return
+        val notification = NotificationCompat.Builder(context, CHANNEL_REMINDERS)
+            .setSmallIcon(R.drawable.ic_stat_attnd)
+            .setColor(context.getColor(R.color.attnd_primary))
+            .setContentTitle(title)
+            .setContentText(text)
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .setTimeoutAfter(REMINDER_TIMEOUT_MS)
+            .setContentIntent(open(context, eventId, target))
+            .build()
+        NotificationManagerCompat.from(context).notify(REMINDER_ID_BASE + key, notification)
+        // A timed place's reminder logs item_id 0 (LOG_EVENTS.md lists item_id only).
+        AppLog.info(LogCategory.LIVE, LogEvent.LIVE_REMINDER_SHOWN, "Reminder shown", mapOf("item_id" to key.coerceAtLeast(0)))
+    }
+
+    /**
+     * API-011: an urgent announcement on the high-importance urgent channel, whenever POST_NOTIFICATIONS
+     * is granted, whatever the in-app opt-in. Tapping opens Updates at that notification.
+     */
+    @SuppressLint("MissingPermission") // checked by PushNotifications.hasPermission()
+    fun showUrgent(context: Context, notificationId: Int?, title: String, body: String) {
+        if (!PushNotifications.hasPermission(context)) {
+            AppLog.warning(LogCategory.PUSH, LogEvent.PUSH_DROPPED, "Urgent notification not shown: no permission", mapOf("type" to "notification", "reason" to "no_permission"))
+            return
+        }
+        val localId = notificationId ?: (System.currentTimeMillis() % Int.MAX_VALUE).toInt()
+        // Like other organizer notifications: counts `notification_open` and scrolls to it.
+        val tap = PushNotifications.openNotificationsIntent(context, localId, notificationId)
+        val notification = NotificationCompat.Builder(context, CHANNEL_URGENT)
+            .setSmallIcon(R.drawable.ic_stat_attnd)
+            .setColor(context.getColor(R.color.live_urgent))
+            .setContentTitle(title)
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setAutoCancel(true)
+            .setTimeoutAfter(URGENT_TIMEOUT_MS)
+            .setContentIntent(tap)
+            .build()
+        NotificationManagerCompat.from(context).notify(localId, notification)
+    }
+
+    private const val REMINDER_TIMEOUT_MS = 60 * 60 * 1000L
+    private const val URGENT_TIMEOUT_MS = 12 * 60 * 60 * 1000L
+}

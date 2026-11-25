@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Themed (monochrome) launcher icon layer: the "A" of drawable-nodpi/attnd_logo.png, traced at the
+     same place and size as the foreground (the 512 px logo drawn 64 dp wide in the centre of the
+     108 dp canvas, so x and y = 22 + px / 8). The launcher tints it; only the shape matters. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M48.5,28.625H59.5L80.375,80.375H67.625L63.875,70.125H44.125L40.375,80.375H27.625Z M53.9375,44.625L59.75,59.625H48.25Z" />
+</vector>

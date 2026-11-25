@@ -1,34 +1,50 @@
 plugins {
-    id 'com.android.application'
-    id 'org.jetbrains.kotlin.plugin.compose'
-    id 'com.google.android.libraries.mapsplatform.secrets-gradle-plugin'
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
+}
+
+// Firebase Cloud Messaging needs app/google-services.json (not committed). Without it the app
+// still builds and runs; push is simply unavailable (FirebaseApp is never initialised).
+if (file('google-services.json').exists()) {
+    apply plugin: 'com.google.gms.google-services'
 }
 
 android {
     namespace = 'com.arcu.attnd'
-    compileSdk = 37
+    // The assistant eval's runner and grader (unit tests: router mode; androidTest: model mode on a phone),
+    // with the catalogue and DEMO bundle from src/test/resources.
+    sourceSets {
+        test { kotlin.srcDir 'src/evalShared/java' }
+        androidTest {
+            kotlin.srcDir 'src/evalShared/java'
+            resources.srcDirs += 'src/test/resources'
+        }
+    }
+    // Android 17 QPR2 (platform 37.2, the newest stable SDK in Nov 2026).
+    compileSdk {
+        version = release(37) {
+            minorApiLevel = 2
+        }
+    }
 
     defaultConfig {
         applicationId = "com.arcu.attnd"
-        minSdk = 33
+        minSdk = 36
         targetSdk = 37
+        // Only the opt-in assistant eval in model mode (androidTest/AssistantEvalModelTest, a phone with Gemini Nano).
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         def versionPropsFile = rootProject.file('version.properties')
         def versionProps = new Properties()
         if (versionPropsFile.exists()) {
             versionProps.load(new FileInputStream(versionPropsFile))
         }
-        def code = versionProps['VERSION_CODE']?.toInteger() ?: 1
+        // CI passes VERSION_CODE (always increasing); local builds use version.properties.
+        def code = (System.getenv("VERSION_CODE") ?: versionProps['VERSION_CODE'])?.toString()?.toInteger() ?: 1
 
         versionCode = code
-        versionName = "1.0.$code"
-
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        vectorDrawables {
-            useSupportLibrary = true
-        }
-
-        resConfigs "en"
+        versionName = System.getenv("VERSION_NAME") ?: "1.0.$code"
 
         Properties localProperties = new Properties()
         def localPropertiesFile = rootProject.file('local.properties')
@@ -38,11 +54,23 @@ android {
 
         def attndKey = localProperties.getProperty("ATTND_API_KEY") ?: System.getenv("ATTND_API_KEY") ?: ""
         def mapsKey = localProperties.getProperty("MAPS_API_KEY") ?: System.getenv("MAPS_API_KEY") ?: ""
+        // API host without scheme; CI sets dev.attnd.app (or similar) for develop builds.
+        def server = System.getenv("ATTND_SERVER") ?: localProperties.getProperty("ATTND_SERVER") ?: "attnd.app"
+        buildConfigField "String", "ATTND_SERVER", "\"$server\""
 
         buildConfigField "String", "ATTND_API_KEY", "\"$attndKey\""
         buildConfigField "String", "MAPS_API_KEY", "\"$mapsKey\""
 
         manifestPlaceholders = [MAPS_API_KEY: mapsKey]
+
+        // Logging spec §2–4: dev builds (and local debug builds) log at debug level and show the log
+        // viewer; dev builds also upload their logs continuously; release builds keep errors on the device
+        // unless the user turns on debug mode.
+        buildConfigField "boolean", "DEV", "false"
+        // Whether this build may upload logs (dev builds always, release builds in a debug session).
+        // Local debug builds never upload (iOS: Xcode builds never upload); they keep logcat, the ring
+        // buffer and the log viewer.
+        buildConfigField "boolean", "UPLOAD_LOGS", "true"
     }
 
     signingConfigs {
@@ -56,7 +84,6 @@ android {
                 keyAlias = props.getProperty("KEY_ALIAS")
                 keyPassword = props.getProperty("KEY_PASSWORD")
 
-                enableV1Signing = true
                 enableV2Signing = true
                 enableV3Signing = true
                 enableV4Signing = true
@@ -66,20 +93,48 @@ android {
 
     buildTypes {
         debug {
-            applicationIdSuffix ".debug"
+            // -PstoreScreenshots (store-screenshots.yml): the package and upload-key signature of the real
+            // app, which the restricted Maps key accepts, so the store screenshots show map tiles. Still a
+            // debug build (screenshot mode, dev server); it is only installed on the CI emulator.
+            if (project.hasProperty("storeScreenshots")) {
+                if (!rootProject.file("signing.properties").exists()) {
+                    throw new GradleException("-PstoreScreenshots needs signing.properties (the upload key)")
+                }
+                signingConfig = signingConfigs.getByName("release")
+            } else {
+                applicationIdSuffix ".debug"
+            }
             versionNameSuffix "-debug"
+            buildConfigField "boolean", "DEV", "true"
+            buildConfigField "boolean", "UPLOAD_LOGS", "false"
         }
         release {
             signingConfig = signingConfigs.getByName("release")
+            // Store builds authenticate with Play Integrity only; never ship the static key.
+            buildConfigField "String", "ATTND_API_KEY", "\"\""
+
+            // R8: CI uploads build/outputs/mapping/release/mapping.txt to Play (deobfuscationfiles) and
+            // attnd-web (POST /api/diagnostics/symbols/) so crash stacks can be retraced.
             minifyEnabled = true
             shrinkResources = true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+        // develop → Play internal testing (logging spec §4): the release build (upload-key signed, Play
+        // Integrity, no static key, package com.arcu.attnd so Play and google-services accept it) with
+        // readable code: no R8, so stack traces need no mapping. Not debuggable: Play rejects debuggable
+        // bundles on every track. BuildConfig.DEV turns on debug logging, uploads and the log viewer.
+        dev {
+            initWith release
+            minifyEnabled = false
+            shrinkResources = false
+            debuggable = false
+            matchingFallbacks = ['release']
+            buildConfigField "boolean", "DEV", "true"
         }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_21
         targetCompatibility = JavaVersion.VERSION_21
-        coreLibraryDesugaringEnabled = true
     }
     kotlin {
         jvmToolchain(21)
@@ -94,9 +149,32 @@ android {
         compose = true
         buildConfig = true
     }
+    androidResources {
+        // English only: drop the libraries' translations (replaces defaultConfig.resConfigs).
+        localeFilters += ['en']
+    }
+    lint {
+        // Machine-readable report next to the HTML/SARIF ones; CI prints and annotates its warnings
+        // (scripts/ci/lint_summary.py) without failing the build.
+        xmlReport = true
+    }
     packaging {
         resources {
             excludes += '/META-INF/{AL2.0,LGPL2.1}'
+        }
+        jniLibs {
+            // Prebuilt native libraries from AndroidX / ML Kit / CameraX AARs. They are published
+            // already stripped (`file` reports "stripped"), so AGP has nothing to remove; without this
+            // it tries anyway and logs "Unable to strip the following libraries" when the runner has
+            // no matching NDK. We build no native code ourselves. Add new ones here if that message
+            // comes back after a dependency update.
+            keepDebugSymbols += [
+                    '**/libandroidx.graphics.path.so',     // androidx.graphics:graphics-path (Compose)
+                    '**/libbarhopper_v3.so',               // ML Kit barcode scanning
+                    '**/libdatastore_shared_counter.so',   // androidx.datastore
+                    '**/libimage_processing_util_jni.so',  // CameraX
+                    '**/libsurface_util_jni.so',           // CameraX
+            ]
         }
     }
 
@@ -113,53 +191,97 @@ android {
     }
 }
 
+// Live API integration tests (src/test/.../integration, against ATTND_IT_SERVER with ATTND_IT_KEY) run
+// only with -PintegrationTests, and then only they run:
+//   ATTND_IT_SERVER=… ATTND_IT_KEY=… ./gradlew testDebugUnitTest -PintegrationTests
+// A plain `./gradlew test` (CI's unit-test run) never includes them. The test JVM inherits the Gradle
+// process's environment at execution time (also with the configuration cache), so the two variables
+// reach the tests without being stored in the build; the tests skip themselves when either is unset.
+def integrationTests = providers.gradleProperty('integrationTests').isPresent()
+def assistantEval = providers.gradleProperty('assistantEval').isPresent()
+tasks.withType(Test).configureEach { test ->
+    if (integrationTests) {
+        test.filter.includeTestsMatching 'com.arcu.attnd.integration.*'
+        // Results depend on a live server, not on inputs Gradle can see: never up to date or from the cache.
+        test.outputs.upToDateWhen { false }
+        test.outputs.cacheIf { false }
+    } else {
+        test.exclude 'com/arcu/attnd/integration/**'
+    }
+    // The full assistant eval (unit/AssistantEvalTest.routerEval) only with -PassistantEval; it writes a report,
+    // so it is never up to date or from the cache. The catalogue and critical questions run in every unit run.
+    if (assistantEval) {
+        test.systemProperty 'attnd.assistantEval', 'router'
+        test.testLogging.showStandardStreams = true
+        test.outputs.upToDateWhen { false }
+        test.outputs.cacheIf { false }
+    }
+}
+
+// Dependency policy: Kotlin/kotlinx, AndroidX/Jetpack and the Google first-party SDKs the app
+// needs. No other third-party libraries (networking is HttpURLConnection, JSON is
+// kotlinx.serialization, images use a small in-house loader).
 dependencies {
-    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'
-    implementation 'androidx.core:core-ktx:1.18.0'
-    implementation 'androidx.core:core-splashscreen:1.2.0'
-    implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.10.0'
-    implementation 'androidx.activity:activity-compose:1.13.0'
-    implementation platform('androidx.compose:compose-bom:2026.04.01')
-    implementation 'androidx.compose.ui:ui'
-    implementation 'androidx.compose.ui:ui-graphics'
-    implementation 'androidx.compose.ui:ui-tooling-preview'
-    implementation 'androidx.compose.material3:material3'
-    implementation 'androidx.compose.material:material-icons-extended'
-    implementation 'com.google.android.material:material:1.13.0'
+    // AndroidX core / lifecycle
+    implementation libs.androidx.core.ktx
+    implementation libs.androidx.core.splashscreen
+    implementation libs.androidx.activity.compose
+    implementation libs.androidx.lifecycle.runtime.ktx
+    implementation libs.androidx.lifecycle.runtime.compose
+    implementation libs.androidx.lifecycle.viewmodel.compose
 
-    // Navigation
-    implementation 'androidx.navigation:navigation-compose:2.9.8'
+    // Compose + Material3 (+ adaptive layouts for foldables), all from the BOM: Compose UI / foundation,
+    // Material3 1.5.0 (Material 3 Expressive: MaterialExpressiveTheme, MotionScheme.expressive, search bars,
+    // ShortNavigationBar / WideNavigationRail in NavigationSuiteScaffold, floating toolbars, button groups,
+    // loading indicators), the adaptive navigation suite and material3-adaptive.
+    implementation platform(libs.compose.bom)
+    implementation libs.compose.ui
+    implementation libs.compose.ui.graphics
+    implementation libs.compose.ui.tooling.preview
+    implementation libs.compose.material3
+    implementation libs.compose.material.icons.extended
+    implementation libs.compose.material3.navigation.suite
+    implementation libs.compose.material3.adaptive
+    implementation libs.compose.material3.adaptive.layout
+    implementation libs.compose.material3.adaptive.navigation
+    implementation libs.androidx.window.core
 
-    // Networking
-    implementation 'com.squareup.retrofit2:retrofit:3.0.0'
-    implementation 'com.squareup.retrofit2:converter-gson:3.0.0'
-    implementation 'com.squareup.okhttp3:okhttp:5.3.2'
-    implementation 'com.squareup.okhttp3:logging-interceptor:5.3.2'
+    // Kotlin
+    implementation libs.kotlinx.serialization.json
+    implementation libs.kotlinx.coroutines.play.services
 
-    // Image loading
-    implementation 'io.coil-kt:coil-compose:2.7.0'
+    // Google Maps (googlemaps first-party: maps-compose + its clustering utils)
+    implementation libs.maps.compose
+    implementation libs.maps.compose.utils
+    implementation libs.play.services.maps
+    implementation libs.play.services.location
 
-    // Maps
-    implementation 'com.google.maps.android:maps-compose:8.3.0'
-    implementation 'com.google.android.gms:play-services-maps:20.0.0'
-    implementation 'com.google.android.gms:play-services-location:21.3.0'
+    // Play Integrity (API attestation) and Play Install Referrer (QR → Play Store deep link)
+    implementation libs.play.integrity
+    implementation libs.installreferrer
 
-    // Play Integrity
-    implementation 'com.google.android.play:integrity:1.6.0'
-    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.10.2'
+    // Block Store: the device id survives a reinstall on this phone (not backed up to the cloud).
+    implementation libs.play.services.auth.blockstore
 
-    // QR Scanning
-    implementation 'androidx.camera:camera-camera2:1.6.0'
-    implementation 'androidx.camera:camera-lifecycle:1.6.0'
-    implementation 'androidx.camera:camera-view:1.6.0'
-    implementation 'com.google.mlkit:barcode-scanning:17.3.0'
+    // "Ask about this event": Gemini Nano on the device via ML Kit GenAI Prompt API (beta; runtime
+    // availability check, falls back to plain search).
+    implementation libs.mlkit.genai.prompt
 
-    testImplementation 'junit:junit:4.13.2'
-    testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2'
-    androidTestImplementation 'androidx.test.ext:junit:1.3.0'
-    androidTestImplementation 'androidx.test.espresso:espresso-core:3.7.0'
-    androidTestImplementation platform('androidx.compose:compose-bom:2026.04.01')
-    androidTestImplementation 'androidx.compose.ui:ui-test-junit4'
-    debugImplementation 'androidx.compose.ui:ui-tooling'
-    debugImplementation 'androidx.compose.ui:ui-test-manifest'
+    // Push (FCM)
+    implementation platform(libs.firebase.bom)
+    implementation libs.firebase.messaging
+
+    // QR scanning
+    implementation libs.androidx.camera.camera2
+    implementation libs.androidx.camera.lifecycle
+    implementation libs.androidx.camera.view
+    implementation libs.mlkit.barcode.scanning
+
+    testImplementation libs.junit
+    // The assistant eval's model mode on a phone (opt-in, never in CI): AndroidX Test only.
+    androidTestImplementation libs.junit
+    androidTestImplementation libs.androidx.test.runner
+    androidTestImplementation libs.androidx.test.ext.junit
+    testImplementation libs.kotlinx.coroutines.test
+    debugImplementation libs.compose.ui.tooling
 }

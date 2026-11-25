@@ -1,23 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Diagnostics records say wifi / cell / none (logging spec §1); a normal permission. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Android 16 Live Updates (promoted ongoing notifications): a normal (install-time) permission. -->
+    <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
+    <!-- Re-schedule the Live Update's inexact alarms after a reboot. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <uses-feature android:name="android.hardware.camera" android:required="false" />
-    <uses-feature android:name="android.hardware.telephony" android:required="true" />
-
-    <supports-screens
-        android:smallScreens="true"
-        android:normalScreens="true"
-        android:largeScreens="false"
-        android:xlargeScreens="false" />
 
     <application
+        android:name=".AttndApplication"
         android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
@@ -28,15 +29,30 @@
             android:name="com.google.android.geo.API_KEY"
             android:value="${MAPS_API_KEY}" />
 
+        <!-- FCM: tray notifications sent while the app is in the background use our channel and icon. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="event_updates" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_stat_attnd" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_color"
+            android:resource="@color/attnd_primary" />
+
+        <!-- No orientation lock: the app resizes freely (folded, unfolded, tabletop, rotated).
+             configChanges: a fold / unfold / rotation is a resize handled by Compose, not a new activity, so
+             the map (one MapView), scroll positions, sheets and selections survive it (phase 10a). There are
+             no size or orientation resource qualifiers (only values-night); uiMode stays out so a dark-mode
+             switch still recreates and reloads resources. A future values-w600dp would NOT apply on resize. -->
         <activity
             android:name=".MainActivity"
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|density|keyboardHidden"
             android:exported="true"
-            android:screenOrientation="portrait"
-            android:theme="@style/Theme.Attnd.NoActionBar"
-            tools:ignore="LockedOrientationActivity,DiscouragedOrientation,ActivityOrientation">
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.App.Starting">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
-
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
@@ -44,9 +60,46 @@
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="https" android:host="attnd.app" android:pathPrefix="/join/" />
+                <!-- https://attnd.app/join/<code>/ and API-015 shared plans https://attnd.app/p/<code>/<payload> -->
+                <data android:scheme="https" />
+                <data android:host="attnd.app" />
+                <data android:pathPrefix="/join/" />
+                <data android:pathPrefix="/p/" />
             </intent-filter>
         </activity>
+
+        <!--
+            Live Update wake-ups (shared spec §8): inexact alarms, notification actions and
+            re-scheduling after boot / an app update / a time zone change.
+        -->
+        <receiver
+            android:name=".live.LiveUpdateReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Log viewer → Share: the .jsonl export in cacheDir/log-exports/ (logging spec §2). -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.logs"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/log_file_paths" />
+        </provider>
+
+        <service
+            android:name=".push.AttndMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
     </application>
 
 </manifest>
