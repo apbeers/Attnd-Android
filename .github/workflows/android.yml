@@ -211,7 +211,7 @@ jobs:
           sparse-checkout: |
             scripts/ci
             store
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: android-bundle
           path: bundle
