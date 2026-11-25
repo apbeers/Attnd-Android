@@ -211,6 +211,8 @@ fun AttndApp(viewModel: EventViewModel = viewModel(factory = EventViewModel.Fact
                                     onSetReminder = viewModel::setScheduleReminder,
                                     onKeepOrganizerChange = viewModel::keepOrganizerChange,
                                     onFindAnother = viewModel::findAnother,
+                                    scheduleShareLink = { viewModel.assistantController.shareLink("schedule") },
+                                    onShareSchedule = { via -> viewModel.assistantController.shareFromBlock("schedule", via) },
                                 )
                             }
                             CompositionLocalProvider(LocalEventActions provides actions) {

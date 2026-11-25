@@ -228,7 +228,7 @@ fun ScheduleList(
             } else {
                 LazyColumn(Modifier.fillMaxSize(), contentPadding = contentPadding) {
                     if (mineRows.isNotEmpty() || changes.isNotEmpty()) {
-                        item(key = "h-mine") { SectionHeader(MyScheduleText.TITLE) }
+                        item(key = "h-mine") { MyScheduleHeader(MyScheduleText.TITLE) }
                         items(changes, key = { "change-${it.itemId}" }) { change ->
                             OrganizerChangeRow(change, zone, onKeep = { actions.onKeepOrganizerChange(change.itemId) }, onRemove = {
                                 if (change.kind == OrganizerChange.Kind.Cancelled) actions.onKeepOrganizerChange(change.itemId)

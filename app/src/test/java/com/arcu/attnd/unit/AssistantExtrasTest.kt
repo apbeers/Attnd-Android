@@ -67,6 +67,21 @@ class AssistantExtrasTest {
     }
 
     @Test
+    fun myScheduleShareLinkListsItsItemsInTimeOrder() {
+        val items = bundle.schedule.sortedWith(compareBy({ it.startTime?.toInstant() ?: java.time.Instant.MAX }, { it.id })).map { it.id }
+        val later = items[3]
+        val first = items[0]
+        val schedule = com.arcu.attnd.domain.MySchedule(listOf(
+            com.arcu.attnd.domain.ScheduleEntry(com.arcu.attnd.domain.ScheduleEntryKind.ITEM, later),
+            com.arcu.attnd.domain.ScheduleEntry(com.arcu.attnd.domain.ScheduleEntryKind.PLACE, 1),
+            com.arcu.attnd.domain.ScheduleEntry(com.arcu.attnd.domain.ScheduleEntryKind.ITEM, first),
+        ))
+        val link = PlanShare.scheduleLink(schedule, bundle)!!
+        assertEquals(SharedPayload(1, listOf(first, later), null), PlanShare.decode(link.substringAfterLast('/')))
+        assertEquals(null, PlanShare.scheduleLink(com.arcu.attnd.domain.MySchedule(), bundle))
+    }
+
+    @Test
     fun shareDecodingIsLenient() {
         // Padding, "s12" ids, a malformed day, unknown keys.
         assertEquals(SharedPayload(1, listOf(101, 114), saturday), PlanShare.decode("eyJ2IjoxLCJpZHMiOlsxMDEsMTE0XSwiZCI6IjIwMjYtMTEtMTQifQ=="))

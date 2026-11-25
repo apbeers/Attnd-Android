@@ -111,6 +111,9 @@ class EventActions(
     /** The Schedule tab's organizer changes: Keep (a cancelled item: Remove), Find Another. */
     val onKeepOrganizerChange: (Int) -> Unit = {},
     val onFindAnother: (OrganizerChange) -> Unit = {},
+    /** My Schedule's Share (QR): the `/p/` link of its items (null = nothing to share), and Share / Copy counted. */
+    val scheduleShareLink: () -> String? = { null },
+    val onShareSchedule: (via: String) -> Unit = {},
 )
 
 val LocalEventActions = compositionLocalOf { EventActions() }

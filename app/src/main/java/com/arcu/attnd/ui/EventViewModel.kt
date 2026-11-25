@@ -29,6 +29,7 @@ import com.arcu.attnd.data.log.DiagnosticsState
 import com.arcu.attnd.data.log.PerfRecorder
 import com.arcu.attnd.data.net.ApiException
 import com.arcu.attnd.data.prefs.DevicePrefs
+import com.arcu.attnd.domain.JoinErrors
 import com.arcu.attnd.domain.MySchedule
 import com.arcu.attnd.domain.MyScheduleText
 import com.arcu.attnd.domain.OrganizerChange
@@ -653,6 +654,8 @@ class EventViewModel(
     }
 
     private fun describeJoinError(e: Exception): String = when {
+        e is ApiException && JoinErrors.message(e.code, e.error, e.serverMessage) != null ->
+            JoinErrors.message(e.code, e.error, e.serverMessage)!!
         e is ApiException && e.code == 404 -> "Event not found. Check the code and try again."
         e is ApiException && e.code == 401 -> "Couldn't verify this app with the server. Please update Attnd."
         e is ApiException -> "Server error (${e.code}). Please try again."

@@ -248,6 +248,18 @@ class AttndApi(
         }
     }
 
+    /** The error answer, with the body's `error` / `message` when it is a JSON object (lenient: anything else = none). */
+    private fun errorOf(response: HttpResponse): ApiException {
+        val obj = try {
+            response.body?.let { ApiJson.parseToJsonElement(it) as? kotlinx.serialization.json.JsonObject }
+        } catch (_: Exception) {
+            null
+        }
+        fun text(key: String) = (obj?.get(key) as? kotlinx.serialization.json.JsonPrimitive)
+            ?.takeIf { it.isString }?.content?.take(500)
+        return ApiException(response.code, error = text("error"), serverMessage = text("message"))
+    }
+
     private fun checkRetired(response: HttpResponse) {
         if (response.code == 410 || response.code == 426) updateRequired.value = true
     }
@@ -259,7 +271,7 @@ class AttndApi(
     )
 
     private fun <T> decode(response: HttpResponse, serializer: KSerializer<T>): T {
-        if (!response.isSuccessful) throw ApiException(response.code)
+        if (!response.isSuccessful) throw errorOf(response)
         val body = response.body ?: throw IOException("Empty response body")
         return try {
             ApiJson.decodeFromString(serializer, body)

@@ -892,15 +892,22 @@ class AssistantController(
     /** The share block's link (also logged when the QR or Copy is used). */
     fun shareLink(target: String): String? {
         val bundle = repository.bundle.value ?: return null
-        return if (target == "plan") schedule.dayPlan(bundle.event.id, bundle)?.let { PlanShare.planLink(it, bundle) }
-        else EntityRef.parse(target.removePrefix("item:"))?.let { PlanShare.itemLink(it.id, bundle) }
+        return when (target) {
+            "plan" -> schedule.dayPlan(bundle.event.id, bundle)?.let { PlanShare.planLink(it, bundle) }
+            "schedule" -> PlanShare.scheduleLink(schedule.schedule(bundle.event.id), bundle)
+            else -> EntityRef.parse(target.removePrefix("item:"))?.let { PlanShare.itemLink(it.id, bundle) }
+        }
     }
 
     fun shareFromBlock(target: String, via: String) {
         val bundle = repository.bundle.value ?: return
         val link = shareLink(target) ?: return
-        val isPlan = target == "plan"
-        val items = if (isPlan) schedule.dayPlan(bundle.event.id, bundle)?.itemIds?.size ?: 0 else 1
+        val isPlan = target == "plan" || target == "schedule"
+        val items = when (target) {
+            "plan" -> schedule.dayPlan(bundle.event.id, bundle)?.itemIds?.size ?: 0
+            "schedule" -> schedule.schedule(bundle.event.id).itemIds.size
+            else -> 1
+        }
         val title = if (isPlan) "My schedule for ${bundle.event.name}" else EntityRef.parse(target.removePrefix("item:"))?.name(bundle) ?: bundle.event.name
         share(link, if (isPlan) "plan" else "item", items, title, via)
     }

@@ -24,7 +24,16 @@ class HttpResponse(
 }
 
 /** A non-2xx response from the API (other than the 304 the bundle call handles itself). */
-class ApiException(val code: Int, message: String = "HTTP $code") : Exception(message)
+/**
+ * An HTTP error answer. [error] / [serverMessage] are the body's `error` and `message` when it is JSON (e.g. API-025's
+ * `409 {"error": "event_full_free", "message": …}`), else null.
+ */
+class ApiException(
+    val code: Int,
+    message: String = "HTTP $code",
+    val error: String? = null,
+    val serverMessage: String? = null,
+) : Exception(message)
 
 /** Seam for tests; the app uses [UrlConnectionHttpClient]. */
 fun interface HttpClient {

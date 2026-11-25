@@ -1,5 +1,8 @@
 package com.arcu.attnd.ui.screens
 
+import com.arcu.attnd.domain.MyScheduleText
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Card
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
@@ -479,7 +482,8 @@ fun EventMap(
                 .fillMaxWidth()
                 .padding(top = contentPadding.calculateTopPadding()),
         ) {
-            val showHeartedChip = heartedOnly || myPlaces.isNotEmpty()
+            // Always offered, as on iOS (an empty My Schedule explains itself over the map); never in store screenshots.
+            val showHeartedChip = heartedOnly || myPlaces.isNotEmpty() || !LocalScreenshotMode.current
             if (display.groupByCategory || showHeartedChip) {
                 CategoryChips(
                     categories = if (display.groupByCategory) categories else emptyList(),
@@ -490,6 +494,21 @@ fun EventMap(
                 )
             }
             NowPlayingStrip(nowPlaying, onSelect = { select(it.location, center = true) })
+        }
+
+        // My Schedule chip on and nothing to pin (iOS: the empty state over the map).
+        if (heartedOnly && pins.isEmpty()) {
+            Card(
+                Modifier.align(Alignment.Center).padding(horizontal = 32.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+            ) {
+                Text(
+                    if (myPlaces.isEmpty()) "${MyScheduleText.NOTHING_YET} Tap ♥ on places and events to see them here."
+                    else "None of the places in your schedule are on the map here.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(16.dp),
+                )
+            }
         }
 
         // Material 3 Expressive vertical floating toolbar (replaces the stacked FABs). With the search

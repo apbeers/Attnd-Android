@@ -468,14 +468,14 @@ Phase 0 (toolchain and dependencies, minSdk 36) runs elsewhere. When it lands, p
 | 5b | Component renderer, details, Home, event info, Options rows, context / Apple Music / photo credit | L | 4, 5a |
 | 5c | Catalogue-2 tab screens, Updates groups, onboarding layout | M | 5b |
 | 6a | Assistant domain: memory, router grammar, budget, tool protocol, sequences | L | 3a, 5a |
-| 6b | My plan chat UI + model tool loop | L | 4, 5b, 6a |
+| 6b | My plan chat UI + model tool loop (done Nov 25, 2026) | L | 4, 5b, 6a |
 | 7 | API-023 themes | S–M | 1 |
 | 8 | Live Update + reminders parity | M | 3a, 5a (`LiveActivitySettings`), 7 for colour |
 | 9 | API-026 preview phones + `jitter_ms` | S–M | 1 |
 | 10a | Foldables: continuity + adaptive layouts | M | 4, 5b |
 | 10b | Foldables: differentiated features + checklist + store screenshots | L | 6b, 10a |
-| 11 | Performance, hang detector, logging names, server switch | M | 4 |
-| 12 | Tracker ticks + optional API-021 / API-025 | S | — |
+| 11 | Performance, hang detector, logging names, server switch (done Nov 25, 2026) | M | 4 |
+| 12 | Tracker ticks + optional API-021 / API-025 (API-025 done Nov 25, 2026) | S | — |
 
 ### Phase details
 
@@ -564,7 +564,7 @@ Phase 0 (toolchain and dependencies, minSdk 36) runs elsewhere. When it lands, p
   places" row → the search sheet's Saved Places list (`SearchList`); "like" wording gone from the UI (peek, chips, empty
   states, onboarding, channel descriptions, the assistant's like / unlike replies). Pure words in
   `domain/MyScheduleText.kt` (`MyScheduleTextTest`). Per-entry reminders were already posted by phase 8.
-- **Deferred:** the Schedule section's Share (QR) button (iOS batch 7; needs the chat's share sheet, 6b); an empty-state
+- **Done Nov 25, 2026:** the Schedule section's Share (QR) button and the Map's empty-state card. **Deferred (was):** the Share button; an empty-state
   overlay on the Map for an empty My Schedule chip (the chip shows once My schedule has a place; 10a owns the map).
 - **Scope:**
   - heart semantics and menu;

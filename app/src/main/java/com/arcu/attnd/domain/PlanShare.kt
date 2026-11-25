@@ -53,6 +53,16 @@ object PlanShare {
 
     fun itemLink(itemId: Int, bundle: EventBundle): String = link(bundle.event.eventCode, listOf(itemId))
 
+    /**
+     * My Schedule's Share (iOS `shareLink("schedule")`): every schedule item in My schedule in time order (start, then
+     * id), no day; places aren't in the payload (API-015 shares items). Null when there is no item to share.
+     */
+    fun scheduleLink(schedule: MySchedule, bundle: EventBundle): String? {
+        val ids = schedule.itemIds
+        val items = bundle.schedule.filter { it.id in ids }.sortedWith(compareBy({ it.startTime?.toInstant() ?: java.time.Instant.MAX }, { it.id })).map { it.id }
+        return if (items.isEmpty()) null else link(bundle.event.eventCode, items)
+    }
+
     fun decode(payload: String?): SharedPayload? {
         val text = payload?.trim()?.trimEnd('/') ?: return null
         if (text.isEmpty() || text.length > MAX_PAYLOAD + 2) return null
