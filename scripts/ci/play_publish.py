@@ -9,7 +9,8 @@ Bundle release:
         --mapping mapping.txt                     # R8 mapping for Play's crash deobfuscation (same edit)
         --native-symbols native-debug-symbols.zip # native debug symbols, if the build has any
         --draft                                   # a draft release: nothing goes to review or to users;
-                                                  # a person sends it from Play Console (Publishing overview)
+                                                  # a person rolls it out from Play Console. The listing text is
+                                                  # left out (a listing change is sent for review on commit)
 
 Store listing (text from store/en-US/*.txt, images from compose_screenshots.py):
     play_publish.py --listing store/en-US --check                      # validate the text only, offline
@@ -243,16 +244,20 @@ def publish_bundle(token, package, args, fields=None):
         release['releaseNotes'] = [{'language': LANGUAGE, 'text': notes}]
     call(token, 'PUT', f'{API}/{package}/edits/{edit}/tracks/{args.track}',
          body={'track': args.track, 'releases': [release]})
+    if fields and args.draft:
+        print('Draft: the listing text is left out (committing it would send it for review).')
+        fields = None
     if fields:
         # Same edit as the release: the listing text goes out (and into review) together with it.
         patch_listing_text(token, f'{package}/edits/{edit}/listings/{LANGUAGE}', fields)
-    # A draft (or --not-for-review) commits with changesNotSentForReview: the release and the listing wait in
-    # Play Console until a person presses "Send for review".
-    hold = args.draft or args.not_for_review
+    # --not-for-review commits with changesNotSentForReview (the changes wait for "Send for review"). Play refuses
+    # that parameter for apps whose changes are sent for review automatically (Nov 25, 2026, this app: 400 "must not
+    # be set"), so a draft doesn't use it: a draft release is never reviewed or rolled out until a person starts it.
+    hold = args.not_for_review
     call(token, 'POST', f'{API}/{package}/edits/{edit}:commit' + ('?changesNotSentForReview=true' if hold else ''))
     if args.draft:
-        print(f'Draft release of {version_code} on the {args.track} track: nothing sent for review. '
-              'Review it in Play Console, then send it from Publishing overview.')
+        print(f'Draft release of {version_code} on the {args.track} track: nothing sent for review or rolled out. '
+              'Open it in Play Console (Test and release → the track → Edit release) to review and roll it out.')
     else:
         print(f'Released {version_code} to the {args.track} track'
               + (f' at {args.rollout:.0%} rollout' if args.rollout < 1 else '')

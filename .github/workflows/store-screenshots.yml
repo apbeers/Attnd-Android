@@ -10,9 +10,9 @@ on:
   workflow_dispatch:
     inputs:
       send_for_review:
-        description: Also send the change for Google's review (off = it waits in Play Console until you send it)
+        description: Send the change for Google's review on commit (Play only accepts off when Play Console asks for changes to be sent from there, e.g. after a rejection; otherwise the upload fails and nothing changes)
         type: boolean
-        default: false
+        default: true
       upload:
         description: Upload the images to Google Play (goes live for everyone after Google's review)
         type: boolean
