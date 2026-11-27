@@ -2,7 +2,7 @@
 # and the Google first-party SDKs only). Checked against Google Maven, Maven Central and the Gradle plugin
 # portal on Nov 22, 2026: the newest stable release of each, except where a comment says otherwise.
 [versions]
-agp = "9.5.2"
+agp = "9.5.3"
 kotlin = "2.4.21"
 google-services = "4.6.0"
 
