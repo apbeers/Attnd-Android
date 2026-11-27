@@ -2,7 +2,6 @@ package com.arcu.attnd.ui.screens
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -16,16 +15,13 @@ import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.TextAutoSize
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Warning
@@ -37,23 +33,18 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.LayoutCoordinates
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -65,7 +56,6 @@ import com.arcu.attnd.domain.EntityRef
 import com.arcu.attnd.domain.EventBundle
 import com.arcu.attnd.domain.EventTime
 import com.arcu.attnd.domain.FoldPosture
-import com.arcu.attnd.domain.HomeColumnWidths
 import com.arcu.attnd.domain.HomeColumns
 import com.arcu.attnd.domain.HomeUrgent
 import com.arcu.attnd.domain.LayoutScreen
@@ -81,6 +71,7 @@ import com.arcu.attnd.ui.assistant.LocalBlockActions
 import com.arcu.attnd.ui.components.ComponentHost
 import com.arcu.attnd.ui.components.ComponentView
 import com.arcu.attnd.ui.components.FoldAwareBox
+import com.arcu.attnd.ui.components.PanePair
 import com.arcu.attnd.ui.components.LocalComponentHost
 import com.arcu.attnd.ui.components.LocalScreenshotMode
 import com.arcu.attnd.ui.components.RefreshBox
@@ -91,19 +82,18 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import java.time.Duration
 import java.time.Instant
-import kotlin.math.roundToInt
 
 /**
  * The Home tab (iOS `HomeTab`): first and the default outside screenshot mode, no top app bar, nothing but
  * the `home` layout's sections (API-024; the built-in one: header, urgent, countdown, Up next in my
  * schedule, map, updates, FAQ, getting there, about, website) drawn by the one renderer
- * ([ComponentView]). Taps open the item on its tab ([actions]'s `onOpen`). Layouts follow this container and
- * the reported fold ([FoldAwareBox]), never the device:
- * - from a 700 dp container: the full-width parts, then two independent columns ([HomeColumns]) whose widths
- *   meet at the reported vertical hinge, 20 dp each side of it ([HomeColumnWidths]; else two halves 40 dp apart);
- * - tabletop (half-opened, a horizontal hinge across the middle): the top half a glance that never scrolls
- *   ([TabletopGlanceView]), the bottom half the rest as a list ([TabletopSplit.GLANCE_TYPES] left out);
- * - else one column.
+ * ([ComponentView]). Taps open the item on its tab ([actions]'s `onOpen`). Layouts follow the window, never the
+ * device:
+ * - tabletop (half-opened, a horizontal hinge across the middle; [FoldAwareBox]): the top half a glance that never
+ *   scrolls ([TabletopGlanceView]), the bottom half the rest as a list ([TabletopSplit.GLANCE_TYPES] left out);
+ * - else a [PanePair] (iOS: the same): one column, or on an expanded window two independent columns
+ *   ([HomeColumns]) placed by Material3 adaptive's supporting-pane scaffold, off the hinge, with header / urgent /
+ *   countdown / now-next leading the first.
  * The section at the top is kept by its key across fold / unfold / tabletop (indices change between the layouts).
  */
 @Composable
@@ -124,27 +114,29 @@ fun HomeScreen(
             FoldAwareBox(
                 Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top)),
             ) { fold ->
-                val width = maxWidth.value.toDouble()
                 when {
                     fold is FoldPosture.Tabletop && !LocalScreenshotMode.current -> Column(Modifier.fillMaxSize()) {
                         TabletopGlanceView(bundle, actions, host, Modifier.fillMaxWidth().height(fold.foldMinY.dp))
                         Spacer(Modifier.height((fold.foldMaxY - fold.foldMinY).coerceAtLeast(0.0).dp))
                         OneColumn(sections.filter { it.type !in TabletopSplit.GLANCE_TYPES }, topSection, onTop, Modifier.weight(1f))
                     }
-                    width >= TWO_COLUMN_WIDTH -> TwoColumns(sections, width, fold as? FoldPosture.Book, topSection, onTop)
-                    else -> OneColumn(sections, topSection, onTop, Modifier.fillMaxSize())
+                    else -> {
+                        val columns = HomeColumns.split(sections.filter { it.type !in LEADING_FIRST })
+                        PanePair(showsSupporting = true, modifier = Modifier.fillMaxSize(), main = { split ->
+                            val first = if (split) sections.filter { it.type in LEADING_FIRST } + columns.leading else sections
+                            OneColumn(first, topSection, onTop, Modifier.fillMaxSize())
+                        }, supporting = {
+                            OneColumn(columns.trailing, null, null, Modifier.fillMaxSize())
+                        })
+                    }
                 }
             }
         }
     }
 }
 
-/** Two columns from this container width (an unfolded foldable's inner display). */
-private const val TWO_COLUMN_WIDTH = 700.0
-private const val GUTTER = 20.0
-
-/** Parts that keep the whole width in two-column mode. */
-private val FULL_WIDTH = setOf("header", "urgent", "countdown", "now_next")
+/** Parts that lead the first column in two-column mode. */
+private val LEADING_FIRST = setOf("header", "urgent", "countdown", "now_next")
 
 @Composable
 private fun Section(section: LayoutSection) {
@@ -152,7 +144,7 @@ private fun Section(section: LayoutSection) {
 }
 
 @Composable
-private fun OneColumn(sections: List<LayoutSection>, topSection: String?, onTop: (String) -> Unit, modifier: Modifier) {
+private fun OneColumn(sections: List<LayoutSection>, topSection: String?, onTop: ((String) -> Unit)?, modifier: Modifier) {
     val listState = rememberLazyListState()
     LaunchedEffect(listState) {
         // Back at the section that was on top in the other layout, then follow the scrolling.
@@ -160,7 +152,7 @@ private fun OneColumn(sections: List<LayoutSection>, topSection: String?, onTop:
         if (index > 0) listState.scrollToItem(index)
         snapshotFlow { listState.layoutInfo.visibleItemsInfo.firstOrNull()?.key as? String }
             .filterNotNull()
-            .collect { onTop(it) }
+            .collect { onTop?.invoke(it) }
     }
     LazyColumn(
         modifier,
@@ -169,57 +161,6 @@ private fun OneColumn(sections: List<LayoutSection>, topSection: String?, onTop:
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         items(sections, key = { it.type }) { section -> Section(section) }
-    }
-}
-
-@Composable
-private fun TwoColumns(
-    sections: List<LayoutSection>,
-    width: Double,
-    fold: FoldPosture.Book?,
-    topSection: String?,
-    onTop: (String) -> Unit,
-) {
-    val wide = sections.filter { it.type in FULL_WIDTH }
-    val columns = HomeColumns.split(sections.filter { it.type !in FULL_WIDTH })
-    val widths = HomeColumnWidths.of(width, margin = 16.0, gutter = GUTTER, foldMinX = fold?.foldMinX, foldMaxX = fold?.foldMaxX)
-    val scroll = rememberScrollState()
-    // Each section's offset in the scrolled content (px), to find and restore the top section by key.
-    val offsets = remember { mutableStateMapOf<String, Int>() }
-    var content by remember { mutableStateOf<LayoutCoordinates?>(null) }
-    LaunchedEffect(scroll) {
-        topSection?.takeIf { it != sections.firstOrNull()?.type }?.let { key ->
-            val y = snapshotFlow { offsets[key] }.filterNotNull().first()
-            scroll.scrollTo(y)
-        }
-        snapshotFlow { scroll.value to offsets.toMap() }.collect { (value, known) ->
-            sections.filter { known[it.type] != null && known[it.type]!! <= value + 1 }
-                .maxByOrNull { known[it.type]!! }
-                ?.let { onTop(it.type) }
-        }
-    }
-    @Composable
-    fun Tracked(section: LayoutSection) {
-        Box(
-            Modifier.onGloballyPositioned { coords ->
-                content?.let { root -> offsets[section.type] = root.localPositionOf(coords, Offset.Zero).y.roundToInt() }
-            },
-        ) { Section(section) }
-    }
-    Column(
-        Modifier
-            .fillMaxSize()
-            .verticalScroll(scroll)
-            .onGloballyPositioned { content = it }
-            .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 88.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        wide.forEach { Tracked(it) }
-        Row(Modifier.fillMaxWidth()) {
-            Column(Modifier.width(widths.leading.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) { columns.leading.forEach { Tracked(it) } }
-            Spacer(Modifier.width(widths.gap.dp))
-            Column(Modifier.width(widths.trailing.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) { columns.trailing.forEach { Tracked(it) } }
-        }
     }
 }
 

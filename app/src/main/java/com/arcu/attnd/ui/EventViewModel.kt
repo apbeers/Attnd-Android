@@ -657,6 +657,11 @@ class EventViewModel(
         e is ApiException && JoinErrors.message(e.code, e.error, e.serverMessage) != null ->
             JoinErrors.message(e.code, e.error, e.serverMessage)!!
         e is ApiException && e.code == 404 -> "Event not found. Check the code and try again."
+        // A local debug build has no Play Integrity: only its static key (ATTND_API_KEY in local.properties)
+        // can authenticate, and only on a server that accepts it (the dev server; production doesn't).
+        e is ApiException && e.code == 401 && BuildConfig.DEBUG ->
+            "${BuildConfig.ATTND_SERVER} didn't accept this debug build. Set ATTND_API_KEY in local.properties " +
+                "to that server's key (production accepts only Play builds)."
         e is ApiException && e.code == 401 -> "Couldn't verify this app with the server. Please update Attnd."
         e is ApiException -> "Server error (${e.code}). Please try again."
         e is IOException -> "Network error. Check your connection and try again."

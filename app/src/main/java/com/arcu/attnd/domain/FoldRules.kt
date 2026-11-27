@@ -84,34 +84,3 @@ sealed interface FoldPosture {
         }
     }
 }
-
-/**
- * Where a two-pane split goes along one axis (`FoldAwareSplit`): on a hinge that crosses the layout (the first
- * pane up to its start, the gap = its width, nothing under it), else [fraction] of the space. A hinge in the
- * outer fifth on either side is ignored (one pane would be unusably small).
- */
-object FoldSplit {
-    data class At(val first: Int, val gap: Int)
-
-    /** [hingeStart] / [hingeEnd]: the hinge along the axis in the layout's own coordinates; null = none crosses it. */
-    fun at(total: Int, fraction: Double, hingeStart: Double?, hingeEnd: Double?): At {
-        val default = At(Math.round(total * fraction).toInt(), 0)
-        if (hingeStart == null || hingeEnd == null) return default
-        if (hingeStart < total * 0.2 || hingeEnd > total * 0.8) return default
-        return At(Math.round(hingeStart).toInt(), Math.round(hingeEnd - hingeStart).toInt().coerceAtLeast(0))
-    }
-}
-
-/**
- * The Map tab's pane beside the map (iOS `MapPaneLayout`): up to the fold when one is reported, else half the
- * width, never under 280 (or half a narrow width) or over 60 % of the width.
- */
-object MapPaneLayout {
-    fun paneWidth(containerWidth: Double, foldMinX: Double?): Double {
-        val wanted = foldMinX ?: (containerWidth / 2)
-        return minOf(maxOf(wanted, minOf(280.0, containerWidth * 0.5)), containerWidth * 0.6)
-    }
-
-    /** The pane's share of the height when stacked (tabletop without a reported hinge; iOS 45 %). */
-    const val STACKED_PANE_FRACTION = 0.45
-}

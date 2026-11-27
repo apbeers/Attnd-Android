@@ -54,8 +54,12 @@ android {
 
         def attndKey = localProperties.getProperty("ATTND_API_KEY") ?: System.getenv("ATTND_API_KEY") ?: ""
         def mapsKey = localProperties.getProperty("MAPS_API_KEY") ?: System.getenv("MAPS_API_KEY") ?: ""
-        // API host without scheme; CI sets dev.attnd.app (or similar) for develop builds.
-        def server = System.getenv("ATTND_SERVER") ?: localProperties.getProperty("ATTND_SERVER") ?: "attnd.app"
+        // API host without scheme; CI sets dev.attnd.app (or similar) for develop builds. Without one, store
+        // builds use production and local debug builds the dev server (below): production accepts only Play
+        // Integrity, which a debug build on an emulator can never pass.
+        def serverOverride = System.getenv("ATTND_SERVER") ?: localProperties.getProperty("ATTND_SERVER")
+        project.ext.attndServerOverride = serverOverride
+        def server = serverOverride ?: "attnd.app"
         buildConfigField "String", "ATTND_SERVER", "\"$server\""
 
         buildConfigField "String", "ATTND_API_KEY", "\"$attndKey\""
@@ -105,6 +109,7 @@ android {
                 applicationIdSuffix ".debug"
             }
             versionNameSuffix "-debug"
+            buildConfigField "String", "ATTND_SERVER", "\"${project.ext.attndServerOverride ?: 'dev.attnd.app'}\""
             buildConfigField "boolean", "DEV", "true"
             buildConfigField "boolean", "UPLOAD_LOGS", "false"
         }

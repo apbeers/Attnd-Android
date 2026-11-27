@@ -5,6 +5,7 @@ package com.arcu.attnd.ui.screens
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -35,13 +36,13 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.Modifier
@@ -53,8 +54,6 @@ import com.arcu.attnd.AttndApplication
 import com.arcu.attnd.domain.AboutText
 import com.arcu.attnd.domain.ContextFacts
 import com.arcu.attnd.domain.DetailColumns
-import com.arcu.attnd.domain.FoldPosture
-import com.arcu.attnd.domain.HomeColumnWidths
 import com.arcu.attnd.domain.EventBundle
 import com.arcu.attnd.domain.EventLocation
 import com.arcu.attnd.domain.EventTime
@@ -74,7 +73,6 @@ import com.arcu.attnd.domain.Walking
 import com.arcu.attnd.ui.assistant.AssistantIntents
 import com.arcu.attnd.ui.assistant.MiniMap
 import com.arcu.attnd.ui.assistant.MiniPin
-import com.arcu.attnd.ui.components.FoldAwareBox
 import com.arcu.attnd.ui.components.DistanceArrow
 import com.arcu.attnd.ui.components.HeartButton
 import com.arcu.attnd.ui.components.LiveDot
@@ -131,14 +129,14 @@ fun LocationDetail(
 }
 
 /**
- * A detail screen's sections (iOS `DetailColumns`): from a 700 dp container with enough to fill them, two columns
- * from the same top with equal margins that meet at the reported vertical hinge (24 dp each side of it, else
- * 48 dp apart in the middle; [HomeColumnWidths]); otherwise one readable column, centred and at most 680 dp wide
- * on a wide window. Each column scrolls on its own; this container and its fold decide, never the device.
+ * A detail screen's sections (iOS `DetailColumns`): from a 700 dp container with enough to fill them, two equal
+ * columns from the same top, 48 dp apart; otherwise one readable column, centred and at most 680 dp wide on a wide
+ * window. Each column scrolls on its own; this container decides, never the device (a detail sits in a
+ * list-detail scaffold's pane, which already keeps it off the hinge).
  */
 @Composable
 fun DetailSections(sections: List<LayoutSection>, screen: LayoutScreen, section: @Composable (LayoutSection) -> Unit) {
-    FoldAwareBox(Modifier.fillMaxSize()) { fold ->
+    BoxWithConstraints(Modifier.fillMaxSize()) {
         val width = maxWidth.value.toDouble()
         val split = DetailColumns.split(sections, screen, width)
         if (split == null) {
@@ -152,13 +150,10 @@ fun DetailSections(sections: List<LayoutSection>, screen: LayoutScreen, section:
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) { sections.forEach { section(it) } }
         } else {
-            val book = fold as? FoldPosture.Book
-            val widths = HomeColumnWidths.of(width, margin = 8.0, gutter = 24.0, foldMinX = book?.foldMinX, foldMaxX = book?.foldMaxX)
-            Row(Modifier.fillMaxSize().padding(horizontal = 8.dp)) {
-                listOf(split.leading to widths.leading, split.trailing to widths.trailing).forEachIndexed { index, (column, columnWidth) ->
-                    if (index == 1) Spacer(Modifier.width(widths.gap.dp))
+            Row(Modifier.fillMaxSize().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(48.dp)) {
+                listOf(split.leading, split.trailing).forEach { column ->
                     Column(
-                        Modifier.width(columnWidth.dp).fillMaxHeight().verticalScroll(rememberScrollState()).padding(bottom = 88.dp),
+                        Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()).padding(bottom = 88.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) { column.forEach { section(it) } }
                 }

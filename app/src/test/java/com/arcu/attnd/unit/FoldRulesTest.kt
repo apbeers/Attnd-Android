@@ -2,8 +2,6 @@ package com.arcu.attnd.unit
 
 import com.arcu.attnd.domain.FoldPosture
 import com.arcu.attnd.domain.FoldRect
-import com.arcu.attnd.domain.FoldSplit
-import com.arcu.attnd.domain.MapPaneLayout
 import com.arcu.attnd.domain.ScheduleItem
 import com.arcu.attnd.domain.TabletopGlance
 import com.arcu.attnd.domain.UndoToastPane
@@ -18,8 +16,8 @@ import java.time.ZoneOffset
 
 /**
  * Foldable rules (phase 10a): iOS `DisplayLogicTests.testFoldPosture`, `DuoFeaturesTests` (Undo toast, tabletop
- * glance) case for case, plus Android's zero-width flat hinge, the half-opened gate, `FoldSplit` and
- * `MapPaneLayout`. Fixed now Sat Nov 14 2026 2:00 PM America/Chicago (20:00 UTC).
+ * glance) case for case, plus Android's zero-width flat hinge, the half-opened gate and the Undo toast
+ * pane. Fixed now Sat Nov 14 2026 2:00 PM America/Chicago (20:00 UTC).
  */
 class FoldRulesTest {
     private fun rect(x: Double, y: Double, w: Double, h: Double) = FoldRect(x, y, x + w, y + h)
@@ -48,37 +46,17 @@ class FoldRulesTest {
         assertEquals(FoldPosture.Flat, FoldPosture.of(420.0, 900.0, listOf(rect(0.0, 0.0, 0.0, 900.0))))
     }
 
-    @Test
-    fun foldSplit() {
-        assertEquals(FoldSplit.At(600, 0), FoldSplit.at(1000, 0.6, null, null))
-        assertEquals(FoldSplit.At(480, 40), FoldSplit.at(1000, 0.6, 480.0, 520.0))
-        assertEquals(FoldSplit.At(500, 0), FoldSplit.at(1000, 0.6, 500.0, 500.0))
-        // Near the edge: ignored.
-        assertEquals(FoldSplit.At(500, 0), FoldSplit.at(1000, 0.5, 100.0, 120.0))
-        assertEquals(FoldSplit.At(500, 0), FoldSplit.at(1000, 0.5, 790.0, 830.0))
-    }
-
-    @Test
-    fun mapPaneWidth() {
-        assertEquals(420.0, MapPaneLayout.paneWidth(840.0, foldMinX = 420.0), 1e-9)
-        assertEquals(450.0, MapPaneLayout.paneWidth(900.0, foldMinX = null), 1e-9)
-        // Never over 60 %, never under 280.
-        assertEquals(540.0, MapPaneLayout.paneWidth(900.0, foldMinX = 800.0), 1e-9)
-        assertEquals(280.0, MapPaneLayout.paneWidth(900.0, foldMinX = 100.0), 1e-9)
-        // A narrow window: half.
-        assertEquals(250.0, MapPaneLayout.paneWidth(500.0, foldMinX = 100.0), 1e-9)
-    }
-
     // iOS DuoFeaturesTests.testUndoToastStaysInOnePane
 
     @Test
     fun undoToastStaysInOnePane() {
-        assertEquals(0.0..400.0, UndoToastPane.span(400.0, null, null, 300.0, false))
-        assertEquals(460.0..900.0, UndoToastPane.span(900.0, 440.0..460.0, null, 700.0, false))
-        assertEquals(0.0..440.0, UndoToastPane.span(900.0, 440.0..460.0, null, 100.0, true))
-        assertEquals(460.0..900.0, UndoToastPane.span(900.0, 440.0..460.0, null, null, true))
-        assertEquals(0.0..330.0, UndoToastPane.span(640.0, null, 330.0, null, false))
-        assertEquals(0.0..640.0, UndoToastPane.span(640.0, null, 600.0, null, false))
+        assertEquals(0.0..400.0, UndoToastPane.span(400.0, null, null, 300.0))
+        assertEquals(460.0..900.0, UndoToastPane.span(900.0, 440.0..460.0, null, 700.0))
+        assertEquals(0.0..440.0, UndoToastPane.span(900.0, 440.0..460.0, null, 100.0))
+        // No tap position: the main pane, which PanePair places leading.
+        assertEquals(0.0..440.0, UndoToastPane.span(900.0, 440.0..460.0, null, null))
+        assertEquals(0.0..330.0, UndoToastPane.span(640.0, null, 330.0, null))
+        assertEquals(0.0..640.0, UndoToastPane.span(640.0, null, 600.0, null))
     }
 
     // iOS DuoFeaturesTests tabletop cases (same schedule)

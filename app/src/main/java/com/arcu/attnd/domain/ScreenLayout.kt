@@ -471,29 +471,6 @@ object HomeColumns {
 }
 
 /**
- * Home's two column widths on a wide container: with a reported vertical fold the gap is the fold's own width plus
- * `gutter` on each side; without one (or one leaving a column under 160) the columns meet at the middle with
- * `2 × gutter` between them. `margin` is the page's side padding.
- */
-object HomeColumnWidths {
-    data class Widths(val leading: Double, val gap: Double, val trailing: Double)
-
-    fun of(width: Double, margin: Double, gutter: Double, foldMinX: Double?, foldMaxX: Double?): Widths {
-        val inner = maxOf(width - 2 * margin, 0.0)
-        if (foldMinX != null && foldMaxX != null && foldMaxX > foldMinX &&
-            foldMinX - margin - gutter > 160 && width - margin - (foldMaxX + gutter) > 160
-        ) {
-            val leading = foldMinX - margin - gutter
-            val gap = (foldMaxX - foldMinX) + 2 * gutter
-            return Widths(leading, gap, maxOf(inner - leading - gap, 0.0))
-        }
-        val gap = 2 * gutter
-        val half = maxOf((inner - gap) / 2, 0.0)
-        return Widths(half, gap, half)
-    }
-}
-
-/**
  * Home in tabletop posture (the fold across the middle): the top half for viewing (header, urgent, countdown,
  * now / next, the map), the bottom half the rest as a list. Null = nothing for one of the halves.
  */

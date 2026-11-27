@@ -4,7 +4,6 @@ import com.arcu.attnd.domain.AboutText
 import com.arcu.attnd.domain.DetailColumns
 import com.arcu.attnd.domain.EventNotification
 import com.arcu.attnd.domain.FoldRules
-import com.arcu.attnd.domain.HomeColumnWidths
 import com.arcu.attnd.domain.HomeColumns
 import com.arcu.attnd.domain.LayoutScreen
 import com.arcu.attnd.domain.LayoutSection
@@ -422,28 +421,6 @@ class ScreenLayoutTest {
         assertEquals(listOf("map", "faq", "about"), types(columns.trailing))
         assertEquals(sections.size, columns.leading.size + columns.trailing.size)
         assertTrue(HomeColumns.split(emptyList()).leading.isEmpty())
-    }
-
-    /** iOS `DuoFeaturesTests`: the columns meet at the fold with a gutter. */
-    @Test
-    fun homeColumnWidthsMeetAtTheFoldWithAGutter() {
-        // 951 wide, a 20 fold at 465…485, 16 margins, 20 gutter.
-        val w = HomeColumnWidths.of(951.0, 16.0, 20.0, 465.0, 485.0)
-        assertEquals(429.0, w.leading, 0.0)
-        assertEquals(60.0, w.gap, 0.0)
-        assertEquals(951.0 - 32, w.leading + w.gap + w.trailing, 0.001)
-        // The trailing column starts `gutter` after the fold.
-        assertEquals(485.0 + 20, 16 + w.leading + w.gap, 0.0)
-    }
-
-    @Test
-    fun homeColumnWidthsSplitTheMiddleWithoutAFold() {
-        val w = HomeColumnWidths.of(900.0, 16.0, 20.0, null, null)
-        assertEquals(w.trailing, w.leading, 0.0)
-        assertEquals(40.0, w.gap, 0.0)
-        assertEquals((868.0 - 40) / 2, w.leading, 0.0)
-        // A "fold" that would leave a sliver is ignored.
-        assertEquals(w, HomeColumnWidths.of(900.0, 16.0, 20.0, 100.0, 110.0))
     }
 
     @Test

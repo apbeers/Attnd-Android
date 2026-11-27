@@ -52,12 +52,12 @@ fun Modifier.trackTouches(tracker: TouchTracker): Modifier =
 
 /**
  * The Scaffold's snackbar host kept in one pane of an unfolded foldable ([UndoToastPane]): the pane where the
- * last tap was, else the screen's primary pane ([primaryIsTrailing]: the map trails on the Map tab), centred
+ * last tap was, else the main pane (always leading under `PanePair`), centred
  * there and never across the hinge. Without a vertical hinge a window of 700 dp or more splits in the middle;
  * narrower, the whole width.
  */
 @Composable
-fun PaneSnackbarHost(hostState: SnackbarHostState, touches: TouchTracker, primaryIsTrailing: Boolean) {
+fun PaneSnackbarHost(hostState: SnackbarHostState, touches: TouchTracker) {
     val posture = currentWindowAdaptiveInfoV2().windowPosture
     val density = LocalDensity.current
     var bounds by remember { mutableStateOf<Rect?>(null) }
@@ -74,7 +74,7 @@ fun PaneSnackbarHost(hostState: SnackbarHostState, touches: TouchTracker, primar
         val fold = hinge?.let { dp(it.left - box.left)..dp(it.right - box.left) }
         val mid = if (fold == null && width >= DetailColumns.MIN_WIDTH) width / 2 else null
         val touchX = touches.lastWindowX?.let { dp(it - box.left) }
-        val span = UndoToastPane.span(width, fold, mid, touchX, primaryIsTrailing)
+        val span = UndoToastPane.span(width, fold, mid, touchX)
         SnackbarHost(
             hostState,
             Modifier.padding(start = span.start.dp).width((span.endInclusive - span.start).dp),
