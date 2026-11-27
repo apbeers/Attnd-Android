@@ -24,6 +24,7 @@ import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.SelectableChipColors
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -174,7 +175,8 @@ fun RefreshBox(
 
 /**
  * Horizontally scrolling filter chips: "My Schedule" first when [onHeartedChange] is set, then "All" +
- * one per category (none when [categories] is empty). Emits nothing when there is neither.
+ * one per category (none when [categories] is empty). Emits nothing when there is neither. [overMap]: the chips
+ * float over the map, so unselected ones get a solid surface so their text stays readable on the tiles.
  */
 @Composable
 fun CategoryChips(
@@ -184,19 +186,25 @@ fun CategoryChips(
     modifier: Modifier = Modifier,
     hearted: Boolean = false,
     onHeartedChange: ((Boolean) -> Unit)? = null,
+    overMap: Boolean = false,
 ) {
     if (categories.isEmpty() && onHeartedChange == null) return
+    val colors = if (overMap) {
+        FilterChipDefaults.filterChipColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)
+    } else {
+        FilterChipDefaults.filterChipColors()
+    }
     Row(
         modifier = modifier
             .horizontalScroll(rememberScrollState())
             .padding(horizontal = 16.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        if (onHeartedChange != null) HeartedChip(hearted, onHeartedChange)
+        if (onHeartedChange != null) HeartedChip(hearted, onHeartedChange, colors = colors)
         if (categories.isEmpty()) return@Row
-        CategoryChip(label = "All", isSelected = selected == null) { onSelect(null) }
+        CategoryChip(label = "All", isSelected = selected == null, colors = colors) { onSelect(null) }
         categories.forEach { category ->
-            CategoryChip(label = category, isSelected = selected == category) {
+            CategoryChip(label = category, isSelected = selected == category, colors = colors) {
                 onSelect(if (selected == category) null else category)
             }
         }
@@ -205,9 +213,15 @@ fun CategoryChips(
 
 /** "My Schedule": only the places in My schedule (the places of its items too). */
 @Composable
-fun HeartedChip(selected: Boolean, onChange: (Boolean) -> Unit, modifier: Modifier = Modifier) {
+fun HeartedChip(
+    selected: Boolean,
+    onChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+    colors: SelectableChipColors = FilterChipDefaults.filterChipColors(),
+) {
     FilterChip(
         selected = selected,
+        colors = colors,
         onClick = { onChange(!selected) },
         label = { Text(MyScheduleText.TITLE) },
         leadingIcon = {
@@ -222,9 +236,10 @@ fun HeartedChip(selected: Boolean, onChange: (Boolean) -> Unit, modifier: Modifi
 }
 
 @Composable
-private fun CategoryChip(label: String, isSelected: Boolean, onClick: () -> Unit) {
+private fun CategoryChip(label: String, isSelected: Boolean, colors: SelectableChipColors, onClick: () -> Unit) {
     FilterChip(
         selected = isSelected,
+        colors = colors,
         onClick = onClick,
         label = { Text(label) },
         leadingIcon = if (isSelected) {

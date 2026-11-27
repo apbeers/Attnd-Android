@@ -2,6 +2,7 @@ package com.arcu.attnd.ui.components
 
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfoV2
+import androidx.compose.material3.adaptive.layout.AdaptStrategy
 import androidx.compose.material3.adaptive.layout.AnimatedPane
 import androidx.compose.material3.adaptive.layout.PaneAdaptedValue
 import androidx.compose.material3.adaptive.layout.SupportingPaneScaffold
@@ -48,12 +49,20 @@ fun PanePair(
     // The main pane is the destination (the last item has the highest priority), the supporting pane the one
     // before it: shown only where the directive leaves room for it.
     val history = buildList {
-        if (showsSupporting) add(ThreePaneScaffoldDestinationItem<Nothing>(SupportingPaneScaffoldRole.Supporting))
+        // Only where it can sit beside the main pane, or below it in tabletop: on a phone the main pane is alone.
+        val room = directive.maxHorizontalPartitions > 1 || info.windowPosture.isTabletop
+        if (showsSupporting && room) add(ThreePaneScaffoldDestinationItem<Nothing>(SupportingPaneScaffoldRole.Supporting))
         add(ThreePaneScaffoldDestinationItem<Nothing>(SupportingPaneScaffoldRole.Main))
     }
     val value = calculateThreePaneScaffoldValue(
         maxHorizontalPartitions = directive.maxHorizontalPartitions,
-        adaptStrategies = SupportingPaneScaffoldDefaults.adaptStrategies(),
+        // Below the main pane only in tabletop (two vertical partitions); otherwise a supporting pane that
+        // doesn't fit beside the main one is hidden, never stacked under it on a phone.
+        adaptStrategies = if (directive.maxVerticalPartitions > 1) {
+            SupportingPaneScaffoldDefaults.adaptStrategies()
+        } else {
+            SupportingPaneScaffoldDefaults.adaptStrategies(supportingPaneAdaptStrategy = AdaptStrategy.Hide)
+        },
         destinationHistory = history,
         maxVerticalPartitions = directive.maxVerticalPartitions,
     )
