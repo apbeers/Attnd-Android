@@ -1,22 +1,34 @@
-Attnd is the companion app for the event you're at. Scan the event's QR code and everything the organizers publish is on your phone: where things are, what's on and the latest news.
-
-Map of the whole event
-Every stage, vendor, food truck, restroom and first aid point the organizers have added is pinned on one map. Tap a pin for details, or show your own location to find your way.
-
-Schedule with now and next
-See what's happening right now and what's coming up next, and search the full program. Times are always shown in the event's own time zone, so they match the printed program even if your phone is set to another zone.
-
-Locations and details
-Look up any spot at the event: its description and photo, the address, walking directions in your maps app, and everything scheduled there.
-
-Updates from the organizers
-Set time changes, weather notices and announcements appear in the Updates tab. Turn on notifications in Options if you'd like them on your lock screen as well.
-
-Always up to date
-When organizers change the map or the schedule, the app picks up the change within seconds while it's open. The last version is kept on your phone, so you can still check it when the signal at the venue drops.
+Attnd is the companion app for the event you're at: a festival, a conference, a fair or a market. Scan the event's QR code and everything the organizers publish is right there: where things are, what's on and the latest news.
 
 Join in seconds
-Scan the QR code on a poster, ticket or wristband, type the event code, or look for events near you. There's no account to create and nothing to sign in to. Attnd never asks for your name, email address or phone number.
+Scan the QR code on a poster, ticket or wristband, type the event code, or look for events near you. There's no account to create and nothing to sign in to.
+
+Home at a glance
+What's on now and next, the organizers' latest announcement and the plans you've made for the day, all on one screen.
+
+The whole event on one map
+Every stage, vendor, food truck, restroom and first aid point the organizers have added is pinned on one map. Tap a pin to see what's on there, how far it is to walk and the route to get there.
+
+Schedule with now and next
+See what's happening right now and what's coming up, with countdowns, and search the full program. Times are always shown in the event's own time zone, so they match the printed program.
+
+My Schedule
+Tap the heart on a set, a talk or a place to add it to My Schedule. Give a food truck a time, choose when to be reminded, and see the day laid out with the walks in between. If the organizers move something you saved, Attnd tells you.
+
+On your lock screen
+Follow the day in a notification that shows what's on now and what's next, and get a reminder with the walking time before each thing in My Schedule. On Android 16 it appears as a Live Update.
+
+Ask Attnd
+On phones with Gemini Nano, ask about the event in plain words or have Attnd plan your afternoon around the music and food you like. It runs on the device, so questions never leave it.
+
+Updates from the organizers
+Set time changes, weather notices and announcements appear in Updates, and urgent ones come through even if you've turned other notifications off.
+
+Works when the signal doesn't
+When organizers change the map or the schedule, the app picks up the change within seconds. The latest version and its photos are kept on the phone, so everything still works when the signal at the venue drops.
+
+Private by design
+Attnd never asks for your name, email address or phone number. Location and notifications are optional.
 
 Made for phones and foldables
 On a foldable, open it up to see the map beside the schedule or the list of places.
