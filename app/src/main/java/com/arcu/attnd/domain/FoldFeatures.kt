@@ -6,7 +6,7 @@ import java.util.Locale
 
 /**
  * Which part of the width the Undo toast may use (iOS `UndoToastPane`): one pane of an unfolded foldable (the one
- * the action was tapped in, else the screen's primary pane), never across the fold. [fold] = the reported vertical
+ * the action was tapped in, else the main pane, which `PanePair` always places leading), never across the fold. [fold] = the reported vertical
  * hinge (container coordinates); [windowMidX] = the middle of a wide window without one. Returns (start, end).
  */
 object UndoToastPane {
@@ -15,7 +15,6 @@ object UndoToastPane {
         fold: ClosedFloatingPointRange<Double>?,
         windowMidX: Double?,
         touchX: Double?,
-        primaryIsTrailing: Boolean,
     ): ClosedFloatingPointRange<Double> {
         val full = 0.0..maxOf(containerWidth, 0.0)
         val split = fold ?: windowMidX?.let { it..it } ?: return full
@@ -26,7 +25,7 @@ object UndoToastPane {
             if (touchX < split.start) return leading
             if (touchX > split.endInclusive) return trailing
         }
-        return if (primaryIsTrailing) trailing else leading
+        return leading
     }
 }
 

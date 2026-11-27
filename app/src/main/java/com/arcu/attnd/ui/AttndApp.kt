@@ -30,10 +30,8 @@ import androidx.compose.material3.ContainedLoadingIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHostState
-import com.arcu.attnd.domain.SecondaryPane
 import com.arcu.attnd.ui.components.PaneSnackbarHost
 import com.arcu.attnd.ui.components.TouchTracker
 import com.arcu.attnd.ui.components.trackTouches
@@ -41,20 +39,19 @@ import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfoV2
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteItem
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffoldDefaults
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteType
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -399,8 +396,7 @@ private fun EventShell(state: AppUiState, bundle: EventBundle, viewModel: EventV
             },
             snackbarHost = {
                 // The map trails its pane on the Map tab, so it is the primary pane there.
-                val mapTrails = selected == EventTab.MAP && bundle.display.secondaryPane != SecondaryPane.NONE
-                PaneSnackbarHost(snackbar, touches, primaryIsTrailing = mapTrails)
+                PaneSnackbarHost(snackbar, touches)
             },
             floatingActionButton = { if (fabInScaffold) SearchFab(onClick = onFab, plan = planButton) },
             contentWindowInsets = contentInsets,

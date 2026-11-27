@@ -11,7 +11,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -19,7 +18,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.consumeWindowInsets
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -65,18 +63,17 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.VerticalDivider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -127,10 +124,10 @@ import com.arcu.attnd.domain.TurnPath
 import com.arcu.attnd.ui.AssistantUiState
 import com.arcu.attnd.ui.PlanUiState
 import com.arcu.attnd.ui.SearchRequest
+import com.arcu.attnd.ui.components.PanePair
 import com.arcu.attnd.ui.components.ComponentHost
 import com.arcu.attnd.ui.components.LocalComponentHost
 import com.arcu.attnd.ui.components.ScreenComponentView
-import com.arcu.attnd.ui.components.rememberNow
 import com.arcu.attnd.ui.components.rememberSearchReporter
 import com.arcu.attnd.ui.screens.SearchDetail
 import com.arcu.attnd.ui.screens.SearchEntry
@@ -145,8 +142,8 @@ import java.time.format.DateTimeFormatter
  * "Adding Taco Row…") that becomes the turn's done line ("Added Taco Row") with the answer: text and
  * components inline and interactive. The last turn's chips are the follow-up chips above the composer. A
  * pending change to My schedule is the proposal card (Apply per option, Cancel), then the Undo card. Before
- * anything is asked the chat shows Your Day (My schedule's day with walks). Wide windows (≥ 700 dp of its
- * own width): the chat beside the last shown component, large. Cards open their item on the chat's own
+ * anything is asked the chat shows Your Day (My schedule's day with walks). Expanded windows (a PanePair,
+ * off the hinge): the chat beside the last shown component, large. Cards open their item on the chat's own
  * back stack (Back returns). On a phone whose Gemini Nano still has to download, a small card offers the
  * download (with progress); the chat runs on the rule-based router meanwhile.
  */
@@ -177,8 +174,6 @@ private fun BlockActions.opening(onOpen: (EntityRef) -> Unit) = BlockActions(
     onCheck = onCheck, onUseVersion = onUseVersion, onOpenFlyer = onOpenFlyer, onOpenPlan = onOpenPlan,
 )
 
-/** The width from which the chat gets the last component beside it (iOS: 700 pt of its own container). */
-private val WIDE = 700.dp
 
 @Composable
 fun AskAttndChat(
@@ -249,18 +244,17 @@ fun AskAttndChat(
                 )
             },
         ) { padding ->
-            BoxWithConstraints(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)) {
-                val wide = maxWidth >= WIDE
-                if (wide) {
-                    Row(Modifier.fillMaxSize()) {
-                        ChatColumn(controller, state, bundle, model, planner, request, focusInput, onRequestConsumed, onSearch, onDownloadModel, Modifier.weight(0.45f))
-                        VerticalDivider()
-                        LastComponentPane(state, actions.plan, Modifier.weight(0.55f).fillMaxHeight())
-                    }
-                } else {
+            // The chat is the main pane (always the same list, so folding keeps the conversation and its scroll);
+            // on an expanded window the last shown component is the supporting pane beside it (PanePair: Material3
+            // adaptive's supporting-pane scaffold, off the hinge; iOS: ArrangementView).
+            PanePair(
+                showsSupporting = true,
+                modifier = Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding),
+                main = {
                     ChatColumn(controller, state, bundle, model, planner, request, focusInput, onRequestConsumed, onSearch, onDownloadModel, Modifier.fillMaxSize())
-                }
-            }
+                },
+                supporting = { LastComponentPane(state, actions.plan, Modifier.fillMaxSize()) },
+            )
         }
     }
 }
