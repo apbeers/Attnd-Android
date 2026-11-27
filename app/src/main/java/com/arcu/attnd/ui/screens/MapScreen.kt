@@ -491,6 +491,7 @@ fun EventMap(
                     onSelect = { selectedCategory = it },
                     hearted = heartedOnly,
                     onHeartedChange = if (showHeartedChip) ({ value: Boolean -> heartedOnly = value }) else null,
+                    overMap = true,
                 )
             }
             NowPlayingStrip(nowPlaying, onSelect = { select(it.location, center = true) })
