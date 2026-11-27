@@ -153,8 +153,10 @@ fun OptionsScreen(
         if (granted) onFollowLiveChange(true)
     }
     val liveOn = followLive && PushNotifications.hasPermission(context)
-    // The user can turn Live Updates (promoted notifications) off for the app.
-    val promotedOff = !NotificationManagerCompat.from(context).canPostPromotedNotifications()
+    // Live Updates (promoted notifications) exist from Android 16; the user can turn them off for the app there.
+    // Before 16 the same notification is an ordinary ongoing one.
+    val hasLiveUpdates = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.BAKLAVA
+    val promotedOff = hasLiveUpdates && !NotificationManagerCompat.from(context).canPostPromotedNotifications()
 
 
     Surface(Modifier.fillMaxSize()) {
@@ -191,7 +193,7 @@ fun OptionsScreen(
                             Text(
                                 when {
                                     followDenied -> "Notifications are blocked. Allow them in system settings."
-                                    else -> "What's on now and next in your schedule, as a Live Update, plus a reminder with the walk time before each item in it"
+                                    else -> "What's on now and next in your schedule, as ${if (hasLiveUpdates) "a Live Update" else "a notification"}, plus a reminder with the walk time before each item in it"
                                 }
                             )
                             if (liveOn && promotedOff) {

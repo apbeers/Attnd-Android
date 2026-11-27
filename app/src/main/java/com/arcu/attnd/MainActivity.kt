@@ -6,9 +6,8 @@ import android.os.SystemClock
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
-import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
@@ -36,9 +35,14 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         val isLaunch = LaunchTiming.onActivityCreate(SystemClock.uptimeMillis(), restored = savedInstanceState != null)
-        installSplashScreen()
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        // Edge-to-edge without androidx's enableEdgeToEdge() (Play flags the deprecated window APIs it calls):
+        // Android 15+ draws edge-to-edge by itself; on 13 / 14 the window stops fitting the system bars here and
+        // the theme makes the bars transparent (values/themes.xml). The splash screen is the system's, from the
+        // theme too (no core-splashscreen library: minSdk 33 has the platform splash screen).
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+            WindowCompat.setDecorFitsSystemWindows(window, false)
+        }
 
         // Only on a fresh start: after a configuration change the intent was already handled.
         if (savedInstanceState == null) handleIntent(intent)

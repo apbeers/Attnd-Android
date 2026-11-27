@@ -30,7 +30,7 @@ android {
 
     defaultConfig {
         applicationId = "com.arcu.attnd"
-        minSdk = 36
+        minSdk = 33
         targetSdk = 37
         // Only the opt-in assistant eval in model mode (androidTest/AssistantEvalModelTest, a phone with Gemini Nano).
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -162,6 +162,8 @@ android {
         // Machine-readable report next to the HTML/SARIF ones; CI prints and annotates its warnings
         // (scripts/ci/lint_summary.py) without failing the build.
         xmlReport = true
+        // minSdk 33: a call or constant newer than Android 13 must sit behind a version check (fails the build).
+        error += ['NewApi', 'InlinedApi']
     }
     packaging {
         resources {
@@ -229,7 +231,6 @@ tasks.withType(Test).configureEach { test ->
 dependencies {
     // AndroidX core / lifecycle
     implementation libs.androidx.core.ktx
-    implementation libs.androidx.core.splashscreen
     implementation libs.androidx.activity.compose
     implementation libs.androidx.lifecycle.runtime.ktx
     implementation libs.androidx.lifecycle.runtime.compose

@@ -1,5 +1,6 @@
 package com.arcu.attnd.data.log
 
+import android.annotation.SuppressLint
 import android.app.ActivityManager
 import android.app.ApplicationExitInfo
 import android.content.Context
@@ -188,6 +189,9 @@ class ExitReporter(
     /** `ApplicationExitInfo.REASON_*` without the prefix (`CRASH`, `ANR`, `LOW_MEMORY`, …). */
     private fun reasonName(reason: Int): String = REASON_NAMES[reason] ?: "REASON_$reason"
 
+    // Reason codes are plain ints inlined at compile time: Android 13 simply never reports the two that are new in
+    // 14 (PACKAGE_STATE_CHANGE, PACKAGE_UPDATED), so comparing against them is safe on every version.
+    @SuppressLint("InlinedApi")
     private companion object {
         const val KEY_REPORTED_AT = "exit_reported_at"
         const val MAX_EXITS = 10
